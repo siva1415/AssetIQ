@@ -1,0 +1,23 @@
+SELECT
+    conname,
+    pg_get_constraintdef(oid) AS constraint_definition
+FROM pg_constraint
+WHERE conrelid = 'assets'::regclass
+  AND contype = 'c';
+  
+ALTER TABLE assets
+DROP CONSTRAINT IF EXISTS assets_asset_status_check;
+
+ALTER TABLE assets
+ADD CONSTRAINT assets_asset_status_check
+CHECK (
+    asset_status IN (
+        'ACTIVE',
+        'NEED VALIDATION',
+        'IN STOCK',
+		'RETIRED'
+    )
+);
+
+COMMIT;
+

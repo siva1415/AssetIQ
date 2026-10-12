@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AssetIQ Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1c2430; --muted: #6b7686; --border: #e3e7ed;
+    --accent: #2f6fed; --good: #1f9d6b; --warn: #e0a100; --bad: #d64545; --grid: #e9edf2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12161c; --card:#1a2028; --text:#e6eaf0; --muted:#8c97a7; --border:#2a323d; --grid:#262e39; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:16px 24px; display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; background:var(--card); border-bottom:1px solid var(--border); }
+  header h1 { font-size:18px; margin:0; }
+  header small { color:var(--muted); display:block; font-weight:400; font-size:12px; margin-top:2px; }
+  .filters { display:flex; gap:10px; align-items:center; font-size:13px; color:var(--muted); }
+  select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:13px; }
+  nav { display:flex; gap:4px; padding:10px 24px 0; background:var(--card); border-bottom:1px solid var(--border); overflow-x:auto; }
+  nav button { background:none; border:none; padding:10px 14px; font-size:14px; color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; }
+  nav button.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+  main { padding:20px 24px 40px; max-width:1400px; margin:0 auto; }
+  .view { display:none; } .view.active { display:block; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
+  .kpi { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+  .kpi .label { font-size:12px; color:var(--muted); }
+  .kpi .value { font-size:28px; font-weight:650; margin-top:4px; }
+  .kpi .sub { font-size:11px; color:var(--muted); margin-top:2px; }
+  .kpi.good .value { color:var(--good); } .kpi.warn .value { color:var(--warn); } .kpi.bad .value { color:var(--bad); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:14px; margin-bottom:14px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; min-width:0; }
+  .card h3 { margin:0 0 10px; font-size:14px; }
+  .card .hint { font-size:11px; color:var(--muted); margin:-6px 0 8px; }
+  .chartbox { position:relative; height:260px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:600; font-size:11.5px; position:sticky; top:0; background:var(--card); }
+  .tablewrap { max-height:300px; overflow:auto; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+  .pill.Active { background:rgba(31,157,107,.15); color:var(--good); }
+  .pill.NV { background:rgba(224,161,0,.18); color:var(--warn); }
+  .pill.InStock { background:rgba(47,111,237,.15); color:var(--accent); }
+  .empty { color:var(--muted); font-size:13px; padding:16px 0; text-align:center; }
+  footer { text-align:center; color:var(--muted); font-size:11px; padding:10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AssetIQ <small>Asset monitoring &amp; BI &middot; draft with sample data</small></h1>
+  <div class="filters">
+    <label>Source <select id="fSource"><option value="">All</option><option>BIGFIX</option><option>JAMF</option></select></label>
+    <label>Status <select id="fStatus"><option value="">All</option><option>Active</option><option>Need Validation</option><option>InStock</option></select></label>
+    <label>Type <select id="fType"><option value="">All</option><option>Desktop</option><option>Server</option></select></label>
+  </div>
+</header>
+
+<nav id="tabs">
+  <button class="active" data-view="overview">Executive overview</button>
+  <button data-view="compliance">Compliance &amp; hygiene</button>
+  <button data-view="lifecycle">Lifecycle planning</button>
+  <button data-view="org">Org view</button>
+</nav>
+
+<main>
+  <!-- OVERVIEW -->
+  <section class="view active" id="v-overview">
+    <div class="kpis" id="kpiOverview"></div>
+    <div class="grid">
+      <div class="card"><h3>Asset status</h3><div class="chartbox"><canvas id="cStatus"></canvas></div></div>
+      <div class="card"><h3>Assets by source</h3><div class="chartbox"><canvas id="cSource"></canvas></div></div>
+      <div class="card"><h3>EOL risk buckets</h3><div class="chartbox"><canvas id="cEolBuckets"></canvas></div></div>
+      <div class="card"><h3>Server vs Desktop</h3><div class="chartbox"><canvas id="cType"></canvas></div></div>
+    </div>
+  </section>
+
+  <!-- COMPLIANCE -->
+  <section class="view" id="v-compliance">
+    <div class="kpis" id="kpiCompliance"></div>
+    <div class="grid">
+      <div class="card"><h3>Days since last report</h3><div class="chartbox"><canvas id="cStale"></canvas></div></div>
+      <div class="card"><h3>Assignment type</h3><div class="hint">AUTO vs MANUAL vs not assigned</div><div class="chartbox"><canvas id="cAssign"></canvas></div></div>
+      <div class="card"><h3>Owner match quality</h3><div class="hint">How assigned usernames map to Workday</div><div class="chartbox"><canvas id="cMatch"></canvas></div></div>
+      <div class="card"><h3>Sync recency by source</h3><div class="chartbox"><canvas id="cSync"></canvas></div></div>
+    </div>
+    <div class="grid">
+      <div class="card"><h3>Assets needing validation</h3><div class="tablewrap" id="tNeedVal"></div></div>
+      <div class="card"><h3>Devices assigned to inactive employees</h3><div class="tablewrap" id="tInactive"></div></div>
+    </div>
+  </section>
+
+  <!-- LIFECYCLE -->
+  <section class="view" id="v-lifecycle">
+    <div class="kpis" id="kpiLifecycle"></div>
+    <div class="grid">
+      <div class="card"><h3>EOL by model</h3><div class="hint">Colored by urgency</div><div class="chartbox"><canvas id="cEolModel"></canvas></div></div>
+      <div class="card"><h3>Refresh forecast by quarter</h3><div class="chartbox"><canvas id="cForecast"></canvas></div></div>
+      <div class="card"><h3>OS currency</h3><div class="chartbox"><canvas id="cOS"></canvas></div></div>
+      <div class="card"><h3>Hardware mix</h3><div class="hint">Models by manufacturer</div><div class="chartbox"><canvas id="cHardware"></canvas></div></div>
+    </div>
+    <div class="grid">
+      <div class="card"><h3>Upcoming &amp; past EOL devices</h3><div class="tablewrap" id="tEol"></div></div>
+      <div class="card"><h3>Models missing an EOL reference</h3><div class="tablewrap" id="tNoEol"></div></div>
+    </div>
+  </section>
+
+  <!-- ORG -->
+  <section class="view" id="v-org">
+    <div class="kpis" id="kpiOrg"></div>
+    <div class="grid">
+      <div class="card"><h3>Assets by department</h3><div class="chartbox"><canvas id="cDept"></canvas></div></div>
+      <div class="card"><h3>Assets by location</h3><div class="chartbox"><canvas id="cLoc"></canvas></div></div>
+      <div class="card"><h3>Assets by division</h3><div class="chartbox"><canvas id="cDiv"></canvas></div></div>
+      <div class="card"><h3>Group vs Individual managed</h3><div class="chartbox"><canvas id="cManaged"></canvas></div></div>
+    </div>
+    <div class="grid">
+      <div class="card"><h3>Assets by manager</h3><div class="tablewrap" id="tManager"></div></div>
+      <div class="card"><h3>Active employees with no device</h3><div class="tablewrap" id="tNoDevice"></div></div>
+    </div>
+  </section>
+</main>
+<footer>Sample data generated in the browser to mirror "Script 2 - Insert 100 sample records.sql". Replace with API calls for real data.</footer>
+
+<script>
+/* =====================================================================
+   1. SAMPLE DATA  (mirrors the SQL seed script)
+   ===================================================================== */
+const TODAY = new Date(); TODAY.setHours(0,0,0,0);
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const pad = (n, w) => String(n).padStart(w, '0');
+const daysBetween = (a, b) => Math.round((a - b) / 86400000);
+
+const first = ['Aarav','Aadhya','Arjun','Diya','Ishaan','Kavya','Neha','Rahul','Priya','Vikram'];
+const last  = ['Sharma','Rao','Iyer','Patel','Nair','Reddy','Mehta','Kumar','Das','Singh'];
+const depts = ['IT Operations','Engineering','Infrastructure','Security','Store Operations'];
+const divs  = ['Technology','Corporate IT','Operations'];
+const titles= ['Software Engineer','Systems Engineer','Delivery Lead','Analyst','IT Support Engineer'];
+const locs  = ['Chennai','Bengaluru','Hyderabad','Pune','Mumbai','Delhi'];
+
+const employees = [];
+for (let g = 1; g <= 100; g++) {
+  const mg = Math.max(1, Math.floor((g - 1) / 10));
+  employees.push({
+    user_id: 'user' + pad(g, 4),
+    full_name: first[(g - 1) % 10] + ' ' + last[((g * 3) - 1) % 10],
+    department: depts[(g - 1) % 5],
+    division: divs[(g - 1) % 3],
+    job_title: titles[(g - 1) % 5],
+    employee_status: g % 25 === 0 ? 'Inactive' : 'Active',
+    manager_name: 'Manager ' + pad(mg, 2),
+    location: locs[(g - 1) % 6],
+    hire_date: addDays(new Date(2018, 0, 1), (g * 17) % 2800)
+  });
+}
+const empById = Object.fromEntries(employees.map(e => [e.user_id, e]));
+
+const eolRef = [
+  ['Dell','OptiPlex 7010',720], ['Dell','PowerEdge R650',1200],
+  ['HP','EliteDesk 800 G9',45], ['HP','ProDesk 600 G6',-30],
+  ['Lenovo','ThinkCentre M90q',400], ['Lenovo','ThinkSystem SR650',60],
+  ['Apple','Mac mini M2',900], ['Apple','Mac Studio M2',30]
+].map(([m, mo, d]) => ({ manufacturer: m, model: mo, eol_date: addDays(TODAY, d) }));
+const eolKey = (m, mo) => m + '|' + mo;
+const eolMap = Object.fromEntries(eolRef.map(r => [eolKey(r.manufacturer, r.model), r.eol_date]));
+
+const assets = [];
+const statusOf = g => (g % 10 === 1 || g % 10 === 2) ? 'Need Validation' : (g % 15 === 0 ? 'InStock' : 'Active');
+const assignOf = g => (g % 10 <= 2) ? null : (g % 2 === 0 ? 'AUTO' : 'MANUAL');
+const now = new Date();
+
+for (let g = 1; g <= 50; g++) {
+  const mfr = g % 3 === 0 ? 'Dell' : (g % 3 === 1 ? 'HP' : 'Lenovo');
+  const models = { Dell: ['OptiPlex 7010','PowerEdge R650'], HP: ['EliteDesk 800 G9','ProDesk 600 G6'], Lenovo: ['ThinkCentre M90q','ThinkSystem SR650'] };
+  let user;
+  if (g % 10 === 0) user = 'Administrator';
+  else if (g % 10 === 1) user = null;
+  else if (g % 10 === 2) user = 'unknown' + pad(g, 4);
+  else user = 'user' + pad(g, 4);
+  assets.push({
+    asset_number: 'BF-ASSET-' + pad(g, 5), serial_number: 'BF-SN-' + pad(g, 6), source: 'BIGFIX',
+    manufacturer: mfr, model: models[mfr][(g - 1) % 2],
+    os_name: g % 2 === 0 ? 'Windows 11 Professional' : 'Windows 10 Professional',
+    devicetype: g % 5 === 0 ? 'Server' : 'Desktop',
+    managed_by: g % 2 === 0 ? 'INDIVIDUAL' : 'GROUP',
+    assigned_username: user, lastreporttime: addDays(now, -(g % 21)),
+    asset_status: statusOf(g), assignment_type: assignOf(g), last_synced_at: now
+  });
+}
+for (let g = 1; g <= 50; g++) {
+  let user;
+  if (g % 10 === 0) user = 'admin';
+  else if (g % 10 === 1) user = null;
+  else if (g % 10 === 2) user = 'former.user' + g;
+  else user = 'user' + pad(g + 50, 4);
+  assets.push({
+    asset_number: 'JAMF-ASSET-' + pad(g, 5), serial_number: 'JAMF-SN-' + pad(g, 6), source: 'JAMF',
+    manufacturer: 'Apple', model: g % 2 === 0 ? 'Mac mini M2' : 'Mac Studio M2',
+    os_name: g % 2 === 0 ? 'macOS Sonoma' : 'macOS Sequoia',
+    devicetype: 'Desktop', managed_by: g % 2 === 0 ? 'INDIVIDUAL' : 'GROUP',
+    assigned_username: user, lastreporttime: addDays(now, -(g % 14)),
+    asset_status: statusOf(g), assignment_type: assignOf(g), last_synced_at: now
+  });
+}
+// derived fields
+assets.forEach(a => {
+  a.eol_date = eolMap[eolKey(a.manufacturer, a.model)] || null;
+  a.eol_days = a.eol_date ? daysBetween(a.eol_date, TODAY) : null;
+  a.stale_days = Math.max(0, daysBetween(TODAY, new Date(a.lastreporttime.getFullYear(), a.lastreporttime.getMonth(), a.lastreporttime.getDate())));
+  a.emp = a.assigned_username ? (empById[a.assigned_username] || null) : null;
+});
+
+/* =====================================================================
+   2. HELPERS
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const PALETTE = ['#2f6fed','#1f9d6b','#e0a100','#d64545','#8a5cf6','#14a3b8','#e66fa5','#7a8699'];
+const C = { good:'#1f9d6b', warn:'#e0a100', bad:'#d64545', blue:'#2f6fed', grey:'#7a8699', orange:'#ee8a2b' };
+const count = (arr, fn) => arr.reduce((m, x) => { const k = fn(x); m[k] = (m[k] || 0) + 1; return m; }, {});
+const fmtDate = d => d ? d.toISOString().slice(0, 10) : '-';
+const charts = {};
+
+function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+function chart(id, type, labels, datasets, opts = {}) {
+  if (charts[id]) charts[id].destroy();
+  const text = css('--muted'), grid = css('--grid');
+  const isPie = type === 'doughnut' || type === 'pie';
+  const cfg = {
+    type, data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      indexAxis: opts.horizontal ? 'y' : 'x',
+      plugins: {
+        legend: { display: isPie || datasets.length > 1, position: 'bottom', labels: { color: text, boxWidth: 12, font: { size: 11 } } }
+      },
+      scales: isPie ? {} : {
+        x: { stacked: !!opts.stacked, ticks: { color: text, font: { size: 11 } }, grid: { color: grid } },
+        y: { stacked: !!opts.stacked, beginAtZero: true, ticks: { color: text, precision: 0, font: { size: 11 } }, grid: { color: grid } }
+      },
+      cutout: type === 'doughnut' ? '58%' : undefined
+    }
+  };
+  charts[id] = new Chart($(id), cfg);
+}
+const single = (labels, values, colors) => [{ data: values, backgroundColor: colors || PALETTE, borderWidth: 0, borderRadius: 4 }];
+
+function kpi(label, value, cls = '', sub = '') {
+  return `<div class="kpi ${cls}"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
+}
+function table(el, cols, rows) {
+  if (!rows.length) { el.innerHTML = '<div class="empty">Nothing to show for the current filters.</div>'; return; }
+  el.innerHTML = '<table><thead><tr>' + cols.map(c => `<th>${c[0]}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map(r => '<tr>' + cols.map(c => `<td>${c[1](r)}</td>`).join('') + '</tr>').join('') + '</tbody></table>';
+}
+const statusPill = s => `<span class="pill ${s === 'Need Validation' ? 'NV' : s}">${s}</span>`;
+const eolClass = d => d === null ? 'grey' : d < 0 ? 'bad' : d < 90 ? 'orange' : d < 365 ? 'warn' : 'good';
+const eolColor = d => ({ bad: C.bad, orange: C.orange, warn: C.warn, good: C.good, grey: C.grey })[eolClass(d)];
+
+/* =====================================================================
+   3. RENDER
+   ===================================================================== */
+function filtered() {
+  const s = $('fSource').value, st = $('fStatus').value, t = $('fType').value;
+  return assets.filter(a => (!s || a.source === s) && (!st || a.asset_status === st) && (!t || a.devicetype === t));
+}
+
+function render() {
+  const A = filtered();
+  const total = A.length;
+
+  /* ---------- Overview ---------- */
+  const byStatus = count(A, a => a.asset_status);
+  const eolPast = A.filter(a => a.eol_days !== null && a.eol_days < 0).length;
+  const eol90 = A.filter(a => a.eol_days !== null && a.eol_days >= 0 && a.eol_days < 90).length;
+  $('kpiOverview').innerHTML =
+    kpi('Total assets', total) +
+    kpi('Active', byStatus['Active'] || 0, 'good') +
+    kpi('Need validation', byStatus['Need Validation'] || 0, 'warn') +
+    kpi('In stock', byStatus['InStock'] || 0) +
+    kpi('Past EOL', eolPast, 'bad') +
+    kpi('EOL within 90 days', eol90, 'warn');
+
+  chart('cStatus', 'doughnut', ['Active','Need Validation','InStock'],
+    single(null, ['Active','Need Validation','InStock'].map(k => byStatus[k] || 0), [C.good, C.warn, C.blue]));
+  const bySrc = count(A, a => a.source);
+  chart('cSource', 'doughnut', Object.keys(bySrc), single(null, Object.values(bySrc), [C.blue, C.grey]));
+
+  const eolBuckets = { 'Past EOL': 0, '< 90 days': 0, '90 - 365 days': 0, '> 1 year': 0, 'No reference': 0 };
+  A.forEach(a => {
+    const d = a.eol_days;
+    if (d === null) eolBuckets['No reference']++;
+    else if (d < 0) eolBuckets['Past EOL']++;
+    else if (d < 90) eolBuckets['< 90 days']++;
+    else if (d < 365) eolBuckets['90 - 365 days']++;
+    else eolBuckets['> 1 year']++;
+  });
+  chart('cEolBuckets', 'bar', Object.keys(eolBuckets), single(null, Object.values(eolBuckets), [C.bad, C.orange, C.warn, C.good, C.grey]));
+  const byType = count(A, a => a.devicetype);
+  chart('cType', 'doughnut', Object.keys(byType), single(null, Object.values(byType), [C.blue, C.orange]));
+
+  /* ---------- Compliance ---------- */
+  const stale7 = A.filter(a => a.stale_days > 7).length;
+  const stale14 = A.filter(a => a.stale_days > 14).length;
+  const unassigned = A.filter(a => !a.assigned_username).length;
+  const generic = A.filter(a => ['administrator','admin'].includes((a.assigned_username || '').toLowerCase())).length;
+  const inactiveOwned = A.filter(a => a.emp && a.emp.employee_status === 'Inactive');
+  $('kpiCompliance').innerHTML =
+    kpi('Not reporting > 7 days', stale7, 'warn') +
+    kpi('Not reporting > 14 days', stale14, 'bad') +
+    kpi('Unassigned', unassigned, 'warn') +
+    kpi('Generic accounts', generic, 'warn', 'Administrator / admin') +
+    kpi('Owned by inactive staff', inactiveOwned.length, 'bad');
+
+  const sb = { '0 - 7 days': 0, '8 - 14 days': 0, '15 - 30 days': 0, '30+ days': 0 };
+  A.forEach(a => { const d = a.stale_days; if (d <= 7) sb['0 - 7 days']++; else if (d <= 14) sb['8 - 14 days']++; else if (d <= 30) sb['15 - 30 days']++; else sb['30+ days']++; });
+  chart('cStale', 'bar', Object.keys(sb), single(null, Object.values(sb), [C.good, C.warn, C.orange, C.bad]));
+
+  const asg = count(A, a => a.assignment_type || 'Not assigned');
+  chart('cAssign', 'doughnut', Object.keys(asg), single(null, Object.values(asg), [C.blue, C.good, C.grey]));
+
+  const match = { 'Matched to employee': 0, 'Generic account': 0, 'Unknown / departed user': 0, 'No owner': 0 };
+  A.forEach(a => {
+    const u = (a.assigned_username || '').toLowerCase();
+    if (!a.assigned_username) match['No owner']++;
+    else if (a.emp) match['Matched to employee']++;
+    else if (u === 'administrator' || u === 'admin') match['Generic account']++;
+    else match['Unknown / departed user']++;
+  });
+  chart('cMatch', 'bar', Object.keys(match), single(null, Object.values(match), [C.good, C.warn, C.bad, C.grey]), { horizontal: true });
+
+  const syncSrc = ['BIGFIX','JAMF'];
+  const syncLabels = syncSrc.filter(s => A.some(a => a.source === s));
+  const mins = syncLabels.map(s => Math.max(...A.filter(a => a.source === s).map(a => 0)));
+  chart('cSync', 'bar', syncLabels, [{
+    label: 'Minutes since last sync (sample = 0)', data: mins, backgroundColor: C.good, borderRadius: 4
+  }]);
+
+  table($('tNeedVal'), [
+    ['Asset', a => a.asset_number], ['Source', a => a.source], ['Assigned to', a => a.assigned_username || '<i>none</i>'],
+    ['Reason', a => !a.assigned_username ? 'No owner' : a.emp ? 'Check assignment' : 'Owner not in Workday']
+  ], A.filter(a => a.asset_status === 'Need Validation'));
+
+  table($('tInactive'), [
+    ['Asset', a => a.asset_number], ['Employee', a => a.emp.full_name], ['Dept', a => a.emp.department], ['Location', a => a.emp.location]
+  ], inactiveOwned);
+
+  /* ---------- Lifecycle ---------- */
+  const withEol = A.filter(a => a.eol_days !== null);
+  const eolSoon = withEol.filter(a => a.eol_days >= 0 && a.eol_days < 365).length;
+  const win10 = A.filter(a => a.os_name.startsWith('Windows 10')).length;
+  const noRef = A.filter(a => a.eol_days === null).length;
+  $('kpiLifecycle').innerHTML =
+    kpi('Past EOL', eolPast, 'bad') +
+    kpi('EOL in next 12 months', eolSoon, 'warn') +
+    kpi('Still on Windows 10', win10, 'warn') +
+    kpi('Models without EOL data', noRef, noRef ? 'bad' : 'good');
+
+  const modelAgg = {};
+  A.forEach(a => { const k = a.manufacturer + ' ' + a.model; (modelAgg[k] = modelAgg[k] || { n: 0, d: a.eol_days }).n++; });
+  const mk = Object.keys(modelAgg).sort((a, b) => modelAgg[b].n - modelAgg[a].n);
+  chart('cEolModel', 'bar', mk, single(null, mk.map(k => modelAgg[k].n), mk.map(k => eolColor(modelAgg[k].d))), { horizontal: true });
+
+  const q = {};
+  withEol.forEach(a => {
+    const d = a.eol_date; const label = a.eol_days < 0 ? 'Past EOL' : d.getFullYear() + ' Q' + (Math.floor(d.getMonth() / 3) + 1);
+    q[label] = (q[label] || 0) + 1;
+  });
+  const ql = Object.keys(q).sort((a, b) => a === 'Past EOL' ? -1 : b === 'Past EOL' ? 1 : a.localeCompare(b));
+  chart('cForecast', 'bar', ql, single(null, ql.map(k => q[k]), ql.map(k => k === 'Past EOL' ? C.bad : C.blue)));
+
+  const os = count(A, a => a.os_name);
+  chart('cOS', 'doughnut', Object.keys(os), single(null, Object.values(os)));
+
+  const mf = Object.keys(count(A, a => a.manufacturer));
+  const allModels = [...new Set(A.map(a => a.model))];
+  chart('cHardware', 'bar', mf, allModels.map((m, i) => ({
+    label: m, backgroundColor: PALETTE[i % PALETTE.length],
+    data: mf.map(f => A.filter(a => a.manufacturer === f && a.model === m).length)
+  })), { stacked: true });
+
+  table($('tEol'), [
+    ['Asset', a => a.asset_number], ['Model', a => a.manufacturer + ' ' + a.model], ['EOL date', a => fmtDate(a.eol_date)],
+    ['Days left', a => `<span style="color:${eolColor(a.eol_days)};font-weight:600">${a.eol_days}</span>`]
+  ], withEol.filter(a => a.eol_days < 90).sort((a, b) => a.eol_days - b.eol_days));
+
+  const missing = {};
+  A.filter(a => a.eol_days === null).forEach(a => { const k = a.manufacturer + '|' + a.model; missing[k] = (missing[k] || 0) + 1; });
+  table($('tNoEol'), [['Manufacturer', r => r[0].split('|')[0]], ['Model', r => r[0].split('|')[1]], ['Devices', r => r[1]]], Object.entries(missing));
+
+  /* ---------- Org ---------- */
+  const owned = A.filter(a => a.emp);
+  const empWithDevice = new Set(owned.map(a => a.emp.user_id));
+  const noDevice = employees.filter(e => e.employee_status === 'Active' && !empWithDevice.has(e.user_id));
+  const perEmp = count(owned, a => a.emp.user_id);
+  const multi = Object.values(perEmp).filter(n => n > 1).length;
+  $('kpiOrg').innerHTML =
+    kpi('Assets matched to employees', owned.length, '', `${total ? Math.round(owned.length / total * 100) : 0}% of filtered assets`) +
+    kpi('Employees with a device', empWithDevice.size) +
+    kpi('Active employees w/o device', noDevice.length, 'warn') +
+    kpi('Employees with 2+ devices', multi);
+
+  const bar = (id, fn, horizontal = true) => {
+    const c = count(owned, fn); const k = Object.keys(c).sort((a, b) => c[b] - c[a]);
+    chart(id, 'bar', k, single(null, k.map(x => c[x]), [C.blue]), { horizontal });
+  };
+  bar('cDept', a => a.emp.department);
+  bar('cLoc', a => a.emp.location, false);
+  const dv = count(owned, a => a.emp.division);
+  chart('cDiv', 'doughnut', Object.keys(dv), single(null, Object.values(dv)));
+  const mg = count(A, a => a.managed_by);
+  chart('cManaged', 'doughnut', Object.keys(mg), single(null, Object.values(mg), [C.blue, C.orange]));
+
+  const mgr = {};
+  owned.forEach(a => { const m = a.emp.manager_name; (mgr[m] = mgr[m] || { n: 0, inactive: 0, nv: 0 }).n++; if (a.emp.employee_status === 'Inactive') mgr[m].inactive++; if (a.asset_status === 'Need Validation') mgr[m].nv++; });
+  table($('tManager'), [['Manager', r => r[0]], ['Devices', r => r[1].n], ['Need validation', r => r[1].nv], ['Inactive owners', r => r[1].inactive]],
+    Object.entries(mgr).sort((a, b) => b[1].n - a[1].n));
+
+  table($('tNoDevice'), [['User', e => e.user_id], ['Name', e => e.full_name], ['Dept', e => e.department], ['Location', e => e.location]], noDevice.slice(0, 50));
+}
+
+/* =====================================================================
+   4. WIRING
+   ===================================================================== */
+document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'v-' + b.dataset.view));
+  Object.values(charts).forEach(c => c.resize());
+}));
+['fSource','fStatus','fType'].forEach(id => $(id).addEventListener('change', render));
+render();
+</script>
+</body>
+</html>
