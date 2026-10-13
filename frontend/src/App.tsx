@@ -1,7 +1,8 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AppProvider } from './context/AppContext';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { AppProvider, useApp } from './context/AppContext';
 import { AppShell } from './components/layout/AppShell';
+import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AllAssetsPage } from './pages/AllAssetsPage';
 import { WindowsAssetsPage } from './pages/WindowsAssetsPage';
@@ -17,12 +18,50 @@ import { AdminUsersPage } from './pages/AdminUsersPage';
 import { JobSchedulerPage } from './pages/JobSchedulerPage';
 import { AuditReportsPage } from './pages/AuditReportsPage';
 
+const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
+  const { isAuthenticated } = useApp();
+  const location = useLocation();
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  return children;
+};
+
+const PublicOnlyRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
+  const { isAuthenticated } = useApp();
+
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return children;
+};
+
 export default function App() {
   return (
     <AppProvider>
       <BrowserRouter>
         <Routes>
-          <Route element={<AppShell />}>
+          {/* Public Login Route */}
+          <Route
+            path="/login"
+            element={
+              <PublicOnlyRoute>
+                <LoginPage />
+              </PublicOnlyRoute>
+            }
+          />
+
+          {/* Protected Application Routes */}
+          <Route
+            element={
+              <ProtectedRoute>
+                <AppShell />
+              </ProtectedRoute>
+            }
+          >
             {/* 1. Overview */}
             <Route index element={<DashboardPage />} />
             <Route path="dashboard" element={<DashboardPage />} />

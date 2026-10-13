@@ -17,79 +17,47 @@ export interface LoggedInUser {
   avatarUrl?: string;
 }
 
+const AUTH_SESSION_KEY = 'asset_iq_auth_session';
+
 export function resolveCurrentUser(): LoggedInUser {
   if (typeof window !== 'undefined') {
-    const win = window as any;
-    if (win.__CURRENT_USER__) {
-      const u = win.__CURRENT_USER__;
-      return typeof u === 'string'
-        ? { name: u, role: 'Superadmin' }
-        : { name: u.name || u.displayName || u.username || u.email || 'User', email: u.email, avatarUrl: u.avatarUrl, role: 'Superadmin' };
-    }
-    if (win.currentUser) {
-      const u = win.currentUser;
-      return typeof u === 'string'
-        ? { name: u, role: 'Superadmin' }
-        : { name: u.name || u.displayName || u.username || u.email || 'User', email: u.email, avatarUrl: u.avatarUrl, role: 'Superadmin' };
-    }
-
-    for (const key of ['currentUser', 'user', 'auth_user', 'user_profile', 'session_user']) {
-      try {
-        const item = localStorage.getItem(key) || sessionStorage.getItem(key);
-        if (item) {
-          try {
-            const parsed = JSON.parse(item);
-            if (parsed && typeof parsed === 'object') {
-              const name =
-                parsed.name ||
-                parsed.fullName ||
-                parsed.full_name ||
-                parsed.displayName ||
-                parsed.username ||
-                parsed.user_id ||
-                parsed.email;
-              if (name) {
-                return {
-                  name: String(name).split('@')[0],
-                  email: parsed.email,
-                  avatarUrl: parsed.avatarUrl || parsed.picture,
-                  role: 'Superadmin',
-                };
-              }
-            } else if (typeof parsed === 'string' && parsed.trim()) {
-              return { name: parsed.trim().split('@')[0], role: 'Superadmin' };
-            }
-          } catch {
-            if (item.trim()) {
-              return { name: item.trim().split('@')[0], role: 'Superadmin' };
-            }
-          }
+    try {
+      const sessionRaw = sessionStorage.getItem(AUTH_SESSION_KEY) || localStorage.getItem(AUTH_SESSION_KEY);
+      if (sessionRaw) {
+        const parsed = JSON.parse(sessionRaw);
+        if (parsed && parsed.user && parsed.user.name) {
+          return {
+            name: parsed.user.name,
+            email: parsed.user.email || 'siva.sankaran.it@gmail.com',
+            role: parsed.user.role || 'Admin',
+            avatarUrl: parsed.user.avatarUrl,
+          };
         }
-      } catch {
-        // ignore storage errors
       }
+    } catch {
+      // ignore storage errors
     }
   }
 
-  if (import.meta.env.VITE_USER_NAME) {
-    return { name: import.meta.env.VITE_USER_NAME, role: 'Superadmin' };
-  }
-  if (import.meta.env.VITE_USER_EMAIL) {
-    const raw = import.meta.env.VITE_USER_EMAIL.split('@')[0];
-    const formatted = raw.split('.')[0];
-    return {
-      name: formatted.charAt(0).toUpperCase() + formatted.slice(1),
-      email: import.meta.env.VITE_USER_EMAIL,
-      role: 'Superadmin',
-    };
-  }
-
-  // Active authenticated user session
   return {
     name: 'Siva',
     email: 'siva.sankaran.it@gmail.com',
-    role: 'Superadmin',
+    role: 'Admin',
   };
+}
+
+function getInitialAuthState(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = sessionStorage.getItem(AUTH_SESSION_KEY) || localStorage.getItem(AUTH_SESSION_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Boolean(parsed && parsed.authenticated === true);
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return false;
 }
 
 interface AppContextType {
@@ -103,11 +71,15 @@ interface AppContextType {
   triggerDataRefresh: () => void;
   currentUser: LoggedInUser;
   setCurrentUser: (user: LoggedInUser) => void;
+  isAuthenticated: boolean;
+  login: (username: string, password: string) => boolean;
+  logout: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(getInitialAuthState);
   const [currentUser, setCurrentUserState] = useState<LoggedInUser>(resolveCurrentUser);
   const [mockMode, setMockModeState] = useState<boolean>(getInitialMockMode);
   const [apiBaseUrl, setApiBaseUrlState] = useState<string>(getApiBaseUrl);
@@ -128,6 +100,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // ignore
     }
   };
+
+  const login = useCallback((username: string, password: string): boolean => {
+    if (username.trim() === 'admin' && password === 'admin') {
+      const authenticatedUser: LoggedInUser = {
+        name: 'Siva',
+        email: 'siva.sankaran.it@gmail.com',
+        role: 'Admin',
+      };
+      const sessionPayload = JSON.stringify({
+        authenticated: true,
+        user: authenticatedUser,
+        timestamp: Date.now(),
+      });
+      try {
+        sessionStorage.setItem(AUTH_SESSION_KEY, sessionPayload);
+        localStorage.setItem(AUTH_SESSION_KEY, sessionPayload);
+        localStorage.setItem('currentUser', JSON.stringify(authenticatedUser));
+      } catch {
+        // ignore storage errors
+      }
+      setCurrentUserState(authenticatedUser);
+      setIsAuthenticated(true);
+      return true;
+    }
+    return false;
+  }, []);
+
+  const logout = useCallback(() => {
+    try {
+      sessionStorage.removeItem(AUTH_SESSION_KEY);
+      localStorage.removeItem(AUTH_SESSION_KEY);
+      localStorage.removeItem('currentUser');
+      sessionStorage.removeItem('currentUser');
+    } catch {
+      // ignore storage errors
+    }
+    setIsAuthenticated(false);
+  }, []);
 
   const setMockMode = (val: boolean) => {
     setMockModeState(val);
@@ -210,6 +220,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         triggerDataRefresh,
         currentUser,
         setCurrentUser,
+        isAuthenticated,
+        login,
+        logout,
       }}
     >
       {children}
@@ -226,8 +239,8 @@ export const useApp = (): AppContextType => {
 };
 
 export const useUser = () => {
-  const { currentUser, setCurrentUser } = useApp();
-  return { user: currentUser, setUser: setCurrentUser };
+  const { currentUser, setCurrentUser, isAuthenticated, login, logout } = useApp();
+  return { user: currentUser, setUser: setCurrentUser, isAuthenticated, login, logout };
 };
 
 export const useAuth = useUser;

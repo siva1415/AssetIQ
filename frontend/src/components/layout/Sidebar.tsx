@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   HardDrive,
@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
   User,
+  LogOut,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -125,9 +126,16 @@ const getInitials = (name?: string): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
-  const { currentUser } = useApp();
+  const { currentUser, logout } = useApp();
   const location = useLocation();
+  const navigate = useNavigate();
   const currentPath = location.pathname;
+
+  const handleLogout = () => {
+    if (onCloseMobile) onCloseMobile();
+    logout();
+    navigate('/login', { replace: true });
+  };
 
   // Track expanded state for expandable groups
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
@@ -324,7 +332,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
             {currentUser.avatarUrl ? (
               <img
                 src={currentUser.avatarUrl}
-                alt={currentUser.name}
+                alt="Admin User"
                 className="w-8 h-8 rounded-full object-cover shrink-0 ring-1 ring-blue-400/40"
               />
             ) : (
@@ -332,7 +340,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                 className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-xs border border-blue-400/30 select-none"
                 aria-hidden="true"
               >
-                {getInitials(currentUser.name)}
+                {getInitials('Admin User')}
               </div>
             )}
 
@@ -340,14 +348,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
             <div className="flex flex-col min-w-0 flex-1">
               <span
                 className="text-xs font-semibold text-white truncate leading-tight"
-                title={currentUser.name}
+                title="Admin User"
               >
-                {currentUser.name}
+                Admin User
               </span>
               <span className="text-[10px] font-medium text-slate-400 truncate leading-tight mt-0.5">
-                Superadmin
+                Admin
               </span>
             </div>
+
+            {/* Logout Action Icon */}
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="p-1.5 rounded-md text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-rose-500/40"
+              title="Logout"
+              aria-label="Logout"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </aside>
