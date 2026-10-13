@@ -1,10 +1,20 @@
-from typing import List, Optional
+import math
+from datetime import datetime, timezone
+from typing import Any, List, Optional, Tuple, Union
 from fastapi import HTTPException, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from app.models.admin_user import AdminUser
 from app.models.workday_employee import WorkdayEmployee
 from app.repositories.admin_user_repository import AdminUserRepository
-from app.schemas.admin_user import AdminUserResponse, AdminUserCreateRequest
+from app.schemas.admin_user import (
+    AdminUserResponse,
+    AdminUserCreateRequest,
+    AvailableAdminUserItem,
+    AdminUserSummaryItem,
+    AdminUserBulkResponse,
+)
+from app.schemas.common import PaginatedResponse
 from app.schemas.employee import EmployeeSummary
 
 
@@ -47,36 +57,178 @@ class AdminUserService:
         return items
 
     @classmethod
-    def add_admin_users(cls, db: Session, payload: AdminUserCreateRequest) -> List[AdminUserResponse]:
+    def get_available_users(
+        cls,
+        db: Session,
+        page: int = 1,
+        page_size: int = 25,
+        search: Optional[str] = None,
+        user_id: Optional[str] = None,
+        full_name: Optional[str] = None,
+        email: Optional[str] = None,
+    ) -> PaginatedResponse[AvailableAdminUserItem]:
         """
-        Supports single ID, list of IDs, or user object list. Handles duplicates safely.
+        Retrieves employees from workday_employees who are not currently registered as admins.
+        Supports searching by user ID, full name, work email, and pagination.
         """
-        target_ids: List[str] = []
+        employees, total = AdminUserRepository.list_available_users(
+            db=db,
+            page=page,
+            page_size=page_size,
+            search=search,
+            user_id=user_id,
+            full_name=full_name,
+            email=email,
+        )
 
-        if payload.admin_user_id:
-            target_ids.append(payload.admin_user_id)
-        if payload.user_id:
-            target_ids.append(payload.user_id)
-        if payload.admin_user_ids:
-            target_ids.extend(payload.admin_user_ids)
+        items = [AvailableAdminUserItem.model_validate(emp) for emp in employees]
+        total_pages = math.ceil(total / page_size) if total > 0 else 0
+
+        return PaginatedResponse(
+            items=items,
+            data=items,
+            total=total,
+            total_items=total,
+            total_pages=total_pages,
+            totalPages=total_pages,
+            page=page,
+            page_size=page_size,
+            pageSize=page_size,
+        )
+
+    @classmethod
+    def add_admin_users(
+        cls, db: Session, payload: AdminUserCreateRequest
+    ) -> AdminUserBulkResponse:
+        """
+        Bulk adds authorized admin users transactionally.
+        1. Verifies that each user_id exists in workday_employees.
+        2. Stores that exact user_id in admin_users.admin_user_id.
+        3. Prevents duplicate admin entries.
+        4. Inserts all valid new users using a database transaction.
+        5. Returns a clear summary of inserted users and any skipped or invalid IDs.
+        """
+        candidate_ids: List[str] = []
+
         if payload.user_ids:
-            target_ids.extend(payload.user_ids)
+            candidate_ids.extend(payload.user_ids)
+        if payload.userIds:
+            candidate_ids.extend(payload.userIds)
+        if payload.admin_user_ids:
+            candidate_ids.extend(payload.admin_user_ids)
+        if payload.adminUserIds:
+            candidate_ids.extend(payload.adminUserIds)
+        if payload.user_id:
+            candidate_ids.append(payload.user_id)
+        if payload.userId:
+            candidate_ids.append(payload.userId)
+        if payload.admin_user_id:
+            candidate_ids.append(payload.admin_user_id)
+        if payload.adminUserId:
+            candidate_ids.append(payload.adminUserId)
         if payload.users:
             for u in payload.users:
-                if u.admin_user_id:
-                    target_ids.append(u.admin_user_id)
+                if isinstance(u, str):
+                    candidate_ids.append(u)
+                elif hasattr(u, "admin_user_id") and u.admin_user_id:
+                    candidate_ids.append(u.admin_user_id)
+                elif hasattr(u, "user_id") and u.user_id:
+                    candidate_ids.append(u.user_id)
 
-        clean_ids = list(dict.fromkeys([uid.strip() for uid in target_ids if uid and uid.strip()]))
-        if not clean_ids:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="At least one valid admin user ID must be provided",
+        # Deduplicate candidate inputs in order of appearance
+        seen_candidates = set()
+        unique_candidates: List[str] = []
+        for raw in candidate_ids:
+            clean = str(raw).strip()
+            if clean and clean.lower() not in seen_candidates:
+                seen_candidates.add(clean.lower())
+                unique_candidates.append(clean)
+
+        inserted_summaries: List[AdminUserSummaryItem] = []
+        skipped_ids: List[str] = []
+        invalid_ids: List[str] = []
+
+        if not unique_candidates:
+            all_admins = cls.list_admin_users(db)
+            return AdminUserBulkResponse(
+                message="No users selected for admin authorization",
+                inserted=[],
+                skipped=[],
+                invalid=[],
+                total_inserted=0,
+                total_skipped=0,
+                total_invalid=0,
+                admin_users=all_admins,
             )
 
-        for uid in clean_ids:
-            AdminUserRepository.add_admin_user(db, uid)
+        # Query existing admin users
+        existing_admins = db.execute(select(AdminUser)).scalars().all()
+        existing_admin_set = {a.admin_user_id.lower(): a.admin_user_id for a in existing_admins}
 
-        return cls.list_admin_users(db)
+        # Query Workday employees matching candidate IDs
+        candidate_lowers = [uid.lower() for uid in unique_candidates]
+        emp_stmt = select(WorkdayEmployee).where(
+            func.lower(WorkdayEmployee.user_id).in_(candidate_lowers)
+        )
+        matching_emps = {e.user_id.lower(): e for e in db.execute(emp_stmt).scalars().all()}
+
+        # Classify each candidate
+        to_insert: List[Tuple[str, WorkdayEmployee]] = []
+        for uid in unique_candidates:
+            clean_lower = uid.lower()
+
+            # 1. Verify existence in workday_employees
+            if clean_lower not in matching_emps:
+                invalid_ids.append(uid)
+                continue
+
+            # 2. Prevent duplicate admin entries
+            if clean_lower in existing_admin_set:
+                skipped_ids.append(uid)
+                continue
+
+            emp = matching_emps[clean_lower]
+            # Exact user_id from Workday
+            to_insert.append((emp.user_id, emp))
+            # Mark as handled in this batch so duplicates within same batch are skipped
+            existing_admin_set[clean_lower] = emp.user_id
+
+        # 3. Transactional insertion of valid users
+        now_utc = datetime.now(timezone.utc)
+        try:
+            for exact_user_id, emp in to_insert:
+                new_admin = AdminUser(
+                    admin_user_id=exact_user_id,
+                    created_at=now_utc,
+                )
+                db.add(new_admin)
+                inserted_summaries.append(
+                    AdminUserSummaryItem(
+                        user_id=exact_user_id,
+                        admin_user_id=exact_user_id,
+                        full_name=emp.full_name,
+                        email_work=emp.email_work,
+                        employee_status=emp.employee_status,
+                        department=emp.department,
+                    )
+                )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise exc
+
+        all_admins = cls.list_admin_users(db)
+
+        return AdminUserBulkResponse(
+            message=f"Admin users processed: {len(inserted_summaries)} inserted, {len(skipped_ids)} skipped, {len(invalid_ids)} invalid",
+            inserted=inserted_summaries,
+            skipped=skipped_ids,
+            invalid=invalid_ids,
+            total_inserted=len(inserted_summaries),
+            total_skipped=len(skipped_ids),
+            total_invalid=len(invalid_ids),
+            admin_users=all_admins,
+        )
 
     @classmethod
     def delete_admin_user(cls, db: Session, admin_user_id: str) -> dict:
@@ -90,3 +242,4 @@ class AdminUserService:
             "message": f"Admin user '{admin_user_id}' removed successfully",
             "admin_user_id": admin_user_id,
         }
+

@@ -1,10 +1,12 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.models.asset import Asset
 from app.models.device_eol_reference import DeviceEolReference
 from app.models.workday_employee import WorkdayEmployee
+from app.repositories.eol_repository import EolRepository
 
 
 class AssetRepository:
@@ -16,21 +18,9 @@ class AssetRepository:
     @staticmethod
     def _get_eol_subquery():
         """
-        Deduplicates EOL references by normalized manufacturer and model.
+        Deduplicates EOL references by exact manufacturer and model.
         """
-        return (
-            select(
-                func.lower(func.trim(DeviceEolReference.manufacturer)).label("mfg"),
-                func.lower(func.trim(DeviceEolReference.model)).label("mdl"),
-                func.max(DeviceEolReference.eol_date).label("eol_date"),
-                func.max(DeviceEolReference.reference_source).label("reference_source"),
-            )
-            .group_by(
-                func.lower(func.trim(DeviceEolReference.manufacturer)),
-                func.lower(func.trim(DeviceEolReference.model)),
-            )
-            .subquery()
-        )
+        return EolRepository.get_eol_subquery()
 
     @staticmethod
     def get_by_id_joined(
@@ -39,14 +29,14 @@ class AssetRepository:
         """
         Lookup single asset with parameterized outer join to WorkdayEmployee and DeviceEolReference.
         """
-        eol_sub = AssetRepository._get_eol_subquery()
+        eol_sub = EolRepository.get_eol_subquery()
 
         stmt = (
             select(
                 Asset,
                 WorkdayEmployee,
-                eol_sub.c.eol_date,
-                eol_sub.c.reference_source,
+                eol_sub.c.eol_date.label("eol_date"),
+                eol_sub.c.reference_source.label("reference_source"),
             )
             .outerjoin(
                 WorkdayEmployee,
@@ -54,10 +44,7 @@ class AssetRepository:
             )
             .outerjoin(
                 eol_sub,
-                and_(
-                    func.lower(func.trim(Asset.manufacturer)) == eol_sub.c.mfg,
-                    func.lower(func.trim(Asset.model)) == eol_sub.c.mdl,
-                ),
+                EolRepository.get_eol_join_condition(eol_sub),
             )
             .where(Asset.asset_id == asset_id)
         )
@@ -72,6 +59,7 @@ class AssetRepository:
     def _build_filter_criteria(
         cls,
         stmt: Select,
+        eol_sub=None,
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
@@ -81,6 +69,7 @@ class AssetRepository:
         assignment_type: Optional[str] = None,
         search: Optional[str] = None,
         is_unassigned: Optional[bool] = None,
+        eol_status: Optional[str] = None,
     ) -> Select:
         # Parameterized source filter (support BIGFIX/Windows and JAMF/Mac)
         if source:
@@ -96,28 +85,64 @@ class AssetRepository:
             clean_status = asset_status.strip().lower()
             if clean_status in ["instock", "in stock", "in_stock"]:
                 stmt = stmt.where(
-                    func.lower(func.trim(Asset.asset_status)).in_(["instock", "in stock", "in_stock"])
+                    Asset.asset_status.is_not(None),
+                    func.lower(func.trim(Asset.asset_status)).in_(["instock", "in stock", "in_stock"]),
                 )
-            elif clean_status in ["need validation", "needvalidation", "need_validation"]:
+            elif clean_status in ["review", "need validation", "needvalidation", "need_validation"]:
                 stmt = stmt.where(
+                    Asset.asset_status.is_not(None),
                     func.lower(func.trim(Asset.asset_status)).in_(
-                        ["need validation", "needvalidation", "need_validation"]
-                    )
+                        ["review", "need validation", "needvalidation", "need_validation"]
+                    ),
                 )
             else:
-                stmt = stmt.where(func.lower(func.trim(Asset.asset_status)) == clean_status)
+                stmt = stmt.where(
+                    Asset.asset_status.is_not(None),
+                    func.lower(func.trim(Asset.asset_status)) == clean_status,
+                )
+
         if devicetype:
-            stmt = stmt.where(func.lower(Asset.devicetype) == devicetype.strip().lower())
+            stmt = stmt.where(Asset.devicetype.is_not(None), func.lower(Asset.devicetype) == devicetype.strip().lower())
+
+        if eol_status and eol_sub is not None:
+            clean_eol = eol_status.strip().upper()
+            today = date.today()
+            threshold = settings.EOL_WARNING_DAYS
+            warning_cutoff = today + timedelta(days=threshold)
+
+            if clean_eol in ("EXPIRED",):
+                stmt = stmt.where(eol_sub.c.eol_date.is_not(None), eol_sub.c.eol_date < today)
+            elif clean_eol in ("EOL SOON", "EOL_SOON", "EOLSOON", "NEARING EOL", "NEARING_EOL", "NEARINGEOL"):
+                stmt = stmt.where(
+                    eol_sub.c.eol_date.is_not(None),
+                    eol_sub.c.eol_date >= today,
+                    eol_sub.c.eol_date <= warning_cutoff,
+                )
+            elif clean_eol in ("ACTIVE",):
+                stmt = stmt.where(
+                    eol_sub.c.eol_date.is_not(None),
+                    eol_sub.c.eol_date > warning_cutoff,
+                )
+            elif clean_eol in ("UNKNOWN",):
+                stmt = stmt.where(eol_sub.c.eol_date.is_(None))
+
         if manufacturer:
-            stmt = stmt.where(func.lower(Asset.manufacturer) == manufacturer.strip().lower())
+            stmt = stmt.where(Asset.manufacturer.is_not(None), func.lower(Asset.manufacturer) == manufacturer.strip().lower())
         if model:
-            stmt = stmt.where(func.lower(Asset.model) == model.strip().lower())
+            stmt = stmt.where(Asset.model.is_not(None), func.lower(Asset.model) == model.strip().lower())
         if assigned_username:
             stmt = stmt.where(
-                func.lower(func.trim(Asset.assigned_username)) == assigned_username.strip().lower()
+                Asset.assigned_username.is_not(None),
+                func.lower(func.trim(Asset.assigned_username)) == assigned_username.strip().lower(),
             )
         if assignment_type:
-            stmt = stmt.where(func.upper(Asset.assignment_type) == assignment_type.strip().upper())
+            clean_type = assignment_type.strip().upper()
+            if clean_type in ("AUTO", "AUTOMATIC", "AUTOMATIC MATCH", "AUTOMATIC_MATCH", "AUTO MATCH", "AUTO_MATCH"):
+                stmt = stmt.where(Asset.assignment_type.is_not(None), func.upper(Asset.assignment_type) == "AUTO")
+            elif clean_type in ("MANUAL", "MANUAL ASSIGNMENT", "MANUAL_ASSIGNMENT", "MANUAL MATCH", "MANUAL_MATCH"):
+                stmt = stmt.where(Asset.assignment_type.is_not(None), func.upper(Asset.assignment_type) == "MANUAL")
+            elif clean_type not in ("ALL", ""):
+                stmt = stmt.where(Asset.assignment_type.is_not(None), func.upper(Asset.assignment_type) == clean_type)
 
         if is_unassigned is True:
             stmt = stmt.where(
@@ -133,10 +158,10 @@ class AssetRepository:
             stmt = stmt.where(
                 or_(
                     func.lower(Asset.asset_number).like(search_pattern),
-                    func.lower(Asset.serial_number).like(search_pattern),
-                    func.lower(Asset.assigned_username).like(search_pattern),
-                    func.lower(Asset.model).like(search_pattern),
-                    func.lower(Asset.manufacturer).like(search_pattern),
+                    and_(Asset.serial_number.is_not(None), func.lower(Asset.serial_number).like(search_pattern)),
+                    and_(Asset.assigned_username.is_not(None), func.lower(Asset.assigned_username).like(search_pattern)),
+                    and_(Asset.model.is_not(None), func.lower(Asset.model).like(search_pattern)),
+                    and_(Asset.manufacturer.is_not(None), func.lower(Asset.manufacturer).like(search_pattern)),
                 )
             )
 
@@ -157,6 +182,9 @@ class AssetRepository:
         assignment_type: Optional[str] = None,
         search: Optional[str] = None,
         is_unassigned: Optional[bool] = None,
+        eol_status: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = "asc",
     ) -> Tuple[List[Tuple[Asset, Optional[WorkdayEmployee], Optional[date], Optional[str]]], int]:
         """
         Query assets with pagination and dynamic parameterized filtering,
@@ -169,8 +197,8 @@ class AssetRepository:
             select(
                 Asset,
                 WorkdayEmployee,
-                eol_sub.c.eol_date,
-                eol_sub.c.reference_source,
+                eol_sub.c.eol_date.label("eol_date"),
+                eol_sub.c.reference_source.label("reference_source"),
             )
             .outerjoin(
                 WorkdayEmployee,
@@ -178,15 +206,13 @@ class AssetRepository:
             )
             .outerjoin(
                 eol_sub,
-                and_(
-                    func.lower(func.trim(Asset.manufacturer)) == eol_sub.c.mfg,
-                    func.lower(func.trim(Asset.model)) == eol_sub.c.mdl,
-                ),
+                EolRepository.get_eol_join_condition(eol_sub),
             )
         )
 
         stmt = cls._build_filter_criteria(
             stmt=stmt,
+            eol_sub=eol_sub,
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
@@ -196,26 +222,78 @@ class AssetRepository:
             assignment_type=assignment_type,
             search=search,
             is_unassigned=is_unassigned,
+            eol_status=eol_status,
         )
 
         # Count total matching rows from subquery
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = db.execute(count_stmt).scalar() or 0
 
-        # Execute paginated query ordered by asset_id
-        paginated_stmt = stmt.order_by(Asset.asset_id.asc()).offset(skip).limit(limit)
+        # Resolve sort ordering
+        order_col = Asset.asset_id
+        if sort_by:
+            clean_sort = sort_by.strip().lower()
+            if clean_sort in ("last_report_time", "lastreporttime", "last_discovery_date", "lastdiscoverydate"):
+                order_col = Asset.lastreporttime
+            elif clean_sort in ("asset_id", "assetid"):
+                order_col = Asset.asset_id
+            elif clean_sort in ("asset_number", "assetnumber"):
+                order_col = Asset.asset_number
+            elif clean_sort in ("serial_number", "serialnumber"):
+                order_col = Asset.serial_number
+            elif clean_sort in ("manufacturer",):
+                order_col = Asset.manufacturer
+            elif clean_sort in ("model",):
+                order_col = Asset.model
+            elif clean_sort in ("devicetype", "device_type"):
+                order_col = Asset.devicetype
+            elif clean_sort in ("asset_status", "assetstatus"):
+                order_col = Asset.asset_status
+            elif clean_sort in ("assignment_type", "assignmenttype"):
+                order_col = Asset.assignment_type
+            elif clean_sort in ("source",):
+                order_col = Asset.source
+            elif clean_sort in ("managed_by", "managedby"):
+                order_col = Asset.managed_by
+            elif clean_sort in ("macaddress", "mac_address", "mac"):
+                order_col = Asset.macaddress
+            elif clean_sort in ("os_name", "osname", "os"):
+                order_col = Asset.os_name
+            elif clean_sort in ("last_synced_at", "lastsyncedat"):
+                order_col = Asset.last_synced_at
+
+        is_desc = str(sort_order or "asc").strip().lower() == "desc"
+        if is_desc:
+            primary_order = order_col.desc().nulls_last() if hasattr(order_col, "nulls_last") else order_col.desc()
+            secondary_order = Asset.asset_id.desc()
+        else:
+            primary_order = order_col.asc().nulls_last() if hasattr(order_col, "nulls_last") else order_col.asc()
+            secondary_order = Asset.asset_id.asc()
+
+        # Execute paginated query with deterministic secondary sort
+        paginated_stmt = stmt.order_by(primary_order, secondary_order).offset(skip).limit(limit)
         results = db.execute(paginated_stmt).all()
 
         return [(row[0], row[1], row[2], row[3]) for row in results], total_count
+
+    @staticmethod
+    def get_by_id(db: Session, asset_id: int) -> Optional[Asset]:
+        """
+        Lookup single Asset record by primary key.
+        """
+        return db.get(Asset, asset_id)
 
     @staticmethod
     def get_assets_by_assigned_username(db: Session, user_id: str) -> List[Asset]:
         """
         Lookup all assets linked to a Workday user ID using normalized comparison.
         """
+        if not user_id or not user_id.strip():
+            return []
         clean_user_id = user_id.strip().lower()
         stmt = select(Asset).where(
-            func.lower(func.trim(Asset.assigned_username)) == clean_user_id
+            Asset.assigned_username.is_not(None),
+            func.lower(func.trim(Asset.assigned_username)) == clean_user_id,
         ).order_by(Asset.asset_id.asc())
         return list(db.execute(stmt).scalars().all())
 
@@ -232,3 +310,32 @@ class AssetRepository:
             func.lower(func.trim(WorkdayEmployee.user_id)) == clean_login
         )
         return db.execute(stmt).scalar_one_or_none()
+
+    @staticmethod
+    def update_assignment(
+        db: Session,
+        asset_id: int,
+        managed_by: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        asset_status: Optional[str] = "ACTIVE",
+        assignment_type: Optional[str] = "MANUAL",
+        remarks: Optional[str] = None,
+    ) -> Optional[Asset]:
+        """
+        Persist asset assignment updates to PostgreSQL in a single transactional step.
+        """
+        asset = db.get(Asset, asset_id)
+        if not asset:
+            return None
+
+        asset.managed_by = managed_by
+        asset.assigned_username = assigned_username
+        asset.asset_status = asset_status
+        asset.assignment_type = assignment_type
+        if remarks is not None:
+            asset.remarks = remarks
+        asset.updated_at = datetime.now(timezone.utc)
+
+        db.commit()
+        db.refresh(asset)
+        return asset

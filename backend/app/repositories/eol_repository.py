@@ -13,43 +13,83 @@ class EolRepository:
     """
 
     @staticmethod
+    def get_eol_subquery():
+        """
+        Shared query expression:
+        Deduplicates EOL references by exact manufacturer and model.
+        Guarantees that at most one reference record is joined per hardware model,
+        avoiding duplicate asset rows when joining EOL reference data.
+        Only references with non-empty manufacturer and model are included.
+        """
+        return (
+            select(
+                DeviceEolReference.manufacturer.label("mfg"),
+                DeviceEolReference.model.label("mdl"),
+                func.max(DeviceEolReference.eol_date).label("eol_date"),
+                func.max(DeviceEolReference.reference_source).label("reference_source"),
+            )
+            .where(
+                DeviceEolReference.manufacturer.is_not(None),
+                DeviceEolReference.manufacturer != "",
+                DeviceEolReference.model.is_not(None),
+                DeviceEolReference.model != "",
+            )
+            .group_by(
+                DeviceEolReference.manufacturer,
+                DeviceEolReference.model,
+            )
+            .subquery()
+        )
+
+    @staticmethod
+    def get_eol_join_condition(eol_sub):
+        """
+        Shared join condition:
+        Exact matching between Asset and DeviceEolReference:
+        - Match assets.manufacturer exactly against device_eol_reference.manufacturer
+        - Match assets.model exactly against device_eol_reference.model
+        - Both fields must match the same reference record
+        - Does NOT use LIKE, ILIKE, contains, substring, fuzzy, or partial model matching
+        - If either manufacturer or model is NULL or empty, does not match (returns UNKNOWN)
+        """
+        return and_(
+            Asset.manufacturer.is_not(None),
+            Asset.manufacturer != "",
+            Asset.model.is_not(None),
+            Asset.model != "",
+            Asset.manufacturer == eol_sub.c.mfg,
+            Asset.model == eol_sub.c.mdl,
+        )
+
+    @staticmethod
     def get_eol_for_device(
         db: Session, manufacturer: Optional[str], model: Optional[str]
     ) -> Optional[DeviceEolReference]:
+        """
+        Exact match of manufacturer and model against device_eol_reference.
+        - Both fields must match the same reference record exactly.
+        - No LIKE, ILIKE, contains, substring, fuzzy, or partial model matching.
+        - If either manufacturer or model is NULL, empty, or has no exact reference match, returns None.
+        """
         if not manufacturer or not model:
             return None
+        if not manufacturer.strip() or not model.strip():
+            return None
 
-        clean_mfg = manufacturer.strip().lower()
-        clean_mdl = model.strip().lower()
-
-        # Try exact normalized match first
         stmt = (
             select(DeviceEolReference)
             .where(
-                func.lower(func.trim(DeviceEolReference.manufacturer)) == clean_mfg,
-                func.lower(func.trim(DeviceEolReference.model)) == clean_mdl,
+                DeviceEolReference.manufacturer.is_not(None),
+                DeviceEolReference.manufacturer != "",
+                DeviceEolReference.model.is_not(None),
+                DeviceEolReference.model != "",
+                DeviceEolReference.manufacturer == manufacturer,
+                DeviceEolReference.model == model,
             )
-            .order_by(DeviceEolReference.eol_date.asc())
+            .order_by(DeviceEolReference.eol_date.desc().nulls_last())
             .limit(1)
         )
-        match = db.execute(stmt).scalar_one_or_none()
-        if match:
-            return match
-
-        # Try fuzzy/prefix match for manufacturer & model
-        stmt_fuzzy = (
-            select(DeviceEolReference)
-            .where(
-                func.lower(func.trim(DeviceEolReference.manufacturer)) == clean_mfg,
-                or_(
-                    func.lower(DeviceEolReference.model).like(f"{clean_mdl}%"),
-                    func.lower(clean_mdl).like(func.lower(DeviceEolReference.model).concat("%")),
-                ),
-            )
-            .order_by(DeviceEolReference.eol_date.asc())
-            .limit(1)
-        )
-        return db.execute(stmt_fuzzy).scalar_one_or_none()
+        return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod
     def list_references(
@@ -150,8 +190,9 @@ class EolRepository:
         db.commit()
         return True
 
-    @staticmethod
+    @classmethod
     def get_all_assets_with_eol_reference(
+        cls,
         db: Session,
         skip: int = 0,
         limit: int = 25,
@@ -163,22 +204,10 @@ class EolRepository:
         search: Optional[str] = None,
     ) -> Tuple[List[Tuple[Asset, Optional[date], Optional[str]]], int]:
         """
-        Left joins assets to device_eol_reference on normalized manufacturer and model.
+        Left joins assets to device_eol_reference on exact manufacturer and model.
         Returns a tuple of [(Asset, eol_date, reference_source)] and total matching count.
         """
-        eol_sub = (
-            select(
-                func.lower(func.trim(DeviceEolReference.manufacturer)).label("mfg"),
-                func.lower(func.trim(DeviceEolReference.model)).label("mdl"),
-                func.max(DeviceEolReference.eol_date).label("eol_date"),
-                func.max(DeviceEolReference.reference_source).label("reference_source"),
-            )
-            .group_by(
-                func.lower(func.trim(DeviceEolReference.manufacturer)),
-                func.lower(func.trim(DeviceEolReference.model)),
-            )
-            .subquery()
-        )
+        eol_sub = cls.get_eol_subquery()
 
         stmt = (
             select(
@@ -188,10 +217,7 @@ class EolRepository:
             )
             .outerjoin(
                 eol_sub,
-                and_(
-                    func.lower(func.trim(Asset.manufacturer)) == eol_sub.c.mfg,
-                    func.lower(func.trim(Asset.model)) == eol_sub.c.mdl,
-                ),
+                cls.get_eol_join_condition(eol_sub),
             )
         )
 
@@ -205,22 +231,22 @@ class EolRepository:
                 stmt = stmt.where(func.upper(Asset.source) == src_upper)
 
         if asset_status:
-            stmt = stmt.where(func.lower(Asset.asset_status) == asset_status.strip().lower())
+            stmt = stmt.where(Asset.asset_status.is_not(None), func.lower(Asset.asset_status) == asset_status.strip().lower())
         if devicetype:
-            stmt = stmt.where(func.lower(Asset.devicetype) == devicetype.strip().lower())
+            stmt = stmt.where(Asset.devicetype.is_not(None), func.lower(Asset.devicetype) == devicetype.strip().lower())
         if manufacturer:
-            stmt = stmt.where(func.lower(Asset.manufacturer) == manufacturer.strip().lower())
+            stmt = stmt.where(Asset.manufacturer.is_not(None), func.lower(Asset.manufacturer) == manufacturer.strip().lower())
         if model:
-            stmt = stmt.where(func.lower(Asset.model) == model.strip().lower())
+            stmt = stmt.where(Asset.model.is_not(None), func.lower(Asset.model) == model.strip().lower())
         if search:
             pattern = f"%{search.strip().lower()}%"
             stmt = stmt.where(
                 or_(
                     func.lower(Asset.asset_number).like(pattern),
-                    func.lower(Asset.serial_number).like(pattern),
-                    func.lower(Asset.assigned_username).like(pattern),
-                    func.lower(Asset.model).like(pattern),
-                    func.lower(Asset.manufacturer).like(pattern),
+                    and_(Asset.serial_number.is_not(None), func.lower(Asset.serial_number).like(pattern)),
+                    and_(Asset.assigned_username.is_not(None), func.lower(Asset.assigned_username).like(pattern)),
+                    and_(Asset.model.is_not(None), func.lower(Asset.model).like(pattern)),
+                    and_(Asset.manufacturer.is_not(None), func.lower(Asset.manufacturer).like(pattern)),
                 )
             )
 
@@ -232,22 +258,11 @@ class EolRepository:
 
         return [(row[0], row[1], row[2]) for row in results], total_count
 
-    @staticmethod
+    @classmethod
     def get_all_assets_for_eol_evaluation(
-        db: Session, source: Optional[str] = None
+        cls, db: Session, source: Optional[str] = None
     ) -> List[Tuple[int, Optional[str], Optional[str], Optional[date]]]:
-        eol_sub = (
-            select(
-                func.lower(func.trim(DeviceEolReference.manufacturer)).label("mfg"),
-                func.lower(func.trim(DeviceEolReference.model)).label("mdl"),
-                func.max(DeviceEolReference.eol_date).label("eol_date"),
-            )
-            .group_by(
-                func.lower(func.trim(DeviceEolReference.manufacturer)),
-                func.lower(func.trim(DeviceEolReference.model)),
-            )
-            .subquery()
-        )
+        eol_sub = cls.get_eol_subquery()
 
         stmt = (
             select(
@@ -258,10 +273,7 @@ class EolRepository:
             )
             .outerjoin(
                 eol_sub,
-                and_(
-                    func.lower(func.trim(Asset.manufacturer)) == eol_sub.c.mfg,
-                    func.lower(func.trim(Asset.model)) == eol_sub.c.mdl,
-                ),
+                cls.get_eol_join_condition(eol_sub),
             )
         )
 

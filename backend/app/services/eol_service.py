@@ -1,5 +1,5 @@
-from datetime import date
-from typing import List, Optional, Tuple
+from datetime import date, datetime
+from typing import List, Optional, Tuple, Union
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.asset import Asset
@@ -16,32 +16,38 @@ class EolService:
     EOL status is calculated at request time and never persisted to the database.
     """
 
+    get_eol_subquery = EolRepository.get_eol_subquery
+    get_eol_join_condition = EolRepository.get_eol_join_condition
+
     @staticmethod
     def calculate_eol(
-        eol_date: Optional[date],
+        eol_date: Optional[Union[date, datetime]],
         warning_days: Optional[int] = None,
         as_of_date: Optional[date] = None,
     ) -> Tuple[str, Optional[int]]:
         """
         Evaluate EOL state:
-        - Missing matching date -> Unknown
-        - Date before today -> Expired
-        - Date from today through today + warning_days (inclusive) -> Nearing EOL
-        - Date beyond threshold -> Active
+        - Missing matching date -> UNKNOWN
+        - Date before today -> EXPIRED
+        - Date from today through today + warning_days (inclusive) -> EOL SOON
+        - Date beyond threshold -> ACTIVE
         """
         if eol_date is None:
-            return "Unknown", None
+            return "UNKNOWN", None
+
+        if isinstance(eol_date, datetime):
+            eol_date = eol_date.date()
 
         today = as_of_date or date.today()
         days_remaining = (eol_date - today).days
         threshold = warning_days if warning_days is not None else settings.EOL_WARNING_DAYS
 
         if days_remaining < 0:
-            return "Expired", days_remaining
+            return "EXPIRED", days_remaining
         elif 0 <= days_remaining <= threshold:
-            return "Nearing EOL", days_remaining
+            return "EOL SOON", days_remaining
         else:
-            return "Active", days_remaining
+            return "ACTIVE", days_remaining
 
     @classmethod
     def get_asset_eol_info(
@@ -52,7 +58,7 @@ class EolService:
             return EolInfo(
                 eol_date=None,
                 days_remaining=None,
-                eol_status="Unknown",
+                eol_status="UNKNOWN",
                 reference_source=None,
             )
 
@@ -160,10 +166,14 @@ class EolService:
                     manufacturer=asset.manufacturer,
                     model=asset.model,
                     os_name=asset.os_name,
+                    macaddress=asset.macaddress,
                     devicetype=asset.devicetype,
+                    managed_by=asset.managed_by,
                     assigned_username=asset.assigned_username,
                     asset_status=asset.asset_status,
                     assignment_type=asset.assignment_type,
+                    lastreporttime=asset.lastreporttime,
+                    last_synced_at=asset.last_synced_at,
                     eol_date=eol_date,
                     days_remaining=days,
                     eol_status=status,
@@ -195,11 +205,12 @@ class EolService:
 
         for _, _, _, eol_date in all_evals:
             status, _ = cls.calculate_eol(eol_date)
-            if status == "Active":
+            status_upper = status.upper()
+            if status_upper == "ACTIVE":
                 active_cnt += 1
-            elif status == "Nearing EOL":
+            elif status_upper in ("EOL SOON", "NEARING EOL"):
                 nearing_cnt += 1
-            elif status == "Expired":
+            elif status_upper == "EXPIRED":
                 expired_cnt += 1
             else:
                 unknown_cnt += 1

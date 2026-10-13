@@ -19,6 +19,9 @@ import {
   EOLSummaryItem,
   DepartmentDistributionItem,
   Asset,
+  ASSET_STATUSES,
+  toStandardAssetStatus,
+  ASSET_STATUS_LABELS,
 } from '../types';
 import { LoadingState } from '../components/common/LoadingState';
 import { ErrorState } from '../components/common/ErrorState';
@@ -100,7 +103,9 @@ export const ReportsPage: React.FC = () => {
         a.last_report_time,
       ]);
     } else if (selectedReport === 'validation') {
-      const needValidation = fullAssets.filter(a => a.asset_status === 'Need Validation');
+      const needValidation = fullAssets.filter(
+        a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.REVIEW
+      );
       headers = ['Asset ID', 'Asset Number', 'Assigned User', 'Workday Status', 'Model', 'Audit Note'];
       rows = needValidation.map(a => [
         a.id,
@@ -133,7 +138,7 @@ export const ReportsPage: React.FC = () => {
 
   const reportOptions = [
     { id: 'source', label: 'Inventory by Source', icon: Layers, desc: 'BigFix vs Jamf Pro discovery telemetry' },
-    { id: 'status', label: 'Operational Status', icon: CheckCircle2, desc: 'Active, In Stock, Need Validation distribution' },
+    { id: 'status', label: 'Operational Status', icon: CheckCircle2, desc: 'Active, In Stock, Review distribution' },
     { id: 'ownership', label: 'Ownership Overview', icon: HardDrive, desc: 'Automatic vs Manual vs Unassigned breakdown' },
     { id: 'unassigned', label: 'Unassigned Assets Audit', icon: PackageMinus, desc: 'Detailed register of shelf stock & spares' },
     { id: 'validation', label: 'Validation Exceptions', icon: AlertTriangle, desc: 'Terminated users and orphan endpoints' },
@@ -202,8 +207,8 @@ export const ReportsPage: React.FC = () => {
       ) : loading ? (
         <LoadingState message="Generating consolidated governance report..." rows={6} />
       ) : (
-        <div className="p-5 bg-white rounded-lg border border-slate-200 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="p-3 sm:p-5 bg-white rounded-lg border border-slate-200 space-y-4 w-full">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
             <div>
               <h3 className="text-sm font-bold text-slate-900">
                 {reportOptions.find(o => o.id === selectedReport)?.label}
@@ -218,7 +223,7 @@ export const ReportsPage: React.FC = () => {
           </div>
 
           {/* Render table based on selected report */}
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto w-full">
             {selectedReport === 'source' && (
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
@@ -322,7 +327,9 @@ export const ReportsPage: React.FC = () => {
                       <td className="py-3 px-3 font-mono text-slate-600">{asset.serial_number}</td>
                       <td className="py-3 px-3">{asset.source}</td>
                       <td className="py-3 px-3 font-medium text-slate-800">{asset.model}</td>
-                      <td className="py-3 px-3">{asset.asset_status}</td>
+                      <td className="py-3 px-3">
+                        {ASSET_STATUS_LABELS[toStandardAssetStatus(asset.asset_status)] || asset.asset_status}
+                      </td>
                       <td className="py-3 px-3 text-slate-500 truncate max-w-xs">{asset.notes || '—'}</td>
                     </tr>
                   ))}
@@ -342,7 +349,9 @@ export const ReportsPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {fullAssets.filter(a => a.asset_status === 'Need Validation').map(asset => (
+                  {fullAssets
+                    .filter(a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.REVIEW)
+                    .map(asset => (
                     <tr key={asset.id} className="hover:bg-slate-50">
                       <td className="py-3 px-3 font-mono font-bold text-slate-900">{asset.asset_number}</td>
                       <td className="py-3 px-3 font-mono text-slate-800">{asset.assigned_username || 'None'}</td>

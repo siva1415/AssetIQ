@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search,
@@ -7,7 +7,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowUpDown,
-  Download,
   Eye,
   UserRoundPlus,
   UserRoundPen,
@@ -20,11 +19,23 @@ import {
   Clock,
   Server as ServerIcon,
 } from 'lucide-react';
-import { Asset, Employee, AssetQueryParams, FilterOptions, FleetKpiMetrics } from '../../types';
+import {
+  Asset,
+  Employee,
+  AssetQueryParams,
+  FilterOptions,
+  FleetKpiMetrics,
+  ASSET_STATUSES,
+  toStandardAssetStatus,
+  formatEolDate,
+  formatEolDaysLeft,
+} from '../../types';
 import { api } from '../../services/api';
 import { useApp } from '../../context/AppContext';
 import { StatusBadge } from '../common/StatusBadge';
 import { SourceBadge } from '../common/SourceBadge';
+import { ManagedByBadge } from '../common/ManagedByBadge';
+import { DeviceTypeIcon } from '../common/DeviceTypeIcon';
 import { LoadingState } from '../common/LoadingState';
 import { EmptyState } from '../common/EmptyState';
 import { ErrorState } from '../common/ErrorState';
@@ -41,6 +52,7 @@ interface AssetTableProps {
   title?: string;
   subtitle?: string;
   showKPICards?: boolean;
+  allowAssignment?: boolean;
 }
 
 export const AssetTable: React.FC<AssetTableProps> = ({
@@ -52,6 +64,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   title,
   subtitle,
   showKPICards = true,
+  allowAssignment = false,
 }) => {
   const { dataRefreshKey, triggerDataRefresh } = useApp();
   const navigate = useNavigate();
@@ -60,10 +73,31 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   const [search, setSearch] = useState('');
   const [source, setSource] = useState<string>(initialSourceFilter || '');
   const [deviceType, setDeviceType] = useState<string>('');
-  const [assetStatus, setAssetStatus] = useState<string>(initialStatusFilter || '');
+  const [assetStatus, setAssetStatus] = useState<string>(
+    initialStatusFilter ? toStandardAssetStatus(initialStatusFilter) : ''
+  );
   const [manufacturer, setManufacturer] = useState<string>('');
   const [model, setModel] = useState<string>('');
-  const [assignmentType, setAssignmentType] = useState<string>(initialAssignmentFilter || '');
+  // Clean assignment filter: only allow 'Auto' or 'Manual', discard 'Unassigned' or legacy values
+  const getCleanAssignmentFilter = (filter?: string): string => {
+    if (!filter) return '';
+    const trimmed = filter.trim();
+    if (trimmed.toLowerCase() === 'unassigned') return '';
+    if (trimmed.toLowerCase() === 'auto' || trimmed.toLowerCase() === 'automatic') return 'Auto';
+    if (trimmed.toLowerCase() === 'manual') return 'Manual';
+    return '';
+  };
+
+  const [assignmentType, setAssignmentType] = useState<string>(() =>
+    getCleanAssignmentFilter(initialAssignmentFilter)
+  );
+
+  // Guard against any stale 'Unassigned' or unsupported selection
+  useEffect(() => {
+    if (assignmentType && assignmentType !== 'Auto' && assignmentType !== 'Manual') {
+      setAssignmentType('');
+    }
+  }, [assignmentType]);
   const [eolStatus, setEolStatus] = useState<string>(initialEolFilter || '');
   const [sortBy, setSortBy] = useState<string>('last_report_time');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -168,27 +202,98 @@ export const AssetTable: React.FC<AssetTableProps> = ({
     };
   }, [dataRefreshKey]);
 
+  // Supported standard device types
+  const SUPPORTED_DEVICE_TYPES = ['Laptop', 'Desktop', 'Server'];
+
+  // Populate dropdown options from real asset data and supported option list
+  const deviceTypeOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    SUPPORTED_DEVICE_TYPES.forEach(dt => map.set(dt.toLowerCase(), dt));
+
+    if (filterOptions?.device_types) {
+      filterOptions.device_types.forEach(dt => {
+        if (typeof dt === 'string' && dt.trim()) {
+          const trimmed = dt.trim();
+          if (!map.has(trimmed.toLowerCase())) {
+            map.set(trimmed.toLowerCase(), trimmed);
+          }
+        }
+      });
+    }
+
+    assets.forEach(a => {
+      const dt = (a.devicetype || '').trim();
+      if (dt && !map.has(dt.toLowerCase())) {
+        map.set(dt.toLowerCase(), dt);
+      }
+    });
+
+    return Array.from(map.values());
+  }, [filterOptions, assets]);
+
+  // EOL options corresponding to canonical backend status values
+  const eolStatusOptions = useMemo(() => {
+    return [
+      { value: 'ACTIVE', label: 'ACTIVE(≥90d)' },
+      { value: 'EOL SOON', label: 'EOL SOON(≤90d)' },
+      { value: 'EXPIRED', label: 'EXPIRED' },
+      { value: 'UNKNOWN', label: 'UNKNOWN' },
+    ];
+  }, []);
+
+  // Track request IDs to drop stale responses and prevent race conditions
+  const latestRequestIdRef = useRef<number>(0);
+
   // Load assets
   const fetchAssets = async () => {
+    const currentRequestId = ++latestRequestIdRef.current;
     setLoading(true);
     setError(null);
     try {
+      const trimmedDeviceType = deviceType.trim();
+      const rawEol = eolStatus.trim();
+      let trimmedEolStatus: string | undefined = undefined;
+      if (rawEol) {
+        const normEol = rawEol.toUpperCase().replace(/_/g, ' ');
+        if (normEol === 'EOL SOON' || normEol === 'NEARING EOL') {
+          trimmedEolStatus = 'EOL SOON';
+        } else if (normEol === 'ACTIVE') {
+          trimmedEolStatus = 'ACTIVE';
+        } else if (normEol === 'EXPIRED') {
+          trimmedEolStatus = 'EXPIRED';
+        } else if (normEol === 'UNKNOWN') {
+          trimmedEolStatus = 'UNKNOWN';
+        } else {
+          trimmedEolStatus = rawEol;
+        }
+      }
+
+      const cleanAssignmentType =
+        assignmentType === 'Auto' || assignmentType === 'Manual'
+          ? assignmentType
+          : undefined;
+
       const params: AssetQueryParams = {
         page,
         page_size: pageSize,
         search: search.trim() || undefined,
         source: source || undefined,
-        device_type: deviceType || undefined,
-        asset_status: assetStatus || undefined,
+        devicetype: trimmedDeviceType || undefined,
+        device_type: trimmedDeviceType || undefined,
+        asset_status: assetStatus ? toStandardAssetStatus(assetStatus) : undefined,
         manufacturer: manufacturer || undefined,
         model: model || undefined,
-        assignment_type: assignmentType || undefined,
-        eol_status: eolStatus || undefined,
-        sort_by: sortBy,
+        assignment_type: cleanAssignmentType,
+        eol_status: trimmedEolStatus || undefined,
+        sort_by: sortBy === 'device_type' ? 'devicetype' : sortBy,
         sort_order: sortOrder,
       };
 
       const response = await api.getAssets(params);
+      // Prevent stale API responses from overwriting results
+      if (currentRequestId !== latestRequestIdRef.current) {
+        return;
+      }
       setAssets(response.items);
       setTotalCount(response.total);
       setTotalPages(response.total_pages);
@@ -199,9 +304,14 @@ export const AssetTable: React.FC<AssetTableProps> = ({
         setKpiError(null);
       }
     } catch (err: any) {
+      if (currentRequestId !== latestRequestIdRef.current) {
+        return;
+      }
       setError(err?.response?.data?.detail || err?.message || 'Failed to fetch asset inventory');
     } finally {
-      setLoading(false);
+      if (currentRequestId === latestRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -231,14 +341,16 @@ export const AssetTable: React.FC<AssetTableProps> = ({
     }
   };
 
+  const initialStandardStatus = initialStatusFilter ? toStandardAssetStatus(initialStatusFilter) : '';
+
   const handleClearFilters = () => {
     setSearch('');
     if (!initialSourceFilter) setSource('');
     setDeviceType('');
-    setAssetStatus(initialStatusFilter || '');
+    setAssetStatus(initialStandardStatus);
     setManufacturer('');
     setModel('');
-    setAssignmentType(initialAssignmentFilter || '');
+    setAssignmentType(getCleanAssignmentFilter(initialAssignmentFilter));
     setEolStatus(initialEolFilter || '');
     setPage(1);
   };
@@ -246,12 +358,12 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   const hasActiveFilters =
     Boolean(search) ||
     Boolean(!initialSourceFilter && source) ||
-    Boolean(deviceType) ||
-    Boolean(assetStatus !== (initialStatusFilter || '')) ||
+    Boolean(deviceType.trim()) ||
+    Boolean(assetStatus !== initialStandardStatus) ||
     Boolean(manufacturer) ||
     Boolean(model) ||
-    Boolean(assignmentType !== (initialAssignmentFilter || '')) ||
-    Boolean(eolStatus !== (initialEolFilter || ''));
+    Boolean(assignmentType !== getCleanAssignmentFilter(initialAssignmentFilter)) ||
+    Boolean(eolStatus.trim() !== (initialEolFilter || '').trim());
 
   // Format Managed By as GROUP or INDIVIDUAL
   const getManagedByDisplay = (asset: Asset): 'GROUP' | 'INDIVIDUAL' => {
@@ -265,71 +377,17 @@ export const AssetTable: React.FC<AssetTableProps> = ({
         val.includes('DATACENTER') ||
         val.includes('POOL') ||
         val.includes('SERVER') ||
-        asset.device_type === 'Server' ||
+        asset.devicetype === 'Server' ||
         asset.assignment_type === 'Unassigned'
       ) {
         return 'GROUP';
       }
     }
-    return asset.device_type === 'Server' ? 'GROUP' : 'INDIVIDUAL';
+    return asset.devicetype === 'Server' ? 'GROUP' : 'INDIVIDUAL';
   };
 
-  // CSV Export with exact matching headers
-  const handleExportCSV = () => {
-    if (assets.length === 0) return;
-
-    const headers = [
-      'Asset',
-      'Source',
-      'DeviceType',
-      'Model',
-      'OS/Host',
-      'SerialNumber',
-      'Assigned User',
-      'Managed By',
-      'Status',
-      'EOL',
-      'Days Remaining',
-      'Manufacturer',
-      'MAC Address',
-      'Last Report Time',
-    ];
-
-    const rows = assets.map(a => [
-      a.asset_number,
-      a.source,
-      a.device_type,
-      `"${a.model}"`,
-      `"${a.os_name}${a.hostname ? ' (' + a.hostname + ')' : ''}"`,
-      a.serial_number,
-      a.assigned_username || '',
-      getManagedByDisplay(a),
-      a.asset_status,
-      a.calculated_eol_status,
-      a.days_remaining !== null ? a.days_remaining : '',
-      `"${a.manufacturer}"`,
-      a.mac_address,
-      a.last_report_time,
-    ]);
-
-    const csvContent =
-      'data:text/csv;charset=utf-8,' +
-      [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    const fileLabel = initialSourceFilter ? `${initialSourceFilter}_Assets` : (title ? title.replace(/\s+/g, '_') : 'Assets');
-    link.setAttribute('download', `AssetIQ_${fileLabel}_export.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const renderDeviceIcon = (type: string) => {
-    if (type === 'Server') return <ServerIcon className="w-3.5 h-3.5 text-indigo-500 shrink-0" />;
-    if (type === 'Desktop') return <Monitor className="w-3.5 h-3.5 text-blue-500 shrink-0" />;
-    return <Laptop className="w-3.5 h-3.5 text-emerald-500 shrink-0" />;
+  const renderDeviceIcon = (type?: string | null) => {
+    return <DeviceTypeIcon type={type} />;
   };
 
   // Top card labels and icons based on source
@@ -420,8 +478,14 @@ export const AssetTable: React.FC<AssetTableProps> = ({
             }}
           />
           <KPICard
-            label="Need Validation"
-            value={typeof kpiMetrics?.needValidation === 'number' && !isNaN(kpiMetrics.needValidation) ? kpiMetrics.needValidation : 0}
+            label="Review"
+            value={
+              typeof kpiMetrics?.review === 'number' && !isNaN(kpiMetrics.review)
+                ? kpiMetrics.review
+                : typeof kpiMetrics?.needValidation === 'number' && !isNaN(kpiMetrics.needValidation)
+                ? kpiMetrics.needValidation
+                : 0
+            }
             loading={kpiLoading}
             error={kpiError}
             icon={AlertTriangle}
@@ -429,7 +493,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
             colorTheme="amber"
             compact={true}
             onClick={() => {
-              setAssetStatus('Need Validation');
+              setAssetStatus(ASSET_STATUSES.REVIEW);
               setPage(1);
             }}
           />
@@ -448,8 +512,14 @@ export const AssetTable: React.FC<AssetTableProps> = ({
             }}
           />
           <KPICard
-            label="Nearing EOL"
-            value={typeof kpiMetrics?.nearingEol === 'number' && !isNaN(kpiMetrics.nearingEol) ? kpiMetrics.nearingEol : 0}
+            label="EOL Soon"
+            value={
+              typeof kpiMetrics?.eolSoon === 'number' && !isNaN(kpiMetrics.eolSoon)
+                ? kpiMetrics.eolSoon
+                : typeof kpiMetrics?.nearingEol === 'number' && !isNaN(kpiMetrics.nearingEol)
+                ? kpiMetrics.nearingEol
+                : 0
+            }
             loading={kpiLoading}
             error={kpiError}
             icon={Clock}
@@ -457,19 +527,19 @@ export const AssetTable: React.FC<AssetTableProps> = ({
             colorTheme="orange"
             compact={true}
             onClick={() => {
-              setEolStatus('Nearing EOL');
+              setEolStatus('EOL SOON');
               setPage(1);
             }}
           />
         </div>
       )}
 
-      {/* Filter, Search, and Action Toolbar */}
-      <div className="p-4 bg-white rounded-lg border border-slate-200 space-y-3">
-        <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
-          {/* Search Box */}
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+      {/* Filter and Search Toolbar */}
+      <div className="p-3 bg-white rounded-lg border border-slate-200 shadow-2xs">
+        <div className="flex flex-wrap lg:flex-nowrap items-center gap-2">
+          {/* 1. Search Box */}
+          <div className="relative flex-1 min-w-[180px]">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
             <input
               type="text"
               placeholder="Search by asset #, serial, model, username, employee, OS..."
@@ -478,120 +548,118 @@ export const AssetTable: React.FC<AssetTableProps> = ({
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              className="w-full pl-9 pr-4 py-2 text-xs bg-slate-50 border border-slate-300 rounded-md focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full h-9 pl-9 pr-8 text-xs bg-white text-slate-900 font-medium placeholder:text-slate-500 border border-slate-300 hover:border-slate-400 rounded-md shadow-2xs focus:bg-white focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 transition-all"
             />
             {search && (
               <button
                 onClick={() => setSearch('')}
-                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-700 rounded transition-colors"
+                title="Clear search"
+                aria-label="Clear search"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
 
-          {/* Quick Select Filters & Actions */}
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Source dropdown (only if not restricted to BigFix/Jamf) */}
-            {!hideSourceFilter && (
-              <select
-                value={source}
-                onChange={e => {
-                  setSource(e.target.value);
-                  setPage(1);
-                }}
-                className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700"
-              >
-                <option value="">All Sources</option>
-                <option value="BIGFIX">BigFix (Windows/Linux)</option>
-                <option value="JAMF">Jamf (Apple/macOS)</option>
-              </select>
-            )}
-
-            {/* Device Type */}
+          {/* 2. All Sources */}
+          {!hideSourceFilter && (
             <select
-              value={deviceType}
+              value={source}
               onChange={e => {
-                setDeviceType(e.target.value);
+                setSource(e.target.value);
                 setPage(1);
               }}
-              className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700"
+              className="h-9 px-2.5 text-xs bg-white border border-slate-300 hover:border-slate-400 rounded-md focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 text-slate-700 font-medium shrink-0 cursor-pointer shadow-2xs transition-all"
             >
-              <option value="">All Device Types</option>
-              <option value="Laptop">Laptops</option>
-              <option value="Desktop">Desktops</option>
-              <option value="Server">Servers</option>
+              <option value="">All Sources</option>
+              <option value="BIGFIX">BigFix</option>
+              <option value="JAMF">Jamf</option>
             </select>
+          )}
 
-            {/* Status */}
-            <select
-              value={assetStatus}
-              onChange={e => {
-                setAssetStatus(e.target.value);
-                setPage(1);
-              }}
-              className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700"
-            >
-              <option value="">All Statuses</option>
-              <option value="Active">Active</option>
-              <option value="Need Validation">Need Validation</option>
-              <option value="In Stock">In Stock</option>
-              <option value="Retired">Retired</option>
-            </select>
+          {/* 3. All Device Types */}
+          <select
+            value={deviceType}
+            onChange={e => {
+              setDeviceType(e.target.value);
+              setPage(1);
+            }}
+            className="h-9 px-2.5 text-xs bg-white border border-slate-300 hover:border-slate-400 rounded-md focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 text-slate-700 font-medium shrink-0 cursor-pointer shadow-2xs transition-all"
+          >
+            <option value="">All Device Types</option>
+            {deviceTypeOptions.map(dt => {
+              let label = dt;
+              const lower = dt.toLowerCase();
+              if (lower === 'laptop') label = 'Laptops';
+              else if (lower === 'desktop') label = 'Desktops';
+              else if (lower === 'server') label = 'Servers';
+              return (
+                <option key={dt} value={dt}>
+                  {label}
+                </option>
+              );
+            })}
+          </select>
 
-            {/* Assignment Type */}
-            <select
-              value={assignmentType}
-              onChange={e => {
-                setAssignmentType(e.target.value);
-                setPage(1);
-              }}
-              className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700"
-            >
-              <option value="">All Assignments</option>
-              <option value="Automatic">Automatic Match</option>
-              <option value="Manual">Manual Assignment</option>
-              <option value="Unassigned">Unassigned</option>
-            </select>
+          {/* 4. All Status */}
+          <select
+            value={assetStatus}
+            onChange={e => {
+              setAssetStatus(e.target.value);
+              setPage(1);
+            }}
+            className="h-9 px-2.5 text-xs bg-white border border-slate-300 hover:border-slate-400 rounded-md focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 text-slate-700 font-medium shrink-0 cursor-pointer shadow-2xs transition-all"
+          >
+            <option value="">All Status</option>
+            <option value={ASSET_STATUSES.ACTIVE}>Active</option>
+            <option value={ASSET_STATUSES.REVIEW}>Review</option>
+            <option value={ASSET_STATUSES.IN_STOCK}>In Stock</option>
+            <option value={ASSET_STATUSES.RETIRED}>Retired</option>
+          </select>
 
-            {/* EOL Status */}
-            <select
-              value={eolStatus}
-              onChange={e => {
-                setEolStatus(e.target.value);
-                setPage(1);
-              }}
-              className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700"
-            >
-              <option value="">All EOL States</option>
-              <option value="Active">Active (&gt;90d)</option>
-              <option value="Nearing EOL">Nearing EOL (≤90d)</option>
-              <option value="Expired">Expired</option>
-              <option value="Unknown">Unknown</option>
-            </select>
+          {/* 5. All Assignments */}
+          <select
+            value={assignmentType}
+            onChange={e => {
+              setAssignmentType(e.target.value);
+              setPage(1);
+            }}
+            className="h-9 px-2.5 text-xs bg-white border border-slate-300 hover:border-slate-400 rounded-md focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 text-slate-700 font-medium shrink-0 cursor-pointer shadow-2xs transition-all"
+          >
+            <option value="">All Assignments</option>
+            <option value="Auto">Auto</option>
+            <option value="Manual">Manual</option>
+          </select>
 
-            {/* Clear filters button */}
-            {hasActiveFilters && (
-              <button
-                onClick={handleClearFilters}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-                <span>Clear</span>
-              </button>
-            )}
+          {/* 6. All EOL States */}
+          <select
+            value={eolStatus}
+            onChange={e => {
+              setEolStatus(e.target.value);
+              setPage(1);
+            }}
+            className="h-9 px-2.5 text-xs bg-white border border-slate-300 hover:border-slate-400 rounded-md focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 text-slate-700 font-medium shrink-0 cursor-pointer shadow-2xs transition-all"
+          >
+            <option value="">All EOL States</option>
+            {eolStatusOptions.map(opt => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
 
-            {/* Export CSV action button in toolbar */}
+          {/* Clear filters button */}
+          {hasActiveFilters && (
             <button
-              onClick={handleExportCSV}
-              disabled={assets.length === 0}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50 transition-colors shadow-2xs shrink-0"
-              title="Download filtered assets CSV"
+              onClick={handleClearFilters}
+              className="h-9 inline-flex items-center gap-1 px-2.5 text-xs text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors shrink-0 font-medium cursor-pointer"
+              title="Clear all filters"
             >
-              <Download className="w-3.5 h-3.5 text-slate-500" />
-              <span>Export CSV</span>
+              <X className="w-3.5 h-3.5" />
+              <span>Clear</span>
             </button>
-          </div>
+          )}
         </div>
       </div>
 
@@ -610,121 +678,112 @@ export const AssetTable: React.FC<AssetTableProps> = ({
       ) : (
         <div className="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-2xs">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold select-none">
+            <table className="w-full text-left text-xs border-collapse table-fixed min-w-[700px]">
+              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 select-none">
                 <tr>
                   {/* 1. Asset */}
                   <th
                     onClick={() => handleSort('asset_number')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[9.5%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                   >
-                    <div className="flex items-center gap-1">
-                      <span>Asset</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                    <div className="flex items-center gap-1 select-none">
+                      <span className="text-[11px] font-semibold text-slate-700">Asset</span>
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
 
                   {/* 2. Source */}
                   <th
                     onClick={() => handleSort('source')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[7.5%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                   >
-                    <div className="flex items-center gap-1">
-                      <span>Source</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                    <div className="flex items-center gap-1 select-none">
+                      <span className="text-[11px] font-semibold text-slate-700">Source</span>
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
 
                   {/* 3. DeviceType */}
                   <th
-                    onClick={() => handleSort('device_type')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    onClick={() => handleSort('devicetype')}
+                    className="w-[9.5%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                   >
-                    <div className="flex items-center gap-1">
-                      <span>DeviceType</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                    <div className="flex items-center gap-1 select-none">
+                      <span className="text-[11px] font-semibold text-slate-700">DeviceType</span>
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
 
                   {/* 4. Model */}
                   <th
                     onClick={() => handleSort('model')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[13%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                   >
-                    <div className="flex items-center gap-1">
-                      <span>Model</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                    <div className="flex items-center gap-1 select-none">
+                      <span className="text-[11px] font-semibold text-slate-700">Model</span>
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
 
-                  {/* 5. OS/Host */}
-                  <th
-                    onClick={() => handleSort('os_name')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
-                  >
-                    <div className="flex items-center gap-1">
-                      <span>OS/Host</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                    </div>
-                  </th>
-
-                  {/* 6. SerialNumber */}
+                  {/* 5. SerialNumber */}
                   <th
                     onClick={() => handleSort('serial_number')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[11%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                   >
-                    <div className="flex items-center gap-1">
-                      <span>SerialNumber</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                    <div className="flex items-center gap-1 select-none">
+                      <span className="text-[11px] font-semibold text-slate-700">SerialNumber</span>
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
 
                   {/* 7. Assigned User */}
                   <th
                     onClick={() => handleSort('assigned_username')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[14.5%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                   >
-                    <div className="flex items-center gap-1">
-                      <span>Assigned User</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                    <div className="flex items-center gap-1 select-none">
+                      <span className="text-[11px] font-semibold text-slate-700">Assigned User</span>
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
 
                   {/* 8. Managed By */}
                   <th
                     onClick={() => handleSort('managed_by')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[9.5%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                   >
-                    <div className="flex items-center gap-1">
-                      <span>Managed By</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                    <div className="flex items-center gap-1 select-none">
+                      <span className="text-[11px] font-semibold text-slate-700">Managed By</span>
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
 
                   {/* 9. Status */}
                   <th
                     onClick={() => handleSort('asset_status')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[8%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                   >
-                    <div className="flex items-center gap-1">
-                      <span>Status</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                    <div className="flex items-center gap-1 select-none">
+                      <span className="text-[11px] font-semibold text-slate-700">Status</span>
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
 
                   {/* 10. EOL */}
                   <th
                     onClick={() => handleSort('days_remaining')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[8.5%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                   >
-                    <div className="flex items-center gap-1">
-                      <span>EOL</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                    <div className="flex items-center gap-1 select-none">
+                      <span className="text-[11px] font-semibold text-slate-700">EOL</span>
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
 
                   {/* Action */}
-                  <th className="py-3 px-3 text-right whitespace-nowrap">Action</th>
+                  <th className="w-[9%] py-2.5 px-2 text-right whitespace-nowrap">
+                    <span className="text-[11px] font-semibold text-slate-700">Action</span>
+                  </th>
                 </tr>
               </thead>
 
@@ -739,71 +798,63 @@ export const AssetTable: React.FC<AssetTableProps> = ({
                       className="hover:bg-blue-50/40 cursor-pointer transition-colors"
                     >
                       {/* 1. Asset */}
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <span className="font-mono font-bold text-slate-900 block" title={asset.asset_number}>
+                      <td className="py-2.5 px-2 whitespace-nowrap align-middle overflow-hidden">
+                        <span
+                          className="font-mono font-bold text-slate-900 text-xs block whitespace-nowrap [text-overflow:clip] overflow-hidden"
+                          style={{
+                            whiteSpace: 'nowrap',
+                            textOverflow: 'clip',
+                          }}
+                          title={asset.asset_number}
+                        >
                           {asset.asset_number}
                         </span>
                       </td>
 
                       {/* 2. Source */}
-                      <td className="py-3 px-3 whitespace-nowrap align-middle">
+                      <td className="py-2.5 px-2 whitespace-nowrap align-middle">
                         <SourceBadge source={asset.source} />
                       </td>
 
                       {/* 3. DeviceType */}
-                      <td className="py-3 px-3 whitespace-nowrap">
+                      <td className="py-2.5 px-2 whitespace-nowrap align-middle">
                         {(() => {
-                          const dt = (asset.deviceType || asset.device_type || asset.devicetype || '').trim();
+                          const dt = (asset.devicetype || asset.device_type || '').toString().trim();
                           if (!dt) {
                             return <span className="text-slate-400 italic text-xs">—</span>;
                           }
                           return (
-                            <div className="flex items-center gap-1.5 font-medium text-slate-800">
-                              {renderDeviceIcon(dt)}
-                              <span>{dt}</span>
+                            <div className="flex items-center gap-1.5 font-medium text-slate-800 text-xs truncate">
+                              <DeviceTypeIcon type={dt} />
+                              <span className="truncate">{dt}</span>
                             </div>
                           );
                         })()}
                       </td>
 
                       {/* 4. Model */}
-                      <td className="py-3 px-3">
-                        <div className="font-medium text-slate-900 truncate max-w-[170px]" title={`${asset.manufacturer} ${asset.model}`}>
+                      <td className="py-2.5 px-2 align-middle overflow-hidden">
+                        <div className="font-medium text-slate-900 truncate text-xs" title={`${asset.manufacturer} ${asset.model}`}>
                           {asset.model}
                         </div>
-                        <div className="text-[10px] text-slate-500 truncate max-w-[170px]" title={asset.manufacturer}>
+                        <div className="text-[10px] text-slate-500 truncate mt-0.5" title={asset.manufacturer}>
                           {asset.manufacturer}
                         </div>
                       </td>
 
-                      {/* 5. OS/Host */}
-                      <td className="py-3 px-3">
-                        <div className="font-medium text-slate-900 truncate max-w-[170px]" title={asset.os_name}>
-                          {asset.os_name}
-                        </div>
-                        {(asset.hostname || asset.mac_address) && (
-                          <div
-                            className="font-mono text-[10px] text-slate-500 truncate max-w-[170px]"
-                            title={asset.hostname ? `Host: ${asset.hostname} | MAC: ${asset.mac_address}` : `MAC: ${asset.mac_address}`}
-                          >
-                            {asset.hostname ? asset.hostname : asset.mac_address}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* 6. SerialNumber */}
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <span className="font-mono text-slate-700 font-semibold block truncate max-w-[130px]" title={asset.serial_number}>
+                      {/* 5. SerialNumber */}
+                      <td className="py-2.5 px-2 whitespace-nowrap align-middle overflow-hidden">
+                        <span className="font-mono text-slate-700 font-semibold block truncate text-xs" title={asset.serial_number}>
                           {asset.serial_number}
                         </span>
                       </td>
 
                       {/* 7. Assigned User */}
-                      <td className="py-3 px-3">
+                      <td className="py-2.5 px-2 align-middle overflow-hidden">
                         {(() => {
                           const username = (asset.assignedUsername || asset.assigned_username || '').trim();
                           if (!username) {
-                            return <span className="text-slate-400 italic">Unassigned</span>;
+                            return <span className="text-slate-400 italic text-xs">Unassigned</span>;
                           }
 
                           // 1. Check directory match against workday employees
@@ -836,15 +887,15 @@ export const AssetTable: React.FC<AssetTableProps> = ({
                               : (matchedEmp?.full_name || username);
 
                             return (
-                              <div className="leading-tight">
+                              <div className="leading-tight overflow-hidden">
                                 <div
-                                  className="font-bold text-slate-900 truncate max-w-[150px]"
+                                  className="font-bold text-slate-900 truncate text-xs"
                                   title={displayName}
                                 >
                                   {displayName}
                                 </div>
                                 <div
-                                  className="font-mono text-xs text-slate-500 truncate max-w-[150px] mt-0.5"
+                                  className="font-mono text-[11px] text-slate-500 truncate mt-0.5"
                                   title={username}
                                 >
                                   {username}
@@ -855,15 +906,15 @@ export const AssetTable: React.FC<AssetTableProps> = ({
 
                           // Unmatched in Workday
                           return (
-                            <div>
+                            <div className="leading-tight overflow-hidden">
                               <div
-                                className="font-mono font-semibold text-slate-900 truncate max-w-[140px]"
+                                className="font-mono font-semibold text-slate-900 truncate text-xs"
                                 title={username}
                               >
                                 {username}
                               </div>
                               <div
-                                className="text-[10px] text-rose-600 truncate max-w-[140px]"
+                                className="text-[10px] text-rose-600 truncate mt-0.5 font-medium"
                                 title="Not found in Workday HCM directory"
                               >
                                 ⚠ Not in Workday
@@ -874,39 +925,39 @@ export const AssetTable: React.FC<AssetTableProps> = ({
                       </td>
 
                       {/* 8. Managed By */}
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wide border ${
-                            managedByDisplay === 'INDIVIDUAL'
-                              ? 'bg-purple-50 text-purple-700 border-purple-200'
-                              : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                          }`}
-                          title={`Management attribution: ${managedByDisplay}${asset.managed_by ? ` (via ${asset.managed_by})` : ''}`}
-                        >
-                          {managedByDisplay}
-                        </span>
+                      <td className="py-2.5 px-2 whitespace-nowrap align-middle">
+                        <ManagedByBadge managedBy={managedByDisplay} />
                       </td>
 
                       {/* 9. Status */}
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <StatusBadge status={asset.assetStatus || asset.asset_status} variant="solid" type="asset_status" />
+                      <td className="py-2.5 px-2 whitespace-nowrap align-middle">
+                        <StatusBadge status={asset.asset_status} variant="solid" type="asset_status" />
                       </td>
 
                       {/* 10. EOL */}
-                      <td className="py-3 px-3 whitespace-nowrap">
+                      <td className="py-2.5 px-2 whitespace-nowrap align-middle">
                         <div className="flex flex-col items-start">
-                          <StatusBadge status={asset.eolStatus || asset.calculated_eol_status || 'Unknown'} variant="solid" type="eol_status" />
-                          {asset.days_remaining !== null && asset.days_remaining !== undefined && (
-                            <span className="text-[10px] font-mono text-slate-500 mt-0.5 tabular-nums">
-                              {asset.days_remaining > 0 ? `${asset.days_remaining}d left` : 'Expired'}
-                            </span>
-                          )}
+                          <StatusBadge status={asset.eol_status || 'UNKNOWN'} variant="solid" type="eol_status" />
+                          <span
+                            className="text-[9px] font-mono text-slate-500 mt-0.5 tabular-nums leading-tight"
+                            title={
+                              asset.eol_date
+                                ? `EOL Date: ${formatEolDate(asset.eol_date)}${
+                                    asset.days_remaining !== null && asset.days_remaining !== undefined
+                                      ? ` (${asset.days_remaining}d remaining)`
+                                      : ''
+                                  }`
+                                : undefined
+                            }
+                          >
+                            {formatEolDaysLeft(asset.eol_status, asset.days_remaining ?? asset.daysRemaining)}
+                          </span>
                         </div>
                       </td>
 
                       {/* Action */}
-                      <td className="py-3 px-3 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
+                      <td className="py-2.5 px-2 text-right whitespace-nowrap align-middle">
+                        <div className="flex items-center justify-end gap-1">
                           <button
                             onClick={e => {
                               e.stopPropagation();
@@ -918,17 +969,19 @@ export const AssetTable: React.FC<AssetTableProps> = ({
                           >
                             <Eye className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={e => {
-                              e.stopPropagation();
-                              setAssignAsset(asset);
-                            }}
-                            className="w-7 h-7 inline-flex items-center justify-center rounded-md bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white shadow-xs hover:shadow hover:-translate-y-0.5 active:translate-y-0 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-                            title="Assign / Reassign User"
-                            aria-label="Assign / Reassign User"
-                          >
-                            <UserRoundPlus className="w-4 h-4 stroke-[2.25]" />
-                          </button>
+                          {allowAssignment && (
+                            <button
+                              onClick={e => {
+                                e.stopPropagation();
+                                setAssignAsset(asset);
+                              }}
+                              className="w-7 h-7 inline-flex items-center justify-center rounded-md bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white shadow-xs hover:shadow hover:-translate-y-0.5 active:translate-y-0 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                              title="Assign / Reassign User"
+                              aria-label="Assign / Reassign User"
+                            >
+                              <UserRoundPlus className="w-4 h-4 stroke-[2.25]" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -996,6 +1049,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
           onSuccess={msg => {
             setAssignAsset(null);
             triggerDataRefresh();
+            fetchAssets();
             setNotification({ type: 'success', message: msg });
           }}
         />

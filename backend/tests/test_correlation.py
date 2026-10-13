@@ -16,13 +16,14 @@ def test_asset_correlation_matching(client: TestClient):
     assert res1.status_code == 200
     data1 = res1.json()
     assert data1["workday_status"] == "Matched Workday employee"
-    assert data1["workdayStatus"] == "Matched Workday employee"
     assert data1["full_name"] == "John Doe"
-    assert data1["fullName"] == "John Doe"
-    assert data1["employee_name"] == "John Doe"
     assert data1["email_work"] == "john.doe@enterprise.com"
     assert data1["matched_employee"]["user_id"] == "johndoe"
     assert data1["matched_employee"]["full_name"] == "John Doe"
+    # Ensure redundant alias representations are removed
+    assert "workdayStatus" not in data1
+    assert "fullName" not in data1
+    assert "employee_name" not in data1
 
     # 2. Exact match
     res2 = client.get("/api/assets/2")

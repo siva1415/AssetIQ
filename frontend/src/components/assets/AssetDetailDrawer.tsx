@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { X, HardDrive } from 'lucide-react';
-import { Asset, Employee } from '../../types';
+import { Asset, Employee, formatEolDate, toStandardEOLStatus } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
 import { SourceBadge } from '../common/SourceBadge';
+import { ManagedByBadge } from '../common/ManagedByBadge';
+import { CopyButton } from '../common/CopyButton';
 import { api } from '../../services/api';
 
 interface AssetDetailDrawerProps {
@@ -25,6 +27,27 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
       return;
     }
 
+    // If asset already embeds employee details, pre-populate state
+    if (asset.employee || asset.workday_employee || asset.matched_employee) {
+      const empData = (asset.employee || asset.workday_employee || asset.matched_employee) as any;
+      setEmployeeDetails({
+        id: empData.id ?? empData.employee_id ?? '',
+        employee_id: empData.employee_id ?? asset.verified_employee_id ?? '',
+        user_id: empData.user_id ?? asset.assigned_username,
+        full_name: empData.full_name ?? asset.verified_employee_name ?? asset.full_name ?? '',
+        work_email: empData.work_email ?? asset.work_email ?? asset.email_work ?? '',
+        department: empData.department ?? asset.department ?? '',
+        division: empData.division ?? asset.division ?? '',
+        job_title: empData.job_title ?? asset.job_title ?? '',
+        employee_status: empData.employee_status ?? asset.employee_status ?? 'Active',
+        manager_username: empData.manager_username ?? empData.manager_user_name ?? asset.manager_username ?? asset.manager_user_name ?? null,
+        manager_user_name: empData.manager_user_name ?? empData.manager_username ?? asset.manager_user_name ?? asset.manager_username ?? null,
+        manager_name: empData.manager_name ?? asset.manager_name ?? null,
+        location: empData.location ?? '',
+        hire_date: empData.hire_date ?? '',
+      });
+    }
+
     // Attempt to retrieve full Workday employee profile
     const lookupKey = asset.verified_employee_id || asset.assigned_username;
     api
@@ -35,8 +58,17 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
         }
       })
       .catch(() => {
-        if (!isCancelled) {
-          setEmployeeDetails(null);
+        if (asset.verified_employee_id && asset.assigned_username && lookupKey !== asset.assigned_username) {
+          api
+            .getEmployeeById(asset.assigned_username)
+            .then(emp => {
+              if (!isCancelled) {
+                setEmployeeDetails(emp);
+              }
+            })
+            .catch(() => {
+              // Graceful fallback
+            });
         }
       });
 
@@ -65,7 +97,9 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
     const hasMatch = Boolean(
       employeeDetails ||
       (asset.verified_employee_name && asset.verified_employee_name.trim() !== '') ||
-      (asset.verified_employee_id && asset.verified_employee_id.trim() !== '')
+      (asset.verified_employee_id && asset.verified_employee_id.trim() !== '') ||
+      (asset.full_name && asset.full_name.trim() !== '') ||
+      asset.workday_status === 'Matched'
     );
 
     if (!hasMatch) {
@@ -86,7 +120,7 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
       return 'Inactive';
     }
 
-    return 'Not in Workday';
+    return 'Active';
   };
 
   const employeeStatus = getDerivedEmployeeStatus();
@@ -134,20 +168,74 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
     : '—';
 
   const displayedDepartment = isMatchedEmployee
-    ? displayVal(employeeDetails?.department || asset.department)
+    ? displayVal(employeeDetails?.department || (asset as any)?.workday_employee?.department || (asset as any)?.employee?.department || asset.department)
     : '—';
 
   const displayedJobTitle = isMatchedEmployee
     ? displayVal(employeeDetails?.job_title || asset.job_title)
     : '—';
 
+  const rawManagerUserName =
+    employeeDetails?.manager_user_name ??
+    employeeDetails?.manager_username ??
+    (employeeDetails as any)?.managerUsername ??
+    (employeeDetails as any)?.manager_user ??
+    asset.manager_user_name ??
+    asset.manager_username ??
+    asset.managerUsername ??
+    (asset as any)?.manager_user ??
+    asset.employee?.manager_user_name ??
+    asset.employee?.manager_username ??
+    (asset.employee as any)?.managerUsername ??
+    (asset.workday_employee as any)?.manager_user_name ??
+    (asset.workday_employee as any)?.manager_username ??
+    (asset.workday_employee as any)?.managerUsername ??
+    (asset.matched_employee as any)?.manager_user_name ??
+    (asset.matched_employee as any)?.manager_username ??
+    null;
+
   const displayedManagerUserName = isMatchedEmployee
-    ? displayVal(employeeDetails?.manager_username || asset.manager_user_name || asset.manager_username)
+    ? displayVal(rawManagerUserName)
     : '—';
 
+  const rawManagerName =
+    employeeDetails?.manager_name ??
+    (employeeDetails as any)?.managerName ??
+    asset.manager_name ??
+    asset.managerName ??
+    asset.employee?.manager_name ??
+    (asset.employee as any)?.managerName ??
+    (asset.workday_employee as any)?.manager_name ??
+    (asset.matched_employee as any)?.manager_name ??
+    null;
+
   const displayedManagerName = isMatchedEmployee
-    ? displayVal(employeeDetails?.manager_name || asset.manager_name)
+    ? displayVal(rawManagerName)
     : '—';
+
+  // Backend-calculated remaining days
+  const rawDaysRemaining = asset.days_remaining ?? asset.daysRemaining;
+
+  // Remarks display: show saved remarks, or '—' if empty/whitespace
+  const getRemarksDisplay = (): string => {
+    const raw = asset.remarks ?? asset.notes ?? (asset as any)?.remarks_text;
+    if (raw === undefined || raw === null) return '—';
+    const str = String(raw).trim();
+    return str.length > 0 ? str : '—';
+  };
+  const displayedRemarks = getRemarksDisplay();
+
+  // Model + Manufacturer formatted as "Manufacturer - Model"
+  const getModelManufacturerDisplay = (): string => {
+    if (!asset) return '—';
+    const manufacturer = (asset.manufacturer || '').trim();
+    const model = (asset.model || '').trim();
+    if (manufacturer && model) {
+      return `${manufacturer} - ${model}`;
+    }
+    return manufacturer || model || '—';
+  };
+  const formattedModelManufacturer = getModelManufacturerDisplay();
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden">
@@ -158,23 +246,18 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
         aria-hidden="true"
       />
 
-      <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
+      <div className="fixed inset-y-0 right-0 max-w-full flex pl-0 sm:pl-10">
         <div className="w-screen max-w-xl bg-white shadow-2xl border-l border-slate-200 flex flex-col">
           {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
+          <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200 bg-slate-50">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-blue-50 text-blue-700 rounded-lg">
                 <HardDrive className="w-5 h-5" />
               </div>
               <div>
-                <h2 className="text-base font-bold text-slate-900 font-mono">
-                  {asset.asset_number}
+                <h2 className="text-base font-bold text-slate-900">
+                  View Asset & Ownership Details
                 </h2>
-                <div className="flex items-center gap-2 text-xs text-slate-500">
-                  <span>{asset.manufacturer}</span>
-                  <span>·</span>
-                  <span>{asset.model}</span>
-                </div>
               </div>
             </div>
 
@@ -189,19 +272,19 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
 
           {/* Body Content */}
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            {/* Status Strip */}
+            {/* Status Strip: 1. Asset Status, 2. EOL, 3. Assignment Type */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3.5 bg-slate-50 rounded-lg border border-slate-200 text-xs">
               <div>
                 <span className="block text-[11px] text-slate-500 mb-1">Asset Status</span>
-                <StatusBadge status={asset.assetStatus || asset.asset_status} />
-              </div>
-              <div>
-                <span className="block text-[11px] text-slate-500 mb-1">Assignment Type</span>
-                <StatusBadge status={asset.assignmentType || asset.assignment_type} />
+                <StatusBadge status={asset.asset_status} type="asset_status" uppercase />
               </div>
               <div>
                 <span className="block text-[11px] text-slate-500 mb-1">EOL</span>
-                <StatusBadge status={asset.eolStatus || asset.calculated_eol_status || 'Unknown'} />
+                <StatusBadge status={asset.eol_status || 'UNKNOWN'} type="eol_status" uppercase />
+              </div>
+              <div>
+                <span className="block text-[11px] text-slate-500 mb-1">Assignment Type</span>
+                <StatusBadge status={asset.assignment_type} type="assignment" uppercase />
               </div>
             </div>
 
@@ -212,8 +295,22 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
               </h3>
               <div className="grid grid-cols-2 gap-y-3 gap-x-4 text-xs">
                 <div>
-                  <span className="text-slate-500 block">Asset ID</span>
-                  <span className="font-mono text-slate-900 font-semibold">{displayVal(asset.assetId ?? asset.id)}</span>
+                  <span className="text-slate-500 block">Asset Number</span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span
+                      className="font-mono text-slate-900 font-bold text-[13.33px]"
+                      style={{ fontSize: 'calc(12px + 1pt)' }}
+                    >
+                      {displayVal(asset.asset_number || asset.assetNumber)}
+                    </span>
+                    {(asset.asset_number || asset.assetNumber) && (
+                      <CopyButton text={asset.asset_number || asset.assetNumber} label="Asset Number" />
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Model + Manufacturer</span>
+                  <span className="text-slate-900 font-medium break-words">{formattedModelManufacturer}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block">Serial Number</span>
@@ -225,7 +322,7 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
                 </div>
                 <div>
                   <span className="text-slate-500 block">Device Type</span>
-                  <span className="text-slate-900">{displayVal(asset.deviceType || asset.device_type || asset.devicetype)}</span>
+                  <span className="text-slate-900">{displayVal(asset.devicetype)}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block">Operating System</span>
@@ -237,13 +334,35 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
                 </div>
                 <div>
                   <span className="text-slate-500 block">EOL Date</span>
-                  <span className="font-mono text-slate-900 font-medium">{displayVal(asset.eolDate || asset.eol_date)}</span>
+                  <span className="font-mono text-slate-900 font-medium">{formatEolDate(asset.eolDate || asset.eol_date)}</span>
                 </div>
-                <div className="col-span-2">
+                <div>
+                  <span className="text-slate-500 block">EOL Days Remaining</span>
+                  <span
+                    className={`font-mono font-medium ${
+                      toStandardEOLStatus(asset.eol_status) === 'UNKNOWN' || rawDaysRemaining === null || rawDaysRemaining === undefined
+                        ? 'text-slate-500'
+                        : Number(rawDaysRemaining) <= 0
+                        ? 'text-rose-600 font-semibold'
+                        : Number(rawDaysRemaining) <= 90
+                        ? 'text-amber-600 font-semibold'
+                        : 'text-emerald-700 font-semibold'
+                    }`}
+                  >
+                    {toStandardEOLStatus(asset.eol_status) === 'UNKNOWN' || rawDaysRemaining === null || rawDaysRemaining === undefined || isNaN(Number(rawDaysRemaining))
+                      ? '—'
+                      : `${rawDaysRemaining} days`}
+                  </span>
+                </div>
+                <div>
                   <span className="text-slate-500 block">Last Discovery Report</span>
                   <span className="font-mono text-slate-700">
                     {formatDiscoveryDate(asset.lastDiscoveryDate || asset.last_report_time || asset.lastreporttime)}
                   </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block mb-1">Managed By</span>
+                  <ManagedByBadge managedBy={asset.managed_by} />
                 </div>
               </div>
             </div>
@@ -260,7 +379,7 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
                 {/* 1. Status */}
                 <div className="flex items-center justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500 font-medium">Status</span>
-                  <StatusBadge status={employeeStatus} />
+                  <StatusBadge status={employeeStatus} type="employee" uppercase />
                 </div>
 
                 {/* 2. Username */}
@@ -271,7 +390,7 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
                   </span>
                 </div>
 
-                {/* 3. Full Name */}
+                {/* 4. Full Name */}
                 <div className="flex items-center justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500">Full Name</span>
                   <span className="font-medium text-slate-900">
@@ -279,7 +398,7 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
                   </span>
                 </div>
 
-                {/* 4. Work Email */}
+                {/* 5. Work Email */}
                 <div className="flex items-center justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500">Work Email</span>
                   <span className="font-mono text-slate-900 truncate max-w-[260px]" title={displayedWorkEmail !== '—' ? displayedWorkEmail : ''}>
@@ -287,11 +406,11 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
                   </span>
                 </div>
 
-                {/* 5. Division */}
+                {/* Department */}
                 <div className="flex items-center justify-between py-1 border-b border-slate-100">
-                  <span className="text-slate-500">Division</span>
-                  <span className="text-slate-900 font-medium">
-                    {displayedDivision}
+                  <span className="text-slate-500">Department</span>
+                  <span className="text-slate-900 font-medium truncate max-w-[260px]" title={displayedDepartment !== '—' ? displayedDepartment : ''}>
+                    {displayedDepartment}
                   </span>
                 </div>
 
@@ -321,34 +440,17 @@ export const AssetDetailDrawer: React.FC<AssetDetailDrawerProps> = ({
               </div>
             </div>
 
-            {/* EOL Status */}
+            {/* Remarks */}
             <div className="p-4 rounded-lg border border-slate-200 bg-white">
-              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3">
-                EOL
+              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2">
+                Remarks
               </h3>
-              <div className="grid grid-cols-2 gap-4 text-xs">
-                <div>
-                  <span className="text-slate-500 block">EOL Date</span>
-                  <span className="font-mono text-slate-900 font-semibold">
-                    {asset.eol_date ? asset.eol_date : 'Unknown / Not Registered'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Days Remaining</span>
-                  <span
-                    className={`font-mono font-bold ${
-                      asset.days_remaining === null
-                        ? 'text-slate-400'
-                        : asset.days_remaining <= 0
-                        ? 'text-rose-600'
-                        : asset.days_remaining <= 90
-                        ? 'text-amber-600'
-                        : 'text-emerald-700'
-                    }`}
-                  >
-                    {asset.days_remaining !== null ? `${asset.days_remaining} days` : 'N/A'}
-                  </span>
-                </div>
+              <div
+                className={`text-xs whitespace-pre-wrap break-words leading-relaxed ${
+                  displayedRemarks === '—' ? 'text-slate-400 font-medium' : 'text-slate-800'
+                }`}
+              >
+                {displayedRemarks}
               </div>
             </div>
           </div>

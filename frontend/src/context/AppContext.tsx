@@ -10,6 +10,88 @@ interface HealthState {
   lastChecked: Date | null;
 }
 
+export interface LoggedInUser {
+  name: string;
+  email?: string;
+  role?: string;
+  avatarUrl?: string;
+}
+
+export function resolveCurrentUser(): LoggedInUser {
+  if (typeof window !== 'undefined') {
+    const win = window as any;
+    if (win.__CURRENT_USER__) {
+      const u = win.__CURRENT_USER__;
+      return typeof u === 'string'
+        ? { name: u, role: 'Superadmin' }
+        : { name: u.name || u.displayName || u.username || u.email || 'User', email: u.email, avatarUrl: u.avatarUrl, role: 'Superadmin' };
+    }
+    if (win.currentUser) {
+      const u = win.currentUser;
+      return typeof u === 'string'
+        ? { name: u, role: 'Superadmin' }
+        : { name: u.name || u.displayName || u.username || u.email || 'User', email: u.email, avatarUrl: u.avatarUrl, role: 'Superadmin' };
+    }
+
+    for (const key of ['currentUser', 'user', 'auth_user', 'user_profile', 'session_user']) {
+      try {
+        const item = localStorage.getItem(key) || sessionStorage.getItem(key);
+        if (item) {
+          try {
+            const parsed = JSON.parse(item);
+            if (parsed && typeof parsed === 'object') {
+              const name =
+                parsed.name ||
+                parsed.fullName ||
+                parsed.full_name ||
+                parsed.displayName ||
+                parsed.username ||
+                parsed.user_id ||
+                parsed.email;
+              if (name) {
+                return {
+                  name: String(name).split('@')[0],
+                  email: parsed.email,
+                  avatarUrl: parsed.avatarUrl || parsed.picture,
+                  role: 'Superadmin',
+                };
+              }
+            } else if (typeof parsed === 'string' && parsed.trim()) {
+              return { name: parsed.trim().split('@')[0], role: 'Superadmin' };
+            }
+          } catch {
+            if (item.trim()) {
+              return { name: item.trim().split('@')[0], role: 'Superadmin' };
+            }
+          }
+        }
+      } catch {
+        // ignore storage errors
+      }
+    }
+  }
+
+  if (import.meta.env.VITE_USER_NAME) {
+    return { name: import.meta.env.VITE_USER_NAME, role: 'Superadmin' };
+  }
+  if (import.meta.env.VITE_USER_EMAIL) {
+    const raw = import.meta.env.VITE_USER_EMAIL.split('@')[0];
+    const formatted = raw.split('.')[0];
+    return {
+      name: formatted.charAt(0).toUpperCase() + formatted.slice(1),
+      email: import.meta.env.VITE_USER_EMAIL,
+      role: 'Superadmin',
+    };
+  }
+
+  // Active authenticated user session
+  return {
+    name: 'Siva',
+    email: 'siva.sankaran.it@gmail.com',
+    role: 'Superadmin',
+  };
+}
+
 interface AppContextType {
   mockMode: boolean;
   setMockMode: (val: boolean) => void;
@@ -19,11 +101,14 @@ interface AppContextType {
   refreshHealth: () => Promise<void>;
   dataRefreshKey: number;
   triggerDataRefresh: () => void;
+  currentUser: LoggedInUser;
+  setCurrentUser: (user: LoggedInUser) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [currentUser, setCurrentUserState] = useState<LoggedInUser>(resolveCurrentUser);
   const [mockMode, setMockModeState] = useState<boolean>(getInitialMockMode);
   const [apiBaseUrl, setApiBaseUrlState] = useState<string>(getApiBaseUrl);
   const [dataRefreshKey, setDataRefreshKey] = useState<number>(0);
@@ -34,6 +119,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     latencyMs: null,
     lastChecked: null,
   });
+
+  const setCurrentUser = (user: LoggedInUser) => {
+    setCurrentUserState(user);
+    try {
+      localStorage.setItem('currentUser', JSON.stringify(user));
+    } catch {
+      // ignore
+    }
+  };
 
   const setMockMode = (val: boolean) => {
     setMockModeState(val);
@@ -114,6 +208,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         refreshHealth,
         dataRefreshKey,
         triggerDataRefresh,
+        currentUser,
+        setCurrentUser,
       }}
     >
       {children}
@@ -128,3 +224,10 @@ export const useApp = (): AppContextType => {
   }
   return context;
 };
+
+export const useUser = () => {
+  const { currentUser, setCurrentUser } = useApp();
+  return { user: currentUser, setUser: setCurrentUser };
+};
+
+export const useAuth = useUser;

@@ -13,11 +13,13 @@ import {
   Check,
   Mail,
   Building,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useApp } from '../context/AppContext';
 import { AdminUser, AvailableWorkdayUser } from '../types';
-import { StatusBadge } from '../components/common/StatusBadge';
 
 export const AdminUsersPage: React.FC = () => {
   const { dataRefreshKey, triggerDataRefresh } = useApp();
@@ -36,6 +38,8 @@ export const AdminUsersPage: React.FC = () => {
   const [availableUsers, setAvailableUsers] = useState<AvailableWorkdayUser[]>([]);
   const [availableLoading, setAvailableLoading] = useState<boolean>(false);
   const [userSearch, setUserSearch] = useState<string>('');
+  const [modalPage, setModalPage] = useState<number>(1);
+  const modalPageSize = 8;
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
   const [submittingBulk, setSubmittingBulk] = useState<boolean>(false);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -83,7 +87,14 @@ export const AdminUsersPage: React.FC = () => {
       const data = await api.getAvailableWorkdayUsers(searchQuery);
       setAvailableUsers(data);
     } catch (err: any) {
-      setModalError(err?.message || 'Failed to fetch available users from Workday.');
+      const status = err?.status || err?.response?.status;
+      let errorMsg = 'Failed to fetch available users from Workday.';
+      if (status === 405) {
+        errorMsg = 'HTTP 405 Method Not Allowed: The server rejected GET request to /api/admin-users/available-users.';
+      } else if (err?.message) {
+        errorMsg = err.message;
+      }
+      setModalError(errorMsg);
     } finally {
       setAvailableLoading(false);
     }
@@ -92,6 +103,7 @@ export const AdminUsersPage: React.FC = () => {
   // Open the Add Admin User modal
   const handleOpenAddModal = () => {
     setUserSearch('');
+    setModalPage(1);
     setSelectedUserIds(new Set());
     setModalError(null);
     setIsAddModalOpen(true);
@@ -102,6 +114,7 @@ export const AdminUsersPage: React.FC = () => {
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const handleUserSearchChange = (value: string) => {
     setUserSearch(value);
+    setModalPage(1); // Reset pagination when search term changes
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
@@ -123,28 +136,38 @@ export const AdminUsersPage: React.FC = () => {
     );
   }, [adminUsers, search]);
 
-  // Selectable users in the modal (excluding already-admin users)
+  // Selectable users in the modal (relying on backend filter, plus safeguarding against any with is_admin: true)
   const selectableAvailableUsers = useMemo(() => {
     return availableUsers.filter(u => !u.is_admin);
   }, [availableUsers]);
 
-  // Check if all currently visible selectable users are selected
-  const allVisibleSelected = useMemo(() => {
-    if (selectableAvailableUsers.length === 0) return false;
-    return selectableAvailableUsers.every(u => selectedUserIds.has(u.user_id));
-  }, [selectableAvailableUsers, selectedUserIds]);
+  // Total pages for modal table
+  const totalModalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(selectableAvailableUsers.length / modalPageSize));
+  }, [selectableAvailableUsers.length, modalPageSize]);
 
-  // Some visible selectable users selected (for indeterminate status)
-  const someVisibleSelected = useMemo(() => {
+  // Paginated users on current modal page
+  const paginatedAvailableUsers = useMemo(() => {
+    const start = (modalPage - 1) * modalPageSize;
+    return selectableAvailableUsers.slice(start, start + modalPageSize);
+  }, [selectableAvailableUsers, modalPage, modalPageSize]);
+
+  // Check if all users on CURRENT PAGE are selected
+  const allCurrentPageSelected = useMemo(() => {
+    if (paginatedAvailableUsers.length === 0) return false;
+    return paginatedAvailableUsers.every(u => selectedUserIds.has(u.user_id));
+  }, [paginatedAvailableUsers, selectedUserIds]);
+
+  // Check if some (but not all) users on CURRENT PAGE are selected (for indeterminate checkbox)
+  const someCurrentPageSelected = useMemo(() => {
     return (
-      selectableAvailableUsers.some(u => selectedUserIds.has(u.user_id)) &&
-      !allVisibleSelected
+      paginatedAvailableUsers.some(u => selectedUserIds.has(u.user_id)) &&
+      !allCurrentPageSelected
     );
-  }, [selectableAvailableUsers, selectedUserIds, allVisibleSelected]);
+  }, [paginatedAvailableUsers, selectedUserIds, allCurrentPageSelected]);
 
-  // Toggle single user selection
-  const handleToggleUserSelection = (userId: string, isDisabled: boolean) => {
-    if (isDisabled) return;
+  // Toggle single user selection (preserves selection across page turns and searches)
+  const handleToggleUserSelection = (userId: string) => {
     setSelectedUserIds(prev => {
       const next = new Set(prev);
       if (next.has(userId)) {
@@ -156,24 +179,27 @@ export const AdminUsersPage: React.FC = () => {
     });
   };
 
-  // Toggle select all visible
-  const handleToggleSelectAllVisible = () => {
+  // Toggle select all visible on current page
+  const handleToggleSelectAllCurrentPage = () => {
     setSelectedUserIds(prev => {
       const next = new Set(prev);
-      if (allVisibleSelected) {
-        // Deselect all currently visible selectable users
-        selectableAvailableUsers.forEach(u => next.delete(u.user_id));
+      if (allCurrentPageSelected) {
+        // Deselect all on current page
+        paginatedAvailableUsers.forEach(u => next.delete(u.user_id));
       } else {
-        // Select all currently visible selectable users
-        selectableAvailableUsers.forEach(u => next.add(u.user_id));
+        // Select all on current page
+        paginatedAvailableUsers.forEach(u => next.add(u.user_id));
       }
       return next;
     });
   };
 
-  // Submit bulk admin users
+  // Submit bulk admin users via POST /api/admin-users
   const handleSubmitBulk = async () => {
-    if (selectedUserIds.size === 0) return;
+    if (selectedUserIds.size === 0) {
+      setModalError('Please select at least one Workday employee before submitting.');
+      return;
+    }
     setSubmittingBulk(true);
     setModalError(null);
     try {
@@ -185,12 +211,35 @@ export const AdminUsersPage: React.FC = () => {
       triggerDataRefresh();
       await loadAdminUsers();
 
-      setNotification({
-        type: 'success',
-        message: res.message || `Successfully registered ${res.added_count} administrator users.`,
-      });
+      if (res.skipped_user_ids && res.skipped_user_ids.length > 0) {
+        setNotification({
+          type: res.added_count > 0 ? 'success' : 'error',
+          message: `Added ${res.added_count} administrator(s). Skipped: ${res.skipped_user_ids.join(', ')}.`,
+        });
+      } else {
+        setNotification({
+          type: 'success',
+          message: res.message || `Successfully registered ${res.added_count} administrator user${res.added_count === 1 ? '' : 's'}.`,
+        });
+      }
     } catch (err: any) {
-      setModalError(err?.message || 'Failed to add selected users as administrators.');
+      const status = err?.status || err?.response?.status;
+      let errorMsg = 'Failed to add selected users as administrators.';
+      if (status === 405) {
+        errorMsg = 'HTTP 405 Method Not Allowed: The endpoint did not accept the POST request to /api/admin-users.';
+      } else if (status === 422) {
+        const detail = err?.detail || err?.response?.data?.detail;
+        if (Array.isArray(detail)) {
+          errorMsg = `Validation error (422): ${detail.map((d: any) => d.msg || `${d.loc ? d.loc.join('.') : ''}: ${JSON.stringify(d)}`).join(', ')}`;
+        } else if (typeof detail === 'string') {
+          errorMsg = `Validation error (422): ${detail}`;
+        } else {
+          errorMsg = 'Validation error (422): Invalid user IDs submitted.';
+        }
+      } else if (err?.message) {
+        errorMsg = err.message;
+      }
+      setModalError(errorMsg);
     } finally {
       setSubmittingBulk(false);
     }
@@ -254,7 +303,7 @@ export const AdminUsersPage: React.FC = () => {
             ) : (
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
             )}
-            <span>{notification.message}</span>
+            <span className="font-medium">{notification.message}</span>
           </div>
           <button
             onClick={() => setNotification(null)}
@@ -308,10 +357,10 @@ export const AdminUsersPage: React.FC = () => {
 
           <button
             onClick={handleOpenAddModal}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md shadow-xs transition-colors whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md shadow-xs transition-colors whitespace-nowrap cursor-pointer"
           >
             <UserPlus className="w-3.5 h-3.5" />
-            <span>Add Admin User</span>
+            <span>+ Add Admin User</span>
           </button>
         </div>
       </div>
@@ -330,7 +379,7 @@ export const AdminUsersPage: React.FC = () => {
             <p className="text-xs text-slate-500 max-w-sm mt-1 mb-4">
               {search
                 ? 'No registered administrators match your search query. Try clearing filters.'
-                : 'No users are currently registered in the admin_users table. Click "Add Admin User" to authorize Workday users.'}
+                : 'No users are currently registered in the admin_users table. Click "+ Add Admin User" to authorize Workday users.'}
             </p>
             {search ? (
               <button
@@ -345,47 +394,51 @@ export const AdminUsersPage: React.FC = () => {
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors"
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>Add Admin User</span>
+                <span>+ Add Admin User</span>
               </button>
             )}
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full text-left text-xs border-collapse table-fixed">
               <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[11px] border-b border-slate-200">
                 <tr>
-                  <th className="py-3 px-4">User ID</th>
-                  <th className="py-3 px-4">Full Name</th>
-                  <th className="py-3 px-4">Work Email</th>
-                  <th className="py-3 px-4">Department</th>
-                  <th className="py-3 px-4">Added On</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                  <th className="w-[18%] py-2.5 px-3">User ID</th>
+                  <th className="w-[22%] py-2.5 px-3">Full Name</th>
+                  <th className="w-[24%] py-2.5 px-3">Work Email</th>
+                  <th className="w-[16%] py-2.5 px-3">Department</th>
+                  <th className="w-[12%] py-2.5 px-3">Added On</th>
+                  <th className="w-[8%] py-2.5 px-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredAdminUsers.map(user => (
                   <tr key={user.admin_id} className="hover:bg-slate-50/70 transition-colors">
                     {/* User ID */}
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-semibold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-[11px] border border-slate-200">
+                    <td className="py-2.5 px-3 align-middle">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono font-semibold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-[11px] border border-slate-200 break-all">
                           {user.admin_user_id}
                         </span>
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200">
-                          Admin
+                        <span
+                          title="Admin"
+                          aria-label="Admin"
+                          className="inline-flex items-center text-indigo-600 shrink-0"
+                        >
+                          <ShieldCheck className="w-4 h-4" />
                         </span>
                       </div>
                     </td>
 
                     {/* Full Name */}
-                    <td className="py-3 px-4 whitespace-nowrap">
+                    <td className="py-2.5 px-3 align-middle">
                       {user.full_name ? (
-                        <div>
-                          <span className="font-semibold text-slate-900 block">
+                        <div className="leading-tight">
+                          <span className="font-semibold text-slate-900 block break-words">
                             {user.full_name}
                           </span>
                           {user.job_title && (
-                            <span className="text-[10px] text-slate-400 block">
+                            <span className="text-[10px] text-slate-400 block break-words mt-0.5">
                               {user.job_title}
                             </span>
                           )}
@@ -396,11 +449,11 @@ export const AdminUsersPage: React.FC = () => {
                     </td>
 
                     {/* Work Email */}
-                    <td className="py-3 px-4 whitespace-nowrap">
+                    <td className="py-2.5 px-3 align-middle">
                       {user.email_work ? (
-                        <div className="flex items-center gap-1.5 text-slate-700">
+                        <div className="flex items-center gap-1.5 text-slate-700 leading-tight">
                           <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span className="font-mono text-[11px]">{user.email_work}</span>
+                          <span className="font-mono text-[11px] break-all">{user.email_work}</span>
                         </div>
                       ) : (
                         <span className="text-slate-400 italic">—</span>
@@ -408,11 +461,11 @@ export const AdminUsersPage: React.FC = () => {
                     </td>
 
                     {/* Department */}
-                    <td className="py-3 px-4 whitespace-nowrap">
+                    <td className="py-2.5 px-3 align-middle">
                       {user.department ? (
-                        <div className="flex items-center gap-1.5 text-slate-700">
+                        <div className="flex items-center gap-1.5 text-slate-700 leading-tight">
                           <Building className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span>{user.department}</span>
+                          <span className="break-words">{user.department}</span>
                         </div>
                       ) : (
                         <span className="text-slate-400 italic">—</span>
@@ -420,23 +473,24 @@ export const AdminUsersPage: React.FC = () => {
                     </td>
 
                     {/* Added On */}
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <span className="font-mono text-[11px] text-slate-600">
+                    <td className="py-2.5 px-3 align-middle">
+                      <span className="font-mono text-[11px] text-slate-600 block truncate">
                         {formatDate(user.created_at)}
                       </span>
                     </td>
 
                     {/* Actions */}
-                    <td className="py-3 px-4 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => setUserToDelete(user)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors text-xs border border-transparent hover:border-rose-200"
-                        title={`Remove admin access for ${user.admin_user_id}`}
-                        aria-label={`Remove admin access for ${user.admin_user_id}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Remove Access</span>
-                      </button>
+                    <td className="py-2.5 px-3 text-right whitespace-nowrap align-middle">
+                      <div className="flex items-center justify-end">
+                        <button
+                          onClick={() => setUserToDelete(user)}
+                          className="w-7 h-7 inline-flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors border border-transparent hover:border-rose-200 cursor-pointer"
+                          title="Remove Access"
+                          aria-label={`Remove Access for ${user.admin_user_id}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -446,17 +500,17 @@ export const AdminUsersPage: React.FC = () => {
         )}
       </div>
 
-      {/* Modal Dialog: Add Admin Users (Bulk Selection from Workday) */}
+      {/* Modal Dialog: Add Admin User Popup (Searchable Bulk Selection from Workday) */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-2xs transition-opacity"
+            className="fixed inset-0 bg-slate-900/50 backdrop-blur-2xs transition-opacity"
             onClick={() => !submittingBulk && setIsAddModalOpen(false)}
           />
 
           <div className="flex min-h-full items-center justify-center p-4">
-            <div className="relative w-full max-w-4xl bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden transform transition-all flex flex-col max-h-[90vh]">
+            <div className="relative w-full max-w-4xl bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden transform transition-all flex flex-col max-h-[92vh]">
               {/* Modal Header */}
               <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50/70 shrink-0">
                 <div className="flex items-center gap-3">
@@ -465,14 +519,14 @@ export const AdminUsersPage: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="text-base font-bold text-slate-900">
-                      Add Admin Users
+                      Add Admin User
                     </h3>
                   </div>
                 </div>
                 <button
                   onClick={() => !submittingBulk && setIsAddModalOpen(false)}
                   disabled={submittingBulk}
-                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-md transition-colors"
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-50"
                   aria-label="Close dialog"
                 >
                   <X className="w-5 h-5" />
@@ -481,17 +535,26 @@ export const AdminUsersPage: React.FC = () => {
 
               {/* Modal Error Banner */}
               {modalError && (
-                <div className="mx-6 mt-4 p-3 rounded-lg border border-rose-200 bg-rose-50 text-rose-800 text-xs flex items-center justify-between">
+                <div className="mx-6 mt-4 p-3 rounded-lg border border-rose-200 bg-rose-50 text-rose-800 text-xs flex items-center justify-between shrink-0">
                   <div className="flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                    <span>{modalError}</span>
+                    <span className="font-medium">{modalError}</span>
                   </div>
-                  <button
-                    onClick={() => setModalError(null)}
-                    className="text-slate-400 hover:text-slate-600"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => loadAvailableUsers(userSearch)}
+                      className="px-2 py-0.5 bg-rose-600 text-white rounded text-[11px] font-medium hover:bg-rose-700"
+                    >
+                      Retry
+                    </button>
+                    <button
+                      onClick={() => setModalError(null)}
+                      className="text-slate-400 hover:text-slate-600"
+                      aria-label="Dismiss error"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -502,18 +565,19 @@ export const AdminUsersPage: React.FC = () => {
                     <Search className="absolute left-3.5 top-2.5 w-4 h-4 text-slate-400" />
                     <input
                       type="text"
-                      placeholder="Search users by ID, name, or email..."
+                      placeholder="Search by User ID, Name or Email"
                       value={userSearch}
                       onChange={e => handleUserSearchChange(e.target.value)}
-                      className="w-full pl-10 pr-9 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                      className="w-full pl-10 pr-9 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800 placeholder-slate-400"
                     />
                     {userSearch && (
                       <button
                         onClick={() => {
                           setUserSearch('');
                           loadAvailableUsers('');
+                          setModalPage(1);
                         }}
-                        className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
+                        className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
                         aria-label="Clear user search"
                       >
                         <X className="w-4 h-4" />
@@ -530,97 +594,101 @@ export const AdminUsersPage: React.FC = () => {
               </div>
 
               {/* Selectable Users Table */}
-              <div className="flex-1 overflow-y-auto px-6 pb-4 min-w-0">
+              <div className="flex-1 overflow-y-auto px-6 pb-2 min-w-0">
                 <div className="border border-slate-200 rounded-lg overflow-hidden w-full">
                   {availableLoading ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-slate-400 space-y-2">
-                      <RefreshCw className="w-5 h-5 animate-spin text-blue-600" />
-                      <span className="text-xs">Querying Workday employee directory...</span>
+                    <div className="flex flex-col items-center justify-center py-16 text-slate-500 space-y-2.5">
+                      <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                      <span className="text-xs font-medium">Loading eligible Workday employees...</span>
                     </div>
-                  ) : availableUsers.length === 0 ? (
+                  ) : selectableAvailableUsers.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
                       <Users className="w-8 h-8 text-slate-300 mb-2" />
-                      <h4 className="text-xs font-semibold text-slate-800">No users found</h4>
-                      <p className="text-[11px] text-slate-500 max-w-xs mt-1">
+                      <h4 className="text-xs font-semibold text-slate-800">
+                        {userSearch ? 'No matching employees' : 'No available users to add'}
+                      </h4>
+                      <p className="text-[11px] text-slate-500 max-w-sm mt-1 mb-3">
                         {userSearch
-                          ? 'No Workday records matched your search query. Try another name or ID.'
-                          : 'No Workday employee records available to display.'}
+                          ? `No Workday employees match "${userSearch}". Try searching by another User ID, Name, or Email.`
+                          : 'All eligible Workday employees are already registered as administrators, or no employee records were found.'}
                       </p>
+                      {userSearch && (
+                        <button
+                          onClick={() => {
+                            setUserSearch('');
+                            loadAvailableUsers('');
+                            setModalPage(1);
+                          }}
+                          className="px-3 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium transition-colors"
+                        >
+                          Clear Search
+                        </button>
+                      )}
                     </div>
                   ) : (
-                    <table className="w-full table-fixed text-left text-xs divide-y divide-slate-200">
+                    <table className="w-full text-left text-xs divide-y divide-slate-200">
                       <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[10px] sticky top-0 z-10 shadow-2xs">
                         <tr>
                           {/* 1. Checkbox */}
-                          <th className="py-2.5 px-3 w-10 text-center shrink-0">
+                          <th className="py-2.5 px-3 w-12 text-center shrink-0">
                             <input
                               type="checkbox"
-                              checked={allVisibleSelected}
+                              checked={allCurrentPageSelected}
                               ref={el => {
-                                if (el) el.indeterminate = someVisibleSelected;
+                                if (el) el.indeterminate = someCurrentPageSelected;
                               }}
-                              onChange={handleToggleSelectAllVisible}
-                              disabled={selectableAvailableUsers.length === 0}
+                              onChange={handleToggleSelectAllCurrentPage}
+                              disabled={paginatedAvailableUsers.length === 0}
                               className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer disabled:opacity-40"
-                              title="Select All visible users"
-                              aria-label="Select All visible users"
+                              title="Select / deselect all users on current page"
+                              aria-label="Select all on current page"
                             />
                           </th>
                           {/* 2. User ID */}
-                          <th className="py-2.5 px-3 w-32">User ID</th>
+                          <th className="py-2.5 px-3 w-36">User ID</th>
                           {/* 3. Full Name */}
-                          <th className="py-2.5 px-3 w-[30%]">Full Name</th>
+                          <th className="py-2.5 px-3">Full Name</th>
                           {/* 4. Work Email */}
-                          <th className="py-2.5 px-3 w-[36%]">Work Email</th>
+                          <th className="py-2.5 px-3">Work Email</th>
                           {/* 5. Employee Status */}
-                          <th className="py-2.5 px-3 w-28 text-center">Employee Status</th>
+                          <th className="py-2.5 px-3 w-36 text-center">Employee Status</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
-                        {availableUsers.map(emp => {
+                        {paginatedAvailableUsers.map(emp => {
                           const isSelected = selectedUserIds.has(emp.user_id);
-                          const isAlreadyAdmin = emp.is_admin;
+                          const isActive = (emp.employee_status || '').toLowerCase() === 'active';
 
                           return (
                             <tr
                               key={emp.user_id}
-                              onClick={() => handleToggleUserSelection(emp.user_id, isAlreadyAdmin)}
-                              className={`transition-colors ${
-                                isAlreadyAdmin
-                                  ? 'bg-slate-50/60 cursor-not-allowed opacity-75'
-                                  : isSelected
-                                  ? 'bg-blue-50/60 hover:bg-blue-50/90 cursor-pointer'
-                                  : 'hover:bg-slate-50/80 cursor-pointer'
+                              onClick={() => handleToggleUserSelection(emp.user_id)}
+                              className={`transition-colors cursor-pointer ${
+                                isSelected
+                                  ? 'bg-blue-50/70 hover:bg-blue-50/90 font-medium'
+                                  : 'hover:bg-slate-50/80'
                               }`}
                             >
                               {/* 1. Checkbox */}
                               <td className="py-2.5 px-3 text-center shrink-0">
                                 <input
                                   type="checkbox"
-                                  checked={isSelected || isAlreadyAdmin}
-                                  disabled={isAlreadyAdmin}
-                                  onChange={() => handleToggleUserSelection(emp.user_id, isAlreadyAdmin)}
+                                  checked={isSelected}
+                                  onChange={() => handleToggleUserSelection(emp.user_id)}
                                   onClick={e => e.stopPropagation()}
-                                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer disabled:cursor-not-allowed disabled:text-slate-400"
+                                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
                                   aria-label={`Select ${emp.full_name || emp.user_id}`}
                                 />
                               </td>
 
                               {/* 2. User ID */}
-                              <td className="py-2.5 px-3">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span
-                                    className="font-mono font-medium text-slate-800 truncate"
-                                    title={emp.user_id}
-                                  >
-                                    {emp.user_id || '—'}
-                                  </span>
-                                  {isAlreadyAdmin && (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-                                      Already Admin
-                                    </span>
-                                  )}
-                                </div>
+                              <td className="py-2.5 px-3 whitespace-nowrap">
+                                <span
+                                  className="font-mono font-semibold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-[11px] border border-slate-200"
+                                  title={emp.user_id}
+                                >
+                                  {emp.user_id || '—'}
+                                </span>
                               </td>
 
                               {/* 3. Full Name */}
@@ -645,21 +713,34 @@ export const AdminUsersPage: React.FC = () => {
 
                               {/* 4. Work Email */}
                               <td className="py-2.5 px-3">
-                                <span
-                                  className="font-mono text-[11px] text-slate-600 block truncate"
-                                  title={emp.email_work || '—'}
-                                >
-                                  {emp.email_work || '—'}
-                                </span>
+                                {emp.email_work ? (
+                                  <span
+                                    className="font-mono text-[11px] text-slate-600 block truncate"
+                                    title={emp.email_work}
+                                  >
+                                    {emp.email_work}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 italic text-[11px]">—</span>
+                                )}
                               </td>
 
-                              {/* 5. Employee Status */}
-                              <td className="py-2.5 px-3 text-center">
-                                <StatusBadge
-                                  status={emp.employee_status || 'Unknown'}
-                                  type="employee"
-                                  variant="solid"
-                                />
+                              {/* 5. Employee Status (Visually distinguish Active and Inactive) */}
+                              <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                                <span
+                                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-semibold border ${
+                                    isActive
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                      : 'bg-rose-50 text-rose-800 border-rose-200'
+                                  }`}
+                                >
+                                  <span
+                                    className={`w-1.5 h-1.5 rounded-full ${
+                                      isActive ? 'bg-emerald-600' : 'bg-rose-600'
+                                    } shrink-0`}
+                                  />
+                                  <span>{emp.employee_status || 'Inactive'}</span>
+                                </span>
                               </td>
                             </tr>
                           );
@@ -670,15 +751,56 @@ export const AdminUsersPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* Pagination Controls inside Modal */}
+              {selectableAvailableUsers.length > 0 && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-2 px-6 py-2.5 border-t border-slate-200 bg-slate-50/50 text-xs text-slate-600 shrink-0">
+                  <div className="text-[11px]">
+                    Showing <span className="font-semibold text-slate-900">{(modalPage - 1) * modalPageSize + 1}</span> to{' '}
+                    <span className="font-semibold text-slate-900">
+                      {Math.min(modalPage * modalPageSize, selectableAvailableUsers.length)}
+                    </span>{' '}
+                    of <span className="font-semibold text-slate-900">{selectableAvailableUsers.length}</span> eligible employees
+                  </div>
+
+                  {totalModalPages > 1 && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setModalPage(p => Math.max(1, p - 1))}
+                        disabled={modalPage <= 1}
+                        className="p-1 border border-slate-200 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        aria-label="Previous page"
+                        title="Previous page"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <span className="text-[11px] font-medium px-2">
+                        Page {modalPage} of {totalModalPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setModalPage(p => Math.min(totalModalPages, p + 1))}
+                        disabled={modalPage >= totalModalPages}
+                        className="p-1 border border-slate-200 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        aria-label="Next page"
+                        title="Next page"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Modal Footer / Action Buttons */}
-              <div className="flex items-center justify-between px-6 py-4 border-t border-slate-200 bg-slate-50/70 shrink-0">
+              <div className="flex items-center justify-between px-6 py-4 border-t border-slate-200 bg-slate-50/80 shrink-0">
                 <div className="text-xs text-slate-600">
                   {selectedUserIds.size > 0 ? (
                     <span className="font-semibold text-slate-900">
-                      {selectedUserIds.size} user{selectedUserIds.size === 1 ? '' : 's'} ready to be registered as admin
+                      {selectedUserIds.size} user{selectedUserIds.size === 1 ? '' : 's'} selected across all searches/pages
                     </span>
                   ) : (
-                    <span>Select one or more users to grant admin access</span>
+                    <span>Select users from the table to grant administrator privileges</span>
                   )}
                 </div>
 
@@ -687,7 +809,7 @@ export const AdminUsersPage: React.FC = () => {
                     type="button"
                     onClick={() => setIsAddModalOpen(false)}
                     disabled={submittingBulk}
-                    className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                    className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -696,19 +818,21 @@ export const AdminUsersPage: React.FC = () => {
                     type="button"
                     onClick={handleSubmitBulk}
                     disabled={selectedUserIds.size === 0 || submittingBulk}
-                    className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg shadow-xs transition-colors ${
+                      selectedUserIds.size > 0 && !submittingBulk
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer'
+                        : 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                    }`}
                   >
                     {submittingBulk ? (
                       <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Adding Users...</span>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Adding Selected Users ({selectedUserIds.size})...</span>
                       </>
                     ) : (
                       <>
                         <Check className="w-3.5 h-3.5" />
-                        <span>
-                          Add Selected Users ({selectedUserIds.size})
-                        </span>
+                        <span>Add Selected Users ({selectedUserIds.size})</span>
                       </>
                     )}
                   </button>
@@ -755,7 +879,7 @@ export const AdminUsersPage: React.FC = () => {
                   type="button"
                   onClick={() => setUserToDelete(null)}
                   disabled={deleting}
-                  className="px-3.5 py-1.5 text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors"
+                  className="px-3.5 py-1.5 text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -763,7 +887,7 @@ export const AdminUsersPage: React.FC = () => {
                   type="button"
                   onClick={handleConfirmDelete}
                   disabled={deleting}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-white bg-rose-600 hover:bg-rose-700 rounded-md font-semibold transition-colors disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-white bg-rose-600 hover:bg-rose-700 rounded-md font-semibold transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   {deleting ? (
                     <>

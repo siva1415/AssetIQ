@@ -5,9 +5,12 @@ from app.api.deps import get_database
 from app.schemas.dashboard import (
     DashboardSummaryResponse,
     AssetsBySourceResponse,
+    SourceSummaryItem,
     OwnershipSummaryResponse,
     DepartmentSummaryResponse,
     DepartmentSummaryItem,
+    OperationalStatusResponse,
+    OperationalStatusItem,
 )
 from app.schemas.eol import EolSummaryResponse
 from app.services.dashboard_service import DashboardService
@@ -28,7 +31,7 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 )
 def get_dashboard_summary(
     source: Optional[str] = Query(None, description="Filter by discovery source (BIGFIX or JAMF)"),
-    asset_status: Optional[str] = Query(None, description="Filter by asset status (Active, Need Validation, InStock)"),
+    asset_status: Optional[str] = Query(None, description="Filter by asset status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
     devicetype: Optional[str] = Query(None, description="Filter by device type (Desktop or Server)"),
     manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
     model: Optional[str] = Query(None, description="Filter by model"),
@@ -70,17 +73,43 @@ def get_dashboard_summary(
 
 @router.get(
     "/assets-by-source",
-    response_model=AssetsBySourceResponse,
+    response_model=Union[AssetsBySourceResponse, List[SourceSummaryItem]],
     summary="Assets Discovery Source Breakdown",
+)
+@router.get(
+    "/assets-by-source/",
+    response_model=Union[AssetsBySourceResponse, List[SourceSummaryItem]],
+    include_in_schema=False,
+)
+@router.get(
+    "/source-summary",
+    response_model=Union[AssetsBySourceResponse, List[SourceSummaryItem]],
+    include_in_schema=False,
+)
+@router.get(
+    "/source-summary/",
+    response_model=Union[AssetsBySourceResponse, List[SourceSummaryItem]],
+    include_in_schema=False,
+)
+@router.get(
+    "/sources",
+    response_model=Union[AssetsBySourceResponse, List[SourceSummaryItem]],
+    include_in_schema=False,
 )
 def get_assets_by_source(
     source: Optional[str] = Query(None, description="Optional discovery source filter"),
+    as_list: Optional[bool] = Query(None, description="Return raw list instead of summary object", include_in_schema=False),
+    format: Optional[str] = Query(None, description="Format ('list' or 'object')", include_in_schema=False),
     db: Session = Depends(get_database),
 ):
     """
     Retrieve count breakdown of BigFix versus Jamf discovered devices.
+    Returns the AssetsBySourceResponse object containing source counts and embedded source summary array.
     """
-    return DashboardService.get_assets_by_source(db, source=source)
+    res = DashboardService.get_assets_by_source(db, source=source)
+    if as_list or format == "list":
+        return res.sources or []
+    return res
 
 
 @router.get(
@@ -115,27 +144,103 @@ def get_eol_summary(
 
 @router.get(
     "/department-summary",
-    response_model=Union[DepartmentSummaryResponse, List[DepartmentSummaryItem]],
+    response_model=Union[List[DepartmentSummaryItem], DepartmentSummaryResponse],
     summary="Department-Level Asset Summary Breakdown",
 )
 @router.get(
     "/department-summary/",
-    response_model=Union[DepartmentSummaryResponse, List[DepartmentSummaryItem]],
+    response_model=Union[List[DepartmentSummaryItem], DepartmentSummaryResponse],
     include_in_schema=False,
 )
 def get_department_summary(
     source: Optional[str] = Query(None, description="Optional discovery source filter (BIGFIX or JAMF)"),
     scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
-    as_list: bool = Query(False, description="Return raw list instead of summary object"),
+    asset_status: Optional[str] = Query(None, description="Filter by asset status (Active, Need Validation, InStock)"),
+    devicetype: Optional[str] = Query(None, description="Filter by device type (Desktop or Server)"),
+    manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
+    model: Optional[str] = Query(None, description="Filter by model"),
+    assigned_username: Optional[str] = Query(None, description="Filter by assigned user"),
+    assignment_type: Optional[str] = Query(None, description="Filter by assignment type (AUTO or MANUAL)"),
+    is_unassigned: Optional[bool] = Query(None, description="Filter for unassigned assets (true/false)"),
+    search: Optional[str] = Query(None, description="Search query across asset identifiers"),
+    as_list: bool = Query(True, description="Return raw list instead of summary object"),
     format: Optional[str] = Query(None, description="Format ('list' or 'object')"),
+    # Accept and ignore pagination parameters if passed from frontend table sync
+    page: Optional[int] = Query(None, include_in_schema=False),
+    page_size: Optional[int] = Query(None, include_in_schema=False),
+    limit: Optional[int] = Query(None, include_in_schema=False),
+    offset: Optional[int] = Query(None, include_in_schema=False),
     db: Session = Depends(get_database),
 ):
     """
     Retrieve department-level asset summary correlated with Workday employees.
     Provides counts by department, status breakdowns, and sources.
     Handles unassigned assets and unmatched usernames consistently under 'Unassigned'.
+    Returns a top-level JSON array of department summary objects by default.
     """
-    result = DashboardService.get_department_summary(db, source=source, scope=scope)
-    if as_list or format == "list":
-        return result.items
-    return result
+    result = DashboardService.get_department_summary(
+        db=db,
+        source=source,
+        scope=scope,
+        asset_status=asset_status,
+        devicetype=devicetype,
+        manufacturer=manufacturer,
+        model=model,
+        assigned_username=assigned_username,
+        assignment_type=assignment_type,
+        is_unassigned=is_unassigned,
+        search=search,
+    )
+    if format == "object" and not as_list:
+        return result
+    return result.items
+
+
+@router.get(
+    "/operational-status",
+    response_model=List[OperationalStatusItem],
+    summary="Fleet Operational Status Breakdown",
+)
+@router.get(
+    "/operational-status/",
+    response_model=List[OperationalStatusItem],
+    include_in_schema=False,
+)
+def get_operational_status(
+    source: Optional[str] = Query(None, description="Optional discovery source filter (BIGFIX or JAMF)"),
+    scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
+    asset_status: Optional[str] = Query(None, description="Filter by status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
+    devicetype: Optional[str] = Query(None, description="Filter by device type (Server or Desktop)"),
+    manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
+    model: Optional[str] = Query(None, description="Filter by hardware model"),
+    assigned_username: Optional[str] = Query(None, description="Filter by assigned login username"),
+    assignment_type: Optional[str] = Query(None, description="Filter by assignment model (AUTO or MANUAL)"),
+    is_unassigned: Optional[bool] = Query(None, description="Filter for unassigned assets (true/false)"),
+    search: Optional[str] = Query(None, description="Text search keyword across asset identifiers"),
+    as_list: Optional[bool] = Query(None, description="Return raw list instead of summary object", include_in_schema=False),
+    format: Optional[str] = Query(None, description="Format ('list' or 'object')", include_in_schema=False),
+    # Accept and ignore pagination parameters if passed from frontend table sync
+    page: Optional[int] = Query(None, include_in_schema=False),
+    page_size: Optional[int] = Query(None, include_in_schema=False),
+    limit: Optional[int] = Query(None, include_in_schema=False),
+    offset: Optional[int] = Query(None, include_in_schema=False),
+    db: Session = Depends(get_database),
+):
+    """
+    Retrieve counts grouped by operational status (ACTIVE, REVIEW, IN STOCK, RETIRED).
+    Aggregates directly from PostgreSQL records in the assets table.
+    Returns a top-level JSON array of canonical status records.
+    """
+    return DashboardService.get_operational_status(
+        db=db,
+        source=source,
+        scope=scope,
+        asset_status=asset_status,
+        devicetype=devicetype,
+        manufacturer=manufacturer,
+        model=model,
+        assigned_username=assigned_username,
+        assignment_type=assignment_type,
+        is_unassigned=is_unassigned,
+        search=search,
+    )

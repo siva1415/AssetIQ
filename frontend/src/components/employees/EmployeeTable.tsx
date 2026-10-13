@@ -245,36 +245,36 @@ export const EmployeeTable: React.FC = () => {
           onAction={handleClearFilters}
         />
       ) : (
-        <div className="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-2xs">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
+        <div className="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-2xs w-full">
+          <div className="w-full overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse table-fixed">
               <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold select-none">
                 <tr>
                   <th
                     onClick={() => handleSort('full_name')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[15%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     <div className="flex items-center gap-1">
                       <span>Employee / ID</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
                   <th
                     onClick={() => handleSort('user_id')}
-                    className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                    className="w-[9%] py-2.5 px-2 cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     <div className="flex items-center gap-1">
                       <span>User ID</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   </th>
-                  <th className="py-3 px-3 whitespace-nowrap">Job Title &amp; Dept</th>
-                  <th className="py-3 px-3 whitespace-nowrap">Work Email</th>
-                  <th className="py-3 px-3 whitespace-nowrap">Status</th>
-                  <th className="py-3 px-3 whitespace-nowrap">Manager</th>
-                  <th className="py-3 px-3 whitespace-nowrap">Location</th>
-                  <th className="py-3 px-3 text-center whitespace-nowrap">Devices</th>
-                  <th className="py-3 px-3 text-right whitespace-nowrap">Action</th>
+                  <th className="w-[18%] py-2.5 px-2">Job Title &amp; Dept</th>
+                  <th className="w-[16%] py-2.5 px-2">Work Email</th>
+                  <th className="w-[9%] py-2.5 px-2">Status</th>
+                  <th className="w-[12%] py-2.5 px-2">Manager</th>
+                  <th className="w-[11%] py-2.5 px-2">Location</th>
+                  <th className="w-[5%] py-2.5 px-2 text-center">Devices</th>
+                  <th className="w-[5%] py-2.5 px-2 text-right">Action</th>
                 </tr>
               </thead>
 
@@ -285,37 +285,37 @@ export const EmployeeTable: React.FC = () => {
                     onClick={() => setSelectedEmployee(emp)}
                     className="hover:bg-blue-50/40 cursor-pointer transition-colors"
                   >
-                    <td className="py-3 px-3">
-                      <div className="font-semibold text-slate-900">{emp.full_name}</div>
-                      <div className="font-mono text-[10px] text-slate-400">{emp.employee_id}</div>
+                    <td className="py-2.5 px-2 align-middle">
+                      <div className="font-semibold text-slate-900 break-words leading-tight">{emp.full_name}</div>
+                      <div className="font-mono text-[10px] text-slate-400 mt-0.5">{emp.employee_id}</div>
                     </td>
 
-                    <td className="py-3 px-3 font-mono font-medium text-slate-800">
+                    <td className="py-2.5 px-2 font-mono font-medium text-slate-800 break-all align-middle">
                       {emp.user_id}
                     </td>
 
-                    <td className="py-3 px-3">
-                      <div className="font-medium text-slate-900">{emp.job_title}</div>
-                      <div className="text-[10px] text-slate-500">{emp.department} · {emp.division}</div>
+                    <td className="py-2.5 px-2 align-middle">
+                      <div className="font-medium text-slate-900 break-words leading-tight">{emp.job_title}</div>
+                      <div className="text-[10px] text-slate-500 break-words leading-tight mt-0.5">{emp.department} · {emp.division}</div>
                     </td>
 
-                    <td className="py-3 px-3 font-mono text-slate-700">
+                    <td className="py-2.5 px-2 font-mono text-slate-700 break-all align-middle text-[11px] leading-tight">
                       {emp.work_email}
                     </td>
 
-                    <td className="py-3 px-3 whitespace-nowrap">
+                    <td className="py-2.5 px-2 align-middle">
                       <StatusBadge status={emp.employee_status} />
                     </td>
 
-                    <td className="py-3 px-3">
-                      <span className="text-slate-800">{emp.manager_name || '—'}</span>
+                    <td className="py-2.5 px-2 align-middle">
+                      <span className="text-slate-800 break-words leading-tight block">{emp.manager_name || '—'}</span>
                     </td>
 
-                    <td className="py-3 px-3 text-slate-600">
-                      {emp.location}
+                    <td className="py-2.5 px-2 text-slate-600 align-middle">
+                      <span className="break-words leading-tight block">{emp.location}</span>
                     </td>
 
-                    <td className="py-3 px-3 text-center">
+                    <td className="py-2.5 px-2 text-center align-middle">
                       <span
                         className={`inline-flex items-center justify-center font-mono font-bold text-xs px-2 py-0.5 rounded-full ${
                           (emp.assigned_assets_count || 0) > 0
@@ -327,13 +327,13 @@ export const EmployeeTable: React.FC = () => {
                       </span>
                     </td>
 
-                    <td className="py-3 px-3 text-right whitespace-nowrap">
+                    <td className="py-2.5 px-2 text-right align-middle">
                       <button
                         onClick={e => {
                           e.stopPropagation();
                           setSelectedEmployee(emp);
                         }}
-                        className="p-1 text-slate-400 hover:text-blue-600 rounded hover:bg-slate-100"
+                        className="p-1 text-slate-400 hover:text-blue-600 rounded hover:bg-slate-100 shrink-0"
                         title="View Profile and Assigned Hardware"
                       >
                         <Eye className="w-4 h-4" />

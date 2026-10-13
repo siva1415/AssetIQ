@@ -209,10 +209,10 @@ export const AuditReportsPage: React.FC = () => {
       </div>
 
       {/* Table Container */}
-      <div className="p-4 bg-white rounded-lg border border-slate-200 space-y-4 shadow-2xs">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto flex-1">
-            <div className="relative flex-1 sm:w-64">
+      <div className="p-3 sm:p-4 bg-white rounded-lg border border-slate-200 space-y-3.5 shadow-2xs w-full">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 sm:gap-3">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto flex-1">
+            <div className="relative flex-1 sm:w-64 min-w-0">
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
               <input
                 type="text"
@@ -226,7 +226,7 @@ export const AuditReportsPage: React.FC = () => {
             <select
               value={severityFilter}
               onChange={e => setSeverityFilter(e.target.value)}
-              className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded text-slate-700 focus:outline-none"
+              className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded text-slate-700 focus:outline-none max-w-full"
             >
               <option value="">All Severities</option>
               <option value="Critical">Critical</option>
@@ -238,7 +238,7 @@ export const AuditReportsPage: React.FC = () => {
             <select
               value={categoryFilter}
               onChange={e => setCategoryFilter(e.target.value)}
-              className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded text-slate-700 focus:outline-none"
+              className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded text-slate-700 focus:outline-none max-w-full"
             >
               <option value="">All Categories</option>
               <option value="Identity Discrepancy">Identity Discrepancy</option>
@@ -249,11 +249,11 @@ export const AuditReportsPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto w-full">
           <table className="w-full text-left text-xs border-collapse">
-            <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold select-none">
+            <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold select-none text-[11px] sm:text-xs">
               <tr>
-                <th className="py-2.5 px-3">Severity &amp; Rule</th>
+                <th className="py-2.5 px-2 sm:px-3">Severity &amp; Rule</th>
                 <th className="py-2.5 px-3">Asset Tag</th>
                 <th className="py-2.5 px-3">Reported User</th>
                 <th className="py-2.5 px-3">Category</th>

@@ -51,7 +51,7 @@ export default function App() {
             {/* 7. Audit Reports */}
             <Route path="audit-reports" element={<AuditReportsPage />} />
 
-            {/* 8. Administration/Settings */}
+            {/* 8. Settings */}
             <Route path="settings" element={<AdminPage />} />
             <Route path="admin" element={<Navigate to="/settings" replace />} />
 

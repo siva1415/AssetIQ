@@ -20,7 +20,7 @@ export const AppShell: React.FC = () => {
         <TopNav onToggleMobileSidebar={() => setMobileSidebarOpen(prev => !prev)} />
 
         {/* Viewport Content */}
-        <main className="flex-1 p-4 md:p-8 max-w-[1600px] w-full mx-auto">
+        <main className="flex-1 min-w-0 p-3 sm:p-4 lg:p-4 xl:p-6 2xl:p-8 max-w-[1600px] w-full mx-auto">
           <Outlet />
         </main>
       </div>

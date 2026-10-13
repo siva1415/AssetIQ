@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -64,12 +65,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """
     Validation error handler providing concise parameter error details.
     """
-    logger.warning(f"Request validation failure on {request.url.path}: {exc.errors()}")
+    safe_errors = jsonable_encoder(exc.errors())
+    logger.warning(f"Request validation failure on {request.url.path}: {safe_errors}")
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "detail": "Request parameter validation failed",
-            "errors": exc.errors(),
+            "errors": safe_errors,
             "status_code": status.HTTP_422_UNPROCESSABLE_ENTITY,
         },
     )
@@ -114,8 +116,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.include_router(health.router)
 app.include_router(health.router, prefix="/api")
 
-# Core REST API endpoints mounted under /api
+# Core REST API endpoints mounted under /api (standard), root, and duplicated prefix safeguard
 app.include_router(api_router, prefix="/api")
+app.include_router(api_router, include_in_schema=False)
+app.include_router(api_router, prefix="/api/api", include_in_schema=False)
 
 
 @app.get("/", include_in_schema=False)

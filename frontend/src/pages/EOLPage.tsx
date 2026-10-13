@@ -395,41 +395,47 @@ export const EOLPage: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="w-full overflow-hidden">
+            <table className="w-full table-fixed text-left text-xs border-collapse">
+              <colgroup>
+                <col className="w-[22%]" />
+                <col className="w-[46%]" />
+                <col className="w-[20%]" />
+                <col className="w-[12%]" />
+              </colgroup>
               <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[11px] border-b border-slate-200">
                 <tr>
-                  <th className="py-3 px-4">Manufacturer</th>
-                  <th className="py-3 px-4">Model</th>
-                  <th className="py-3 px-4">EOL Date</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                  <th className="py-2.5 sm:py-3 px-2 sm:px-4">Manufacturer</th>
+                  <th className="py-2.5 sm:py-3 px-2 sm:px-4">Model</th>
+                  <th className="py-2.5 sm:py-3 px-2 sm:px-4">EOL Date</th>
+                  <th className="py-2.5 sm:py-3 px-2 sm:px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredRecords.map(record => (
                   <tr key={record.eol_id} className="hover:bg-slate-50/70 transition-colors">
                     {/* Manufacturer */}
-                    <td className="py-3 px-4 whitespace-nowrap">
+                    <td className="py-2.5 sm:py-3 px-2 sm:px-4 whitespace-nowrap min-w-0">
                       {renderMfrBadge(record.manufacturer)}
                     </td>
 
                     {/* Model */}
-                    <td className="py-3 px-4">
-                      <span className="font-semibold text-slate-900">
+                    <td className="py-2.5 sm:py-3 px-2 sm:px-4 min-w-0">
+                      <span className="font-semibold text-slate-900 break-words leading-tight block">
                         {record.model}
                       </span>
                     </td>
 
                     {/* EOL Date */}
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5 font-mono font-medium text-slate-800">
-                        <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                    <td className="py-2.5 sm:py-3 px-2 sm:px-4 whitespace-nowrap min-w-0">
+                      <div className="flex items-center gap-1.5 font-mono font-medium text-slate-800 text-[11px] sm:text-xs">
+                        <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                         <span>{formatDate(record.eol_date)}</span>
                       </div>
                     </td>
 
                     {/* Actions */}
-                    <td className="py-3 px-4 text-right whitespace-nowrap">
+                    <td className="py-2.5 sm:py-3 px-2 sm:px-4 text-right whitespace-nowrap min-w-0">
                       <div className="flex items-center justify-end gap-1.5">
                         <button
                           onClick={() => handleOpenEditModal(record)}

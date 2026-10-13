@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { AlertTriangle, UserX, ShieldAlert, FileWarning, CheckCircle } from 'lucide-react';
 import { AssetTable } from '../components/assets/AssetTable';
+import { ASSET_STATUSES } from '../types';
 
 export const ExceptionsPage: React.FC = () => {
-  const [activeExceptionTab, setActiveExceptionTab] = useState<'need_validation' | 'not_in_workday' | 'admin_accounts'>('need_validation');
+  const [activeExceptionTab, setActiveExceptionTab] = useState<'review' | 'not_in_workday' | 'admin_accounts'>('review');
 
   return (
     <div className="space-y-6">
@@ -25,17 +26,17 @@ export const ExceptionsPage: React.FC = () => {
       </div>
 
       {/* Exception Tabs */}
-      <div className="flex items-center gap-1 p-1 bg-slate-200/60 rounded-lg w-fit">
+      <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-200/60 rounded-lg max-w-full">
         <button
-          onClick={() => setActiveExceptionTab('need_validation')}
+          onClick={() => setActiveExceptionTab('review')}
           className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
-            activeExceptionTab === 'need_validation'
+            activeExceptionTab === 'review'
               ? 'bg-white text-slate-900 shadow-2xs font-semibold'
               : 'text-slate-600 hover:text-slate-900'
           }`}
         >
           <FileWarning className="w-3.5 h-3.5 text-amber-600" />
-          <span>Needs Validation (Fleet Flagged)</span>
+          <span>Review (Fleet Flagged)</span>
         </button>
 
         <button
@@ -64,10 +65,10 @@ export const ExceptionsPage: React.FC = () => {
       </div>
 
       {/* Tables based on tab */}
-      {activeExceptionTab === 'need_validation' && (
+      {activeExceptionTab === 'review' && (
         <AssetTable
-          initialStatusFilter="Need Validation"
-          title="Assets Needing Immediate Governance Validation"
+          initialStatusFilter={ASSET_STATUSES.REVIEW}
+          title="Assets Under Governance Review"
           subtitle="Devices flagged due to stale telemetry, terminated employee custodians, or unverified hardware"
         />
       )}

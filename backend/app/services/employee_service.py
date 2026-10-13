@@ -57,6 +57,7 @@ class EmployeeService:
         page_size: int = 25,
         user_id: Optional[str] = None,
         name: Optional[str] = None,
+        email: Optional[str] = None,
         department: Optional[str] = None,
         division: Optional[str] = None,
         employee_status: Optional[str] = None,
@@ -69,6 +70,7 @@ class EmployeeService:
             limit=page_size,
             user_id=user_id,
             name=name,
+            email=email,
             department=department,
             division=division,
             employee_status=employee_status,
@@ -80,8 +82,10 @@ class EmployeeService:
 
         return PaginatedResponse(
             items=items,
+            total=total_count,
             total_items=total_count,
             total_pages=total_pages,
             page=page,
             page_size=page_size,
         )
+

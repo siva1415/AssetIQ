@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,7 +9,7 @@ class EolInfo(BaseModel):
     """
     eol_date: Optional[date] = None
     days_remaining: Optional[int] = None
-    eol_status: str = Field(..., description="Active, Nearing EOL, Expired, or Unknown")
+    eol_status: str = Field(..., description="ACTIVE, EOL SOON, EXPIRED, or UNKNOWN")
     reference_source: Optional[str] = None
 
 
@@ -19,21 +19,25 @@ class EolAssetItem(BaseModel):
     """
     asset_id: int
     asset_number: str
-    serial_number: str
+    serial_number: Optional[str] = None
     source: Optional[str] = None
-    manufacturer: str
-    model: str
-    os_name: str
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    os_name: Optional[str] = None
+    macaddress: Optional[str] = None
     devicetype: Optional[str] = None
+    managed_by: Optional[str] = None
     assigned_username: Optional[str] = None
     asset_status: Optional[str] = None
     assignment_type: Optional[str] = None
+    lastreporttime: Optional[datetime] = None
+    last_synced_at: Optional[datetime] = None
     eol_date: Optional[date] = None
     days_remaining: Optional[int] = None
     eol_status: str
     reference_source: Optional[str] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
 class EolSummaryResponse(BaseModel):

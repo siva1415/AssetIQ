@@ -21,6 +21,9 @@ import {
   BulkAddAdminUsersResponse,
   ReassignAssetRequest,
   ReassignAssetResponse,
+  ASSET_STATUSES,
+  toStandardAssetStatus,
+  toStandardEOLStatus,
 } from '../types';
 
 export const MOCK_EMPLOYEES: Employee[] = [
@@ -450,12 +453,20 @@ export function recalculateAssetEOLFromReferences(): void {
       asset.days_remaining = diffDays;
 
       if (diffDays < 0) {
-        asset.calculated_eol_status = 'Expired';
+        asset.calculated_eol_status = 'EXPIRED';
+        asset.eol_status = 'EXPIRED';
       } else if (diffDays <= 90) {
-        asset.calculated_eol_status = 'Nearing EOL';
+        asset.calculated_eol_status = 'EOL SOON';
+        asset.eol_status = 'EOL SOON';
       } else {
-        asset.calculated_eol_status = 'Active';
+        asset.calculated_eol_status = 'ACTIVE';
+        asset.eol_status = 'ACTIVE';
       }
+    } else {
+      asset.eol_date = null;
+      asset.days_remaining = null;
+      asset.calculated_eol_status = 'UNKNOWN';
+      asset.eol_status = 'UNKNOWN';
     }
   }
 }
@@ -627,14 +638,16 @@ export function getMockAvailableWorkdayUsers(search?: string): AvailableWorkdayU
     };
   });
 
+  // Backend filters out users already listed as admins
+  list = list.filter(u => !u.is_admin);
+
   if (search && search.trim() !== '') {
     const q = search.trim().toLowerCase();
     list = list.filter(
       u =>
         u.user_id.toLowerCase().includes(q) ||
         u.full_name.toLowerCase().includes(q) ||
-        u.email_work.toLowerCase().includes(q) ||
-        u.department.toLowerCase().includes(q)
+        u.email_work.toLowerCase().includes(q)
     );
   }
 
@@ -747,10 +760,8 @@ export function reassignMockAsset(
   asset.employee_status = emp.employee_status;
   asset.workday_status = 'Matched';
 
-  // If status was Need Validation due to missing employee match, resolve to Active
-  if (asset.asset_status === 'Need Validation') {
-    asset.asset_status = 'Active';
-  }
+  // Manual assignment must update operational asset status to ACTIVE
+  asset.asset_status = ASSET_STATUSES.ACTIVE;
 
   // Persist remarks
   if (data.remarks !== undefined) {
@@ -784,7 +795,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'Jamf Pro Cloud',
     assigned_username: 'jchen',
     last_report_time: '2026-10-09T18:42:10Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2028-06-30',
     calculated_eol_status: 'Active',
@@ -812,7 +823,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: 'arobinson',
     last_report_time: '2026-10-10T02:15:33Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2028-01-15',
     calculated_eol_status: 'Active',
@@ -840,7 +851,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: 'dpatel',
     last_report_time: '2026-10-09T22:11:05Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2027-11-20',
     calculated_eol_status: 'Active',
@@ -867,7 +878,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'Jamf Pro Cloud',
     assigned_username: 'lhernandez',
     last_report_time: '2026-10-08T15:30:19Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2028-03-31',
     calculated_eol_status: 'Active',
@@ -894,7 +905,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'Jamf Pro Cloud',
     assigned_username: 'rnakamura',
     last_report_time: '2026-10-10T01:04:12Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Manual',
     eol_date: '2028-09-30',
     calculated_eol_status: 'Active',
@@ -922,7 +933,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Datacenter',
     assigned_username: 'admin_svc',
     last_report_time: '2026-10-10T03:30:00Z',
-    asset_status: 'Need Validation',
+    asset_status: 'REVIEW',
     assignment_type: 'Manual',
     eol_date: '2027-04-15',
     calculated_eol_status: 'Active',
@@ -950,10 +961,10 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Datacenter',
     assigned_username: 'root',
     last_report_time: '2026-10-09T11:22:15Z',
-    asset_status: 'Need Validation',
+    asset_status: 'REVIEW',
     assignment_type: 'Manual',
     eol_date: '2026-11-15',
-    calculated_eol_status: 'Nearing EOL',
+    calculated_eol_status: 'EOL Soon',
     days_remaining: 36,
     verified_employee_id: null,
     verified_employee_name: null,
@@ -978,7 +989,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: 'rrossi',
     last_report_time: '2026-08-14T09:12:00Z',
-    asset_status: 'Need Validation',
+    asset_status: 'REVIEW',
     assignment_type: 'Automatic',
     eol_date: '2025-10-14',
     calculated_eol_status: 'Expired',
@@ -1006,7 +1017,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: null,
     last_report_time: '2026-09-28T14:10:00Z',
-    asset_status: 'In Stock',
+    asset_status: 'IN STOCK',
     assignment_type: 'Unassigned',
     eol_date: '2027-08-30',
     calculated_eol_status: 'Active',
@@ -1034,10 +1045,10 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'Jamf Pro Cloud',
     assigned_username: null,
     last_report_time: '2026-10-02T16:45:00Z',
-    asset_status: 'In Stock',
+    asset_status: 'IN STOCK',
     assignment_type: 'Unassigned',
     eol_date: '2026-12-01',
-    calculated_eol_status: 'Nearing EOL',
+    calculated_eol_status: 'EOL Soon',
     days_remaining: 52,
     verified_employee_id: null,
     verified_employee_name: null,
@@ -1062,10 +1073,10 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: 'ext_mkhan',
     last_report_time: '2026-10-09T08:14:22Z',
-    asset_status: 'Need Validation',
+    asset_status: 'REVIEW',
     assignment_type: 'Automatic',
     eol_date: '2026-10-25',
-    calculated_eol_status: 'Nearing EOL',
+    calculated_eol_status: 'EOL Soon',
     days_remaining: 15,
     verified_employee_id: null,
     verified_employee_name: null,
@@ -1090,7 +1101,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: 'bkim',
     last_report_time: '2026-10-10T02:50:11Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2028-11-15',
     calculated_eol_status: 'Active',
@@ -1117,7 +1128,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'Jamf Pro Cloud',
     assigned_username: 'mthorne',
     last_report_time: '2026-10-09T23:44:19Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2029-03-31',
     calculated_eol_status: 'Active',
@@ -1144,7 +1155,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'Jamf Pro Cloud',
     assigned_username: 'temp_user_99',
     last_report_time: '2026-09-15T12:00:00Z',
-    asset_status: 'Need Validation',
+    asset_status: 'REVIEW',
     assignment_type: 'Automatic',
     eol_date: '2025-11-30',
     calculated_eol_status: 'Expired',
@@ -1172,7 +1183,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: 'owilson',
     last_report_time: '2026-10-09T19:22:45Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2028-02-28',
     calculated_eol_status: 'Active',
@@ -1199,7 +1210,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: 'sarahw',
     last_report_time: '2026-10-09T21:05:12Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2028-05-15',
     calculated_eol_status: 'Active',
@@ -1226,7 +1237,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'Jamf Pro Cloud',
     assigned_username: 'evance',
     last_report_time: '2026-10-10T00:15:30Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2029-01-31',
     calculated_eol_status: 'Active',
@@ -1253,10 +1264,10 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Datacenter',
     assigned_username: 'backup_adm',
     last_report_time: '2026-10-10T03:00:00Z',
-    asset_status: 'Need Validation',
+    asset_status: 'REVIEW',
     assignment_type: 'Manual',
     eol_date: '2026-11-30',
-    calculated_eol_status: 'Nearing EOL',
+    calculated_eol_status: 'EOL Soon',
     days_remaining: 51,
     verified_employee_id: null,
     verified_employee_name: null,
@@ -1280,7 +1291,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: 'amartin',
     last_report_time: '2026-09-20T17:30:00Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Manual',
     eol_date: '2028-07-20',
     calculated_eol_status: 'Active',
@@ -1308,7 +1319,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Datacenter',
     assigned_username: null,
     last_report_time: '2026-07-10T12:00:00Z',
-    asset_status: 'Need Validation',
+    asset_status: 'REVIEW',
     assignment_type: 'Unassigned',
     eol_date: null,
     calculated_eol_status: 'Unknown',
@@ -1336,7 +1347,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'Jamf Pro Cloud',
     assigned_username: 'tcollins',
     last_report_time: '2026-10-09T20:30:10Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2028-04-15',
     calculated_eol_status: 'Active',
@@ -1363,7 +1374,7 @@ export const MOCK_ASSETS: Asset[] = [
     managed_by: 'BigFix Corporate',
     assigned_username: 'kgrant',
     last_report_time: '2026-10-09T18:11:00Z',
-    asset_status: 'Active',
+    asset_status: 'ACTIVE',
     assignment_type: 'Automatic',
     eol_date: '2028-10-01',
     calculated_eol_status: 'Active',
@@ -1379,11 +1390,45 @@ export const MOCK_ASSETS: Asset[] = [
   },
 ];
 
+// Ensure mock assets have manager, remarks, and canonical fields populated
+for (const a of MOCK_ASSETS) {
+  if (!a.devicetype && a.device_type) {
+    a.devicetype = String(a.device_type);
+  }
+  if (!a.device_type && a.devicetype) {
+    a.device_type = a.devicetype;
+  }
+  const canonicalEol = toStandardEOLStatus(a.eol_status || a.calculated_eol_status);
+  a.eol_status = canonicalEol;
+  a.calculated_eol_status = canonicalEol;
+  if (a.verified_employee_id || a.assigned_username) {
+    const emp = MOCK_EMPLOYEES.find(
+      e => (a.verified_employee_id && e.employee_id === a.verified_employee_id) ||
+           (a.assigned_username && e.user_id === a.assigned_username)
+    );
+    if (emp) {
+      a.manager_user_name = emp.manager_username;
+      a.manager_username = emp.manager_username;
+      a.managerUsername = emp.manager_username;
+      a.manager_name = emp.manager_name;
+      a.managerName = emp.manager_name;
+      a.employee_status = emp.employee_status;
+      a.full_name = emp.full_name;
+      a.work_email = emp.work_email;
+      a.division = emp.division;
+      a.job_title = emp.job_title;
+    }
+  }
+  if (!a.remarks && a.notes) {
+    a.remarks = a.notes;
+  }
+}
+
 // Helper to calculate summary from mock dataset
 export function calculateMockSummary(assets: Asset[] = MOCK_ASSETS, employees: Employee[] = MOCK_EMPLOYEES): DashboardSummary {
-  const active_assets = assets.filter(a => a.asset_status === 'Active').length;
-  const need_validation = assets.filter(a => a.asset_status === 'Need Validation').length;
-  const in_stock = assets.filter(a => a.asset_status === 'In Stock').length;
+  const active_assets = assets.filter(a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.ACTIVE).length;
+  const review = assets.filter(a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.REVIEW).length;
+  const in_stock = assets.filter(a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.IN_STOCK).length;
   const bigfix_assets = assets.filter(a => a.source === 'BIGFIX').length;
   const jamf_assets = assets.filter(a => a.source === 'JAMF').length;
   const automatically_assigned = assets.filter(a => a.assignment_type === 'Automatic').length;
@@ -1393,7 +1438,8 @@ export function calculateMockSummary(assets: Asset[] = MOCK_ASSETS, employees: E
   return {
     total_assets: assets.length,
     active_assets,
-    need_validation,
+    review,
+    need_validation: review,
     in_stock,
     bigfix_assets,
     jamf_assets,
@@ -1429,13 +1475,16 @@ export function getMockOwnershipSummary(assets: Asset[] = MOCK_ASSETS): Ownershi
 export function getMockEOLSummary(assets: Asset[] = MOCK_ASSETS): EOLSummaryItem[] {
   const total = assets.length || 1;
   const active = assets.filter(a => a.calculated_eol_status === 'Active').length;
-  const nearing = assets.filter(a => a.calculated_eol_status === 'Nearing EOL').length;
+  const nearing = assets.filter(a => {
+    const s = (a.calculated_eol_status || a.eol_status || '').toUpperCase().replace(/_/g, ' ');
+    return s === 'EOL SOON' || s === 'NEARING EOL' || s.startsWith('NEARING') || s.startsWith('EOL SOON');
+  }).length;
   const expired = assets.filter(a => a.calculated_eol_status === 'Expired').length;
   const unknown = assets.filter(a => a.calculated_eol_status === 'Unknown').length;
 
   return [
     { eol_status: 'Active (> 90 Days)', count: active, percentage: Math.round((active / total) * 100) },
-    { eol_status: 'Nearing EOL (≤ 90 Days)', count: nearing, percentage: Math.round((nearing / total) * 100) },
+    { eol_status: 'EOL Soon (≤ 90 Days)', count: nearing, percentage: Math.round((nearing / total) * 100) },
     { eol_status: 'Expired', count: expired, percentage: Math.round((expired / total) * 100) },
     { eol_status: 'Unknown', count: unknown, percentage: Math.round((unknown / total) * 100) },
   ];
@@ -1445,7 +1494,8 @@ export function getMockOperationalStatus(assets: Asset[] = MOCK_ASSETS): Operati
   const total = assets.length || 1;
   const counts: Record<string, number> = {};
   assets.forEach(a => {
-    counts[a.asset_status] = (counts[a.asset_status] || 0) + 1;
+    const std = toStandardAssetStatus(a.asset_status);
+    counts[std] = (counts[std] || 0) + 1;
   });
   return Object.entries(counts).map(([status, count]) => ({
     status,
@@ -1465,6 +1515,7 @@ export function getMockDepartmentDistribution(assets: Asset[] = MOCK_ASSETS): De
     .map(([department, count]) => ({
       department,
       count,
+      asset_count: count,
       percentage: Math.round((count / total) * 100),
     }))
     .sort((a, b) => b.count - a.count);
@@ -1473,15 +1524,20 @@ export function getMockDepartmentDistribution(assets: Asset[] = MOCK_ASSETS): De
 export function getMockFilters(assets: Asset[] = MOCK_ASSETS, employees: Employee[] = MOCK_EMPLOYEES): FilterOptions {
   return {
     sources: Array.from(new Set(assets.map(a => a.source))),
-    device_types: Array.from(new Set(assets.map(a => a.device_type))),
-    asset_statuses: Array.from(new Set(assets.map(a => a.asset_status))),
+    device_types: Array.from(new Set(assets.map(a => (a.devicetype || a.device_type || '').trim()).filter(Boolean))),
+    asset_statuses: [
+      ASSET_STATUSES.ACTIVE,
+      ASSET_STATUSES.REVIEW,
+      ASSET_STATUSES.IN_STOCK,
+      ASSET_STATUSES.RETIRED,
+    ],
     manufacturers: Array.from(new Set(assets.map(a => a.manufacturer))),
     models: Array.from(new Set(assets.map(a => a.model))),
     assignment_types: Array.from(new Set(assets.map(a => a.assignment_type))),
     departments: Array.from(new Set(employees.map(e => e.department))),
     divisions: Array.from(new Set(employees.map(e => e.division))),
     employee_statuses: Array.from(new Set(employees.map(e => e.employee_status))),
-    eol_statuses: ['Active', 'Nearing EOL', 'Expired', 'Unknown'],
+    eol_statuses: ['ACTIVE', 'EOL SOON', 'EXPIRED', 'UNKNOWN'],
   };
 }
 
@@ -1492,7 +1548,7 @@ export function filterAndPaginateAssets(
   let filtered = [...assets];
 
   if (params.search) {
-    const q = params.search.toLowerCase();
+    const q = params.search.trim().toLowerCase();
     filtered = filtered.filter(a =>
       a.asset_number.toLowerCase().includes(q) ||
       a.serial_number.toLowerCase().includes(q) ||
@@ -1504,15 +1560,22 @@ export function filterAndPaginateAssets(
   }
 
   if (params.source) {
-    filtered = filtered.filter(a => a.source.toLowerCase() === params.source?.toLowerCase());
+    const s = params.source.trim().toLowerCase();
+    filtered = filtered.filter(a => a.source.toLowerCase() === s);
   }
 
-  if (params.device_type) {
-    filtered = filtered.filter(a => a.device_type.toLowerCase() === params.device_type?.toLowerCase());
+  const deviceTypeParam = params.devicetype || params.device_type;
+  if (deviceTypeParam && deviceTypeParam.trim()) {
+    const targetDt = deviceTypeParam.trim().toLowerCase();
+    filtered = filtered.filter(a => {
+      const dt = (a.devicetype || a.device_type || '').trim().toLowerCase();
+      return dt === targetDt;
+    });
   }
 
   if (params.asset_status) {
-    filtered = filtered.filter(a => a.asset_status.toLowerCase() === params.asset_status?.toLowerCase());
+    const filterStd = toStandardAssetStatus(params.asset_status);
+    filtered = filtered.filter(a => toStandardAssetStatus(a.asset_status) === filterStd);
   }
 
   if (params.manufacturer) {
@@ -1524,11 +1587,33 @@ export function filterAndPaginateAssets(
   }
 
   if (params.assignment_type) {
-    filtered = filtered.filter(a => a.assignment_type.toLowerCase() === params.assignment_type?.toLowerCase());
+    const filterVal = params.assignment_type.trim().toLowerCase();
+    filtered = filtered.filter(a => {
+      const aVal = (a.assignment_type || '').trim().toLowerCase();
+      if (filterVal === 'auto' || filterVal === 'automatic') {
+        return aVal === 'auto' || aVal === 'automatic';
+      }
+      if (filterVal === 'manual') {
+        return aVal === 'manual';
+      }
+      return aVal === filterVal;
+    });
   }
 
-  if (params.eol_status) {
-    filtered = filtered.filter(a => a.calculated_eol_status.toLowerCase() === params.eol_status?.toLowerCase());
+  if (params.eol_status && params.eol_status.trim()) {
+    const targetEol = params.eol_status.trim().toLowerCase().replace(/_/g, ' ');
+    filtered = filtered.filter(a => {
+      const eol = (a.eol_status || a.calculated_eol_status || '').trim().toLowerCase().replace(/_/g, ' ');
+      if (eol === targetEol) return true;
+      if (targetEol === 'active' && eol.startsWith('active')) return true;
+      if (
+        (targetEol === 'eol soon' || targetEol.startsWith('nearing') || targetEol.startsWith('eol soon')) &&
+        (eol === 'eol soon' || eol.startsWith('nearing') || eol.startsWith('eol soon'))
+      ) return true;
+      if (targetEol === 'expired' && eol.startsWith('expired')) return true;
+      if (targetEol === 'unknown' && eol.startsWith('unknown')) return true;
+      return false;
+    });
   }
 
   if (params.department) {

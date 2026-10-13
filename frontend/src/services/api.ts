@@ -3,9 +3,16 @@ import {
   Asset,
   AssetSource,
   AssetStatus,
+  StandardAssetStatus,
+  ASSET_STATUSES,
+  toStandardAssetStatus,
   AssignmentType,
   EOLStatus,
+  StandardEOLStatus,
+  toStandardEOLStatus,
+  formatEolDate,
   Employee,
+  EmployeeStatus,
   FleetKpiMetrics,
   DeviceEOLReference,
   DeviceEOLReferenceCreate,
@@ -163,8 +170,8 @@ export function normalizeAsset(raw: any): Asset {
   const osName = raw.osName ?? raw.os_name ?? raw.osname ?? '—';
   const hostname = raw.hostname ?? null;
 
-  // Device Type: Agreed property deviceType, mapped from assets.devicetype
-  const deviceType = raw.deviceType ?? raw.device_type ?? raw.devicetype ?? '';
+  // Device Type: Canonical devicetype from FastAPI backend
+  const deviceType = (raw.devicetype ?? raw.device_type ?? raw.deviceType ?? '').trim();
 
   // MAC Address: Agreed property macAddress, mapped from macaddress
   const macAddress = raw.macAddress ?? raw.mac_address ?? raw.macaddress ?? '—';
@@ -172,15 +179,24 @@ export function normalizeAsset(raw: any): Asset {
   // Last Discovery Date: Agreed property lastDiscoveryDate, mapped from lastreporttime
   const lastDiscoveryDate = raw.lastDiscoveryDate ?? raw.last_report_time ?? raw.lastreporttime ?? raw.last_discovery_date ?? '';
 
-  // EOL: Agreed properties eolStatus and eolDate
-  const eolStatus = (raw.eolStatus ?? raw.eol_status ?? raw.calculated_eol_status ?? raw.calculatedEolStatus ?? 'Unknown') as EOLStatus;
-  const eolDate = raw.eolDate ?? raw.eol_date ?? null;
-  const daysRemaining = raw.daysRemaining ?? raw.days_remaining ?? null;
+  // EOL: Canonical eol_status and eol_date from backend API
+  const rawEol = raw.eol_status ?? raw.eolStatus ?? raw.calculated_eol_status ?? raw.calculatedEolStatus;
+  const eolStatus: StandardEOLStatus = toStandardEOLStatus(rawEol);
+  const rawEolDate = raw.eolDate ?? raw.eol_date ?? null;
+  const eolDate = rawEolDate && String(rawEolDate).trim() !== '' && String(rawEolDate).trim() !== '—'
+    ? String(rawEolDate).trim()
+    : null;
+  const rawDays = raw.daysRemaining ?? raw.days_remaining ?? null;
+  const daysRemaining = rawDays !== null && rawDays !== undefined && !isNaN(Number(rawDays))
+    ? Number(rawDays)
+    : null;
 
-  // Status & Assignment
-  const assetStatus = (raw.assetStatus ?? raw.asset_status ?? raw.status ?? 'Active') as AssetStatus;
+  // Status & Assignment: Canonical asset_status
+  const rawStatus = raw.asset_status ?? raw.assetStatus ?? raw.status;
+  const assetStatus = toStandardAssetStatus(rawStatus);
   const assignmentType = (raw.assignmentType ?? raw.assignment_type ?? 'Unassigned') as AssignmentType;
-  const managedBy = raw.managedBy ?? raw.managed_by ?? '';
+  // Canonical managed_by property from backend API contract ('GROUP' | 'INDIVIDUAL')
+  const managedBy = typeof raw.managed_by === 'string' ? raw.managed_by.trim() : (raw.managed_by || '');
 
   // Assigned Username & Workday Matching
   const assignedUsername = raw.assignedUsername ?? raw.assigned_username ?? raw.username ?? null;
@@ -238,10 +254,56 @@ export function normalizeAsset(raw: any): Asset {
     division: raw.division ?? raw.employee?.division ?? '',
     job_title: raw.job_title ?? raw.jobTitle ?? raw.employee?.job_title ?? '',
     jobTitle: raw.jobTitle ?? raw.job_title ?? raw.employee?.job_title ?? '',
-    manager_username: raw.manager_username ?? raw.managerUsername ?? raw.employee?.manager_username ?? null,
-    managerUsername: raw.managerUsername ?? raw.manager_username ?? raw.employee?.manager_username ?? null,
-    manager_name: raw.manager_name ?? raw.managerName ?? raw.employee?.manager_name ?? null,
-    managerName: raw.managerName ?? raw.manager_name ?? raw.employee?.manager_name ?? null,
+    manager_user_name:
+      raw.manager_user_name ??
+      raw.manager_username ??
+      raw.managerUsername ??
+      raw.manager_user ??
+      raw.employee?.manager_user_name ??
+      raw.employee?.manager_username ??
+      raw.workday_employee?.manager_user_name ??
+      raw.workday_employee?.manager_username ??
+      raw.matched_employee?.manager_user_name ??
+      raw.matched_employee?.manager_username ??
+      null,
+    manager_username:
+      raw.manager_user_name ??
+      raw.manager_username ??
+      raw.managerUsername ??
+      raw.manager_user ??
+      raw.employee?.manager_user_name ??
+      raw.employee?.manager_username ??
+      raw.workday_employee?.manager_user_name ??
+      raw.workday_employee?.manager_username ??
+      raw.matched_employee?.manager_user_name ??
+      raw.matched_employee?.manager_username ??
+      null,
+    managerUsername:
+      raw.manager_user_name ??
+      raw.manager_username ??
+      raw.managerUsername ??
+      raw.manager_user ??
+      raw.employee?.manager_user_name ??
+      raw.employee?.manager_username ??
+      raw.workday_employee?.manager_user_name ??
+      raw.workday_employee?.manager_username ??
+      raw.matched_employee?.manager_user_name ??
+      raw.matched_employee?.manager_username ??
+      null,
+    manager_name:
+      raw.manager_name ??
+      raw.managerName ??
+      raw.employee?.manager_name ??
+      raw.workday_employee?.manager_name ??
+      raw.matched_employee?.manager_name ??
+      null,
+    managerName:
+      raw.manager_name ??
+      raw.managerName ??
+      raw.employee?.manager_name ??
+      raw.workday_employee?.manager_name ??
+      raw.matched_employee?.manager_name ??
+      null,
     employee_status: employeeStatus,
     employeeStatus,
     workday_status: workdayStatus,
@@ -261,40 +323,89 @@ export function normalizeAsset(raw: any): Asset {
   };
 }
 
+// Normalizer for Workday Employee records from FastAPI / PostgreSQL
+export function normalizeEmployee(raw: any): Employee {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      id: '',
+      employee_id: '',
+      user_id: '',
+      full_name: '',
+      work_email: '',
+      department: '',
+      division: '',
+      job_title: '',
+      employee_status: 'Active',
+      manager_username: null,
+      manager_name: null,
+      location: '',
+      hire_date: '',
+    };
+  }
+  const employeeId = String(raw.employee_id ?? raw.employeeId ?? raw.user_id ?? '');
+  const userId = String(raw.user_id ?? raw.userId ?? raw.username ?? raw.employee_id ?? '');
+  const fullName = String(raw.full_name ?? raw.fullName ?? raw.name ?? '');
+  const workEmail = String(raw.work_email ?? raw.workEmail ?? raw.email_work ?? raw.email ?? '');
+  const mgrUsername =
+    raw.manager_username ??
+    raw.manager_user_name ??
+    raw.managerUsername ??
+    raw.manager_user ??
+    null;
+  const mgrName = raw.manager_name ?? raw.managerName ?? null;
+
+  return {
+    id: raw.id ?? employeeId,
+    employee_id: employeeId,
+    user_id: userId,
+    full_name: fullName,
+    work_email: workEmail,
+    department: String(raw.department ?? ''),
+    division: String(raw.division ?? ''),
+    job_title: String(raw.job_title ?? raw.jobTitle ?? ''),
+    employee_status: (raw.employee_status ?? raw.employeeStatus ?? raw.status ?? 'Active') as EmployeeStatus,
+    manager_username: mgrUsername,
+    manager_user_name: mgrUsername,
+    managerUsername: mgrUsername,
+    manager_name: mgrName,
+    managerName: mgrName,
+    location: String(raw.location ?? ''),
+    hire_date: String(raw.hire_date ?? raw.hireDate ?? ''),
+    assigned_assets_count:
+      Number(raw.assigned_assets_count ?? raw.assignedAssetsCount) ||
+      (Array.isArray(raw.assigned_assets) ? raw.assigned_assets.length : undefined),
+    assigned_assets: Array.isArray(raw.assigned_assets)
+      ? raw.assigned_assets.map(normalizeAsset)
+      : undefined,
+  };
+}
+
 // Helper to aggregate Fleet Summary KPI counts from a complete list of Asset items
 export function aggregateFleetKpisFromAssets(items: Asset[]): FleetKpiMetrics {
   const totalAssets = items.length;
   let active = 0;
-  let needValidation = 0;
+  let review = 0;
   let inStock = 0;
-  let nearingEol = 0;
+  let eolSoon = 0;
 
   for (const asset of items) {
-    // 1. Operational status:
-    // Active, Need Validation, InStock / In Stock
-    const rawStatus = (asset.assetStatus || asset.asset_status || '').trim().toLowerCase();
-    const cleanStatus = rawStatus.replace(/[\s_]/g, '');
+    // 1. Operational status: ACTIVE, REVIEW, IN STOCK
+    const stdStatus = toStandardAssetStatus(asset.asset_status);
 
-    if (cleanStatus === 'active') {
+    if (stdStatus === ASSET_STATUSES.ACTIVE) {
       active++;
-    } else if (cleanStatus === 'needvalidation') {
-      needValidation++;
-    } else if (cleanStatus === 'instock') {
+    } else if (stdStatus === ASSET_STATUSES.REVIEW) {
+      review++;
+    } else if (stdStatus === ASSET_STATUSES.IN_STOCK) {
       inStock++;
     }
 
-    // 2. Backend-calculated EOL status: count assets whose backend EOL status is Nearing EOL
-    // (Never derive Nearing EOL from operational asset status)
-    const rawEol = (
-      asset.eolStatus ||
-      asset.calculated_eol_status ||
-      (asset as any).eol_status ||
-      ''
-    ).trim().toLowerCase();
+    // 2. Canonical EOL status: count assets whose EOL status is EOL SOON
+    const rawEol = (asset.eol_status || '').trim().toLowerCase();
     const cleanEol = rawEol.replace(/[\s_]/g, '');
 
-    if (cleanEol === 'nearingeol') {
-      nearingEol++;
+    if (cleanEol === 'eolsoon' || cleanEol === 'nearingeol') {
+      eolSoon++;
     }
   }
 
@@ -304,12 +415,14 @@ export function aggregateFleetKpisFromAssets(items: Asset[]): FleetKpiMetrics {
     total_assets: totalAssets,
     active,
     active_assets: active,
-    needValidation,
-    need_validation: needValidation,
+    review,
+    needValidation: review,
+    need_validation: review,
     inStock,
     in_stock: inStock,
-    nearingEol,
-    nearing_eol: nearingEol,
+    eolSoon,
+    nearingEol: eolSoon,
+    nearing_eol: eolSoon,
   };
 }
 
@@ -369,8 +482,13 @@ export function normalizeFleetKpi(raw: any, fallbackItems?: Asset[]): FleetKpiMe
     target.active_count
   );
 
-  // 3. Need Validation: needValidation, need_validation, needValidationAssets, need_validation_assets, needValidationCount, need_validation_count
-  const needValidationVal = parseNum(
+  // 3. Review / Need Validation
+  const reviewVal = parseNum(
+    target.review ??
+    target.reviewAssets ??
+    target.review_assets ??
+    target.reviewCount ??
+    target.review_count ??
     target.needValidation ??
     target.need_validation ??
     target.needValidationAssets ??
@@ -391,8 +509,14 @@ export function normalizeFleetKpi(raw: any, fallbackItems?: Asset[]): FleetKpiMe
     target.in_stock_count
   );
 
-  // 5. Nearing EOL: nearingEol, nearing_eol, nearingEolAssets, nearing_eol_assets, nearingEolCount, nearing_eol_count, expiringEol, expiring_eol
-  const nearingEolVal = parseNum(
+  // 5. EOL Soon / Nearing EOL
+  const eolSoonVal = parseNum(
+    target.eolSoon ??
+    target.eol_soon ??
+    target.eolSoonAssets ??
+    target.eol_soon_assets ??
+    target.eolSoonCount ??
+    target.eol_soon_count ??
     target.nearingEol ??
     target.nearing_eol ??
     target.nearingEolAssets ??
@@ -406,30 +530,32 @@ export function normalizeFleetKpi(raw: any, fallbackItems?: Asset[]): FleetKpiMe
   // Check if target is a genuine KPI summary object (contains specific breakdown metrics or explicit totalAssets / total_assets)
   const isDedicatedKpiObject =
     activeVal !== null ||
-    needValidationVal !== null ||
+    reviewVal !== null ||
     inStockVal !== null ||
-    nearingEolVal !== null ||
+    eolSoonVal !== null ||
     target.totalAssets !== undefined ||
     target.total_assets !== undefined;
 
   if (isDedicatedKpiObject) {
     const total = totalVal !== null ? totalVal : (fallbackItems ? fallbackItems.length : 0);
     const active = activeVal !== null ? activeVal : 0;
-    const needValidation = needValidationVal !== null ? needValidationVal : 0;
+    const review = reviewVal !== null ? reviewVal : 0;
     const inStock = inStockVal !== null ? inStockVal : 0;
-    const nearingEol = nearingEolVal !== null ? nearingEolVal : 0;
+    const eolSoon = eolSoonVal !== null ? eolSoonVal : 0;
     return {
       totalAssets: total,
       total,
       total_assets: total,
       active,
       active_assets: active,
-      needValidation,
-      need_validation: needValidation,
+      review,
+      needValidation: review,
+      need_validation: review,
       inStock,
       in_stock: inStock,
-      nearingEol,
-      nearing_eol: nearingEol,
+      eolSoon,
+      nearingEol: eolSoon,
+      nearing_eol: eolSoon,
     };
   }
 
@@ -451,9 +577,9 @@ export function normalizeFleetKpi(raw: any, fallbackItems?: Asset[]): FleetKpiMe
 
   const finalTotal = totalVal !== null ? totalVal : 0;
   const finalActive = activeVal !== null ? activeVal : 0;
-  const finalNeedValidation = needValidationVal !== null ? needValidationVal : 0;
+  const finalReview = reviewVal !== null ? reviewVal : 0;
   const finalInStock = inStockVal !== null ? inStockVal : 0;
-  const finalNearingEol = nearingEolVal !== null ? nearingEolVal : 0;
+  const finalEolSoon = eolSoonVal !== null ? eolSoonVal : 0;
 
   return {
     totalAssets: finalTotal,
@@ -461,12 +587,14 @@ export function normalizeFleetKpi(raw: any, fallbackItems?: Asset[]): FleetKpiMe
     total_assets: finalTotal,
     active: finalActive,
     active_assets: finalActive,
-    needValidation: finalNeedValidation,
-    need_validation: finalNeedValidation,
+    review: finalReview,
+    needValidation: finalReview,
+    need_validation: finalReview,
     inStock: finalInStock,
     in_stock: finalInStock,
-    nearingEol: finalNearingEol,
-    nearing_eol: finalNearingEol,
+    eolSoon: finalEolSoon,
+    nearingEol: finalEolSoon,
+    nearing_eol: finalEolSoon,
   };
 }
 
@@ -626,8 +754,137 @@ class ApiService {
       return getMockAssetsBySource();
     }
     const client = createAxiosClient();
-    const response = await client.get<AssetsBySourceItem[]>('/api/dashboard/assets-by-source');
-    return response.data;
+    const primaryRoute = '/api/dashboard/assets-by-source';
+    const fallbackRoute = '/api/dashboard/source-summary';
+
+    let response: any;
+    let endpointUsed = primaryRoute;
+
+    try {
+      response = await client.get<any>(primaryRoute);
+    } catch (err: any) {
+      const status = err?.status || err?.response?.status;
+      if (status === 404) {
+        try {
+          endpointUsed = fallbackRoute;
+          response = await client.get<any>(fallbackRoute);
+        } catch (fallbackErr: any) {
+          console.error(`[API Error] GET ${primaryRoute} and ${fallbackRoute} failed:`, {
+            status: fallbackErr?.response?.status,
+            statusText: fallbackErr?.response?.statusText,
+            message: fallbackErr?.message,
+          });
+          throw fallbackErr;
+        }
+      } else {
+        console.error(`[API Error] GET ${primaryRoute} failed:`, {
+          status: err?.response?.status,
+          statusText: err?.response?.statusText,
+          message: err?.message,
+        });
+        throw err;
+      }
+    }
+
+    let rawList: any[] = [];
+    if (Array.isArray(response.data)) {
+      rawList = response.data;
+    } else if (response.data && typeof response.data === 'object') {
+      // Backend contract compatibility: unpack recognized wrapper object property if returned
+      if (Array.isArray(response.data.data)) {
+        rawList = response.data.data;
+      } else if (Array.isArray(response.data.sources)) {
+        rawList = response.data.sources;
+      } else if (Array.isArray(response.data.source_summary)) {
+        rawList = response.data.source_summary;
+      } else if (Array.isArray(response.data.assets_by_source)) {
+        rawList = response.data.assets_by_source;
+      } else if (Array.isArray(response.data.items)) {
+        rawList = response.data.items;
+      } else if (Array.isArray(response.data.results)) {
+        rawList = response.data.results;
+      } else {
+        // If the backend sent a dictionary of source to count, e.g. { "BIGFIX": 150, "JAMF": 80 }
+        const entries = Object.entries(response.data);
+        const isDictOfNumbers =
+          entries.length > 0 &&
+          entries.every(([_, v]) => typeof v === 'number' || (!isNaN(Number(v)) && typeof v !== 'boolean'));
+        if (isDictOfNumbers) {
+          rawList = entries.map(([source, count]) => ({ source, count: Number(count) }));
+        } else {
+          const receivedType = response.data === null ? 'null' : typeof response.data;
+          console.error(`[API Error] Invalid response contract from ${endpointUsed}:`, response.data);
+          throw new ApiError({
+            type: 'INVALID_RESPONSE_DATA',
+            url: `${getApiBaseUrl()}${endpointUsed}`,
+            message: `[Invalid Response Data] ${endpointUsed} expected an array of source records, got ${receivedType}.`,
+            detail: response.data,
+          });
+        }
+      }
+    } else {
+      const receivedType = response.data === null ? 'null' : typeof response.data;
+      console.error(`[API Error] Invalid response contract from ${endpointUsed}:`, response.data);
+      throw new ApiError({
+        type: 'INVALID_RESPONSE_DATA',
+        url: `${getApiBaseUrl()}${endpointUsed}`,
+        message: `[Invalid Response Data] ${endpointUsed} expected an array of source records, got ${receivedType}.`,
+        detail: response.data,
+      });
+    }
+
+    // Validate and normalize records
+    const normalized: AssetsBySourceItem[] = [];
+    let totalCount = 0;
+
+    for (let i = 0; i < rawList.length; i++) {
+      const item = rawList[i];
+      if (!item || typeof item !== 'object') {
+        throw new ApiError({
+          type: 'INVALID_RESPONSE_DATA',
+          url: `${getApiBaseUrl()}${endpointUsed}`,
+          message: `[Invalid Response Data] Record at index ${i} in ${endpointUsed} must be an object with source and count fields.`,
+          detail: item,
+        });
+      }
+      const rawSource = item.source ?? item.source_name ?? item.name ?? item.collector;
+      if (typeof rawSource !== 'string' || !rawSource.trim()) {
+        throw new ApiError({
+          type: 'INVALID_RESPONSE_DATA',
+          url: `${getApiBaseUrl()}${endpointUsed}`,
+          message: `[Invalid Response Data] Record at index ${i} in ${endpointUsed} is missing a valid 'source' string.`,
+          detail: item,
+        });
+      }
+      const rawCount = item.count ?? item.asset_count ?? item.total ?? item.value;
+      const parsedCount = typeof rawCount === 'number' ? rawCount : Number(rawCount);
+      if (rawCount === undefined || rawCount === null || isNaN(parsedCount) || parsedCount < 0) {
+        throw new ApiError({
+          type: 'INVALID_RESPONSE_DATA',
+          url: `${getApiBaseUrl()}${endpointUsed}`,
+          message: `[Invalid Response Data] Record at index ${i} ('${rawSource}') in ${endpointUsed} has invalid 'count': expected a non-negative number, got ${JSON.stringify(rawCount)}.`,
+          detail: item,
+        });
+      }
+
+      totalCount += parsedCount;
+      normalized.push({
+        source: rawSource.trim(),
+        count: parsedCount,
+        percentage: typeof item.percentage === 'number' ? item.percentage : 0,
+      });
+    }
+
+    // Recalculate percentage if missing or zero
+    return normalized.map(item => ({
+      ...item,
+      percentage:
+        item.percentage > 0
+          ? item.percentage
+          : totalCount > 0
+          ? Math.round((item.count / totalCount) * 100)
+          : 0,
+    }));
   }
 
   // Ownership summary
@@ -637,8 +894,54 @@ class ApiService {
       return getMockOwnershipSummary();
     }
     const client = createAxiosClient();
-    const response = await client.get<OwnershipSummaryItem[]>('/api/dashboard/ownership-summary');
-    return response.data;
+    const endpoint = '/api/dashboard/ownership-summary';
+    let response: any;
+    try {
+      response = await client.get<any>(endpoint);
+    } catch (err: any) {
+      console.error(`[API Error] GET ${endpoint} failed:`, err);
+      throw err;
+    }
+
+    let rawList: any[] = [];
+    if (Array.isArray(response.data)) {
+      rawList = response.data;
+    } else if (response.data && typeof response.data === 'object') {
+      if (Array.isArray(response.data.data)) {
+        rawList = response.data.data;
+      } else if (Array.isArray(response.data.items)) {
+        rawList = response.data.items;
+      } else if (Array.isArray(response.data.ownership_summary)) {
+        rawList = response.data.ownership_summary;
+      } else if (Array.isArray(response.data.results)) {
+        rawList = response.data.results;
+      } else {
+        const entries = Object.entries(response.data);
+        const isDictOfNumbers =
+          entries.length > 0 &&
+          entries.every(([_, v]) => typeof v === 'number' || (!isNaN(Number(v)) && typeof v !== 'boolean'));
+        if (isDictOfNumbers) {
+          rawList = entries.map(([assignment_type, count]) => ({ assignment_type, count: Number(count) }));
+        }
+      }
+    }
+
+    let total = 0;
+    const items = rawList.map((item: any) => {
+      const assignment_type = String(item?.assignment_type ?? item?.type ?? item?.name ?? 'Unassigned').trim();
+      const count = Number(item?.count ?? item?.asset_count ?? item?.total ?? 0) || 0;
+      total += count;
+      return {
+        assignment_type,
+        count,
+        percentage: typeof item?.percentage === 'number' ? item.percentage : 0,
+      };
+    });
+
+    return items.map(item => ({
+      ...item,
+      percentage: item.percentage > 0 ? item.percentage : total > 0 ? Math.round((item.count / total) * 100) : 0,
+    }));
   }
 
   // EOL summary
@@ -648,8 +951,103 @@ class ApiService {
       return getMockEOLSummary();
     }
     const client = createAxiosClient();
-    const response = await client.get<EOLSummaryItem[]>('/api/dashboard/eol-summary');
-    return response.data;
+    const response = await client.get<any>('/api/dashboard/eol-summary');
+    let rawList: any[] = [];
+    if (Array.isArray(response.data)) {
+      rawList = response.data;
+    } else if (response.data && typeof response.data === 'object') {
+      if (Array.isArray(response.data.data)) rawList = response.data.data;
+      else if (Array.isArray(response.data.items)) rawList = response.data.items;
+      else if (Array.isArray(response.data.eol_summary)) rawList = response.data.eol_summary;
+      else if (Array.isArray(response.data.results)) rawList = response.data.results;
+    }
+    if (!Array.isArray(rawList)) {
+      return [];
+    }
+    return rawList.map((item: any) => {
+      const raw = String(item?.eol_status ?? item?.status ?? item?.name ?? '').trim();
+      const norm = raw.toUpperCase().replace(/_/g, ' ');
+      const eol_status =
+        norm === 'NEARING EOL' || norm === 'NEARINGEOL' || norm === 'EOL SOON' || norm === 'EOLSOON' || norm.startsWith('NEARING')
+          ? 'EOL Soon'
+          : raw;
+      return {
+        ...item,
+        eol_status,
+        count: Number(item?.count ?? item?.total ?? 0) || 0,
+        percentage: Number(item?.percentage ?? 0) || 0,
+      };
+    });
+  }
+
+  /**
+   * Normalizes raw operational status records into canonical statuses:
+   * ACTIVE, REVIEW, IN STOCK, RETIRED.
+   * - Maps legacy 'NEED VALIDATION' to 'REVIEW'.
+   * - Deduplicates / merges counts so no record is counted twice.
+   * - Displays zero counts accurately.
+   */
+  public normalizeOperationalStatus(rawItems: any[]): OperationalStatusItem[] {
+    const canonicalOrder = ['ACTIVE', 'REVIEW', 'IN STOCK', 'RETIRED'] as const;
+    const counts: Record<string, number> = {
+      ACTIVE: 0,
+      REVIEW: 0,
+      'IN STOCK': 0,
+      RETIRED: 0,
+    };
+
+    const extraStatuses = new Map<string, number>();
+
+    for (const item of rawItems) {
+      if (!item || typeof item !== 'object') continue;
+
+      const rawStatus = String(item.status ?? item.asset_status ?? item.name ?? '').trim();
+      if (!rawStatus) continue;
+
+      const rawCount = item.count !== undefined ? item.count : (item.asset_count ?? item.total ?? item.value);
+      const count = typeof rawCount === 'number' && !isNaN(rawCount) ? rawCount : Number(rawCount);
+      const validCount = !isNaN(count) && count >= 0 ? count : 0;
+
+      // Canonical status mapping
+      const upper = rawStatus.toUpperCase().replace(/_/g, ' ');
+      if (upper === 'ACTIVE') {
+        counts.ACTIVE += validCount;
+      } else if (upper === 'REVIEW' || upper === 'NEED VALIDATION' || upper === 'NEEDVALIDATION') {
+        counts.REVIEW += validCount;
+      } else if (upper === 'IN STOCK' || upper === 'INSTOCK') {
+        counts['IN STOCK'] += validCount;
+      } else if (upper === 'RETIRED') {
+        counts.RETIRED += validCount;
+      } else {
+        const current = extraStatuses.get(upper) || 0;
+        extraStatuses.set(upper, current + validCount);
+      }
+    }
+
+    // Calculate fleet total for percentage calculation
+    let total = counts.ACTIVE + counts.REVIEW + counts['IN STOCK'] + counts.RETIRED;
+    for (const c of extraStatuses.values()) {
+      total += c;
+    }
+
+    const result: OperationalStatusItem[] = canonicalOrder.map(status => {
+      const count = counts[status];
+      return {
+        status,
+        count,
+        percentage: total > 0 ? Math.round((count / total) * 100) : 0,
+      };
+    });
+
+    for (const [status, count] of extraStatuses.entries()) {
+      result.push({
+        status,
+        count,
+        percentage: total > 0 ? Math.round((count / total) * 100) : 0,
+      });
+    }
+
+    return result;
   }
 
   // Operational status distribution
@@ -659,15 +1057,90 @@ class ApiService {
       return getMockOperationalStatus();
     }
     const client = createAxiosClient();
-    const response = await client.get<OperationalStatusItem[]>('/api/dashboard/operational-status');
-    if (!Array.isArray(response.data)) {
+    const endpoint = '/api/dashboard/operational-status';
+    let response: any;
+    try {
+      response = await client.get<any>(endpoint);
+    } catch (err: any) {
+      console.error(`[API Error] GET ${endpoint} failed:`, {
+        status: err?.response?.status,
+        statusText: err?.response?.statusText,
+        message: err?.message,
+      });
+      throw err;
+    }
+
+    let rawList: any[] = [];
+    if (Array.isArray(response.data)) {
+      rawList = response.data;
+    } else if (response.data && typeof response.data === 'object') {
+      // Backend contract compatibility: unpack recognized wrapper object property if returned
+      if (Array.isArray(response.data.data)) {
+        rawList = response.data.data;
+      } else if (Array.isArray(response.data.items)) {
+        rawList = response.data.items;
+      } else if (Array.isArray(response.data.results)) {
+        rawList = response.data.results;
+      } else if (Array.isArray(response.data.statuses)) {
+        rawList = response.data.statuses;
+      } else if (Array.isArray(response.data.operational_status)) {
+        rawList = response.data.operational_status;
+      } else {
+        // If the backend sent a dictionary of status to count, e.g. { "ACTIVE": 15, "REVIEW": 2, ... }
+        const entries = Object.entries(response.data);
+        const isDictOfNumbers =
+          entries.length > 0 &&
+          entries.every(([k, v]) => typeof v === 'number' || (!isNaN(Number(v)) && typeof v !== 'boolean'));
+        if (isDictOfNumbers) {
+          rawList = entries.map(([status, count]) => ({ status, count: Number(count) }));
+        } else {
+          const receivedType = response.data === null ? 'null' : typeof response.data;
+          throw new ApiError({
+            type: 'INVALID_RESPONSE_DATA',
+            url: `${getApiBaseUrl()}${endpoint}`,
+            message: `[Invalid Response Data] ${endpoint} expected an array of status records, got ${receivedType}.`,
+          });
+        }
+      }
+    } else {
+      const receivedType = response.data === null ? 'null' : typeof response.data;
       throw new ApiError({
         type: 'INVALID_RESPONSE_DATA',
-        url: `${getApiBaseUrl()}/api/dashboard/operational-status`,
-        message: `[Invalid Response Data] /api/dashboard/operational-status expected an array, got ${typeof response.data}.`,
+        url: `${getApiBaseUrl()}${endpoint}`,
+        message: `[Invalid Response Data] ${endpoint} expected an array of status records, got ${receivedType}.`,
       });
     }
-    return response.data;
+
+    // Validate that each record contains a valid status and numeric count
+    for (let i = 0; i < rawList.length; i++) {
+      const item = rawList[i];
+      if (!item || typeof item !== 'object') {
+        throw new ApiError({
+          type: 'INVALID_RESPONSE_DATA',
+          url: `${getApiBaseUrl()}${endpoint}`,
+          message: `[Invalid Response Data] Record at index ${i} in ${endpoint} must be an object with status and count fields.`,
+        });
+      }
+      const rawStatus = item.status ?? item.asset_status ?? item.name;
+      if (typeof rawStatus !== 'string' || !rawStatus.trim()) {
+        throw new ApiError({
+          type: 'INVALID_RESPONSE_DATA',
+          url: `${getApiBaseUrl()}${endpoint}`,
+          message: `[Invalid Response Data] Record at index ${i} in ${endpoint} is missing a valid 'status' string.`,
+        });
+      }
+      const rawCount = item.count ?? item.asset_count ?? item.total ?? item.value;
+      const parsedCount = typeof rawCount === 'number' ? rawCount : Number(rawCount);
+      if (rawCount === undefined || rawCount === null || isNaN(parsedCount) || parsedCount < 0) {
+        throw new ApiError({
+          type: 'INVALID_RESPONSE_DATA',
+          url: `${getApiBaseUrl()}${endpoint}`,
+          message: `[Invalid Response Data] Record at index ${i} ('${rawStatus}') in ${endpoint} has invalid 'count': expected a non-negative number, got ${JSON.stringify(rawCount)}.`,
+        });
+      }
+    }
+
+    return this.normalizeOperationalStatus(rawList);
   }
 
   // Department distribution
@@ -677,15 +1150,62 @@ class ApiService {
       return getMockDepartmentDistribution();
     }
     const client = createAxiosClient();
-    const response = await client.get<DepartmentDistributionItem[]>('/api/dashboard/department-summary');
-    if (!Array.isArray(response.data)) {
+    const response = await client.get<any>('/api/dashboard/department-summary');
+
+    let rawList: any[] = [];
+    if (Array.isArray(response.data)) {
+      rawList = response.data;
+    } else if (response.data && typeof response.data === 'object') {
+      // Coordinate with backend contract: unpack recognized wrapper object property
+      if (Array.isArray(response.data.data)) {
+        rawList = response.data.data;
+      } else if (Array.isArray(response.data.items)) {
+        rawList = response.data.items;
+      } else if (Array.isArray(response.data.departments)) {
+        rawList = response.data.departments;
+      } else if (Array.isArray(response.data.department_summary)) {
+        rawList = response.data.department_summary;
+      } else if (Array.isArray(response.data.results)) {
+        rawList = response.data.results;
+      } else {
+        throw new ApiError({
+          type: 'INVALID_RESPONSE_DATA',
+          url: `${getApiBaseUrl()}/api/dashboard/department-summary`,
+          message: `[Invalid Response Data] /api/dashboard/department-summary expected an array, got ${typeof response.data}.`,
+        });
+      }
+    } else {
       throw new ApiError({
         type: 'INVALID_RESPONSE_DATA',
         url: `${getApiBaseUrl()}/api/dashboard/department-summary`,
         message: `[Invalid Response Data] /api/dashboard/department-summary expected an array, got ${typeof response.data}.`,
       });
     }
-    return response.data;
+
+    // Compute total assets for relative fleet percentage calculation
+    const totalAssets = rawList.reduce((sum: number, item: any) => {
+      const c = Number(item?.asset_count ?? item?.count ?? item?.assets_count ?? 0) || 0;
+      return sum + c;
+    }, 0);
+
+    // Map actual field names returned by FastAPI to expected chart/table properties
+    return rawList.map((item: any) => {
+      const department = String(item?.department ?? item?.name ?? item?.dept ?? 'Unspecified').trim() || 'Unspecified';
+      const count = Number(item?.asset_count ?? item?.count ?? item?.assets_count ?? 0) || 0;
+      const percentage =
+        item?.percentage !== undefined && item?.percentage !== null
+          ? Number(item.percentage) || 0
+          : totalAssets > 0
+          ? Math.round((count / totalAssets) * 100)
+          : 0;
+
+      return {
+        department,
+        count,
+        asset_count: count,
+        percentage,
+      };
+    });
   }
 
   // Filter options
@@ -705,9 +1225,70 @@ class ApiService {
       await this.simulateLatency();
       return filterAndPaginateAssets(params);
     }
+    const queryParams: any = { ...params };
+    if (params.devicetype && !queryParams.device_type) {
+      queryParams.device_type = params.devicetype;
+    }
+    if (params.device_type && !queryParams.devicetype) {
+      queryParams.devicetype = params.device_type;
+    }
+
+    // Normalize assignment_type parameter:
+    // Send 'Auto' for Automatic Match (never 'Automatic'), 'Manual' for Manual Assignment.
+    // Omit when cleared or if 'Unassigned'.
+    if (queryParams.assignment_type) {
+      const aType = String(queryParams.assignment_type).trim().toLowerCase();
+      if (aType === 'auto' || aType === 'automatic') {
+        queryParams.assignment_type = 'Auto';
+      } else if (aType === 'manual') {
+        queryParams.assignment_type = 'Manual';
+      } else {
+        delete queryParams.assignment_type;
+      }
+    } else {
+      delete queryParams.assignment_type;
+    }
+
+    // Normalize asset_status parameter:
+    // Canonical values: ACTIVE, REVIEW, IN STOCK, RETIRED
+    if (queryParams.asset_status) {
+      const s = String(queryParams.asset_status).trim().toUpperCase().replace(/_/g, ' ');
+      if (s === 'REVIEW' || s === 'NEED VALIDATION' || s === 'NEEDVALIDATION') {
+        queryParams.asset_status = 'REVIEW';
+      } else if (s === 'ACTIVE') {
+        queryParams.asset_status = 'ACTIVE';
+      } else if (s === 'IN STOCK' || s === 'INSTOCK') {
+        queryParams.asset_status = 'IN STOCK';
+      } else if (s === 'RETIRED') {
+        queryParams.asset_status = 'RETIRED';
+      }
+    }
+
+    // Normalize eol_status parameter:
+    // Canonical values: ACTIVE, EOL SOON, EXPIRED, UNKNOWN
+    if (queryParams.eol_status) {
+      const e = String(queryParams.eol_status).trim().toUpperCase().replace(/_/g, ' ');
+      if (e === 'EOL SOON' || e === 'EOLSOON' || e === 'NEARING EOL' || e === 'NEARINGEOL' || e.startsWith('NEARING')) {
+        queryParams.eol_status = 'EOL SOON';
+      } else if (e === 'ACTIVE') {
+        queryParams.eol_status = 'ACTIVE';
+      } else if (e === 'EXPIRED') {
+        queryParams.eol_status = 'EXPIRED';
+      } else if (e === 'UNKNOWN') {
+        queryParams.eol_status = 'UNKNOWN';
+      }
+    }
+
+    // Omit undefined, null, or empty string parameters
+    Object.keys(queryParams).forEach(key => {
+      if (queryParams[key] === undefined || queryParams[key] === null || queryParams[key] === '') {
+        delete queryParams[key];
+      }
+    });
+
     const client = createAxiosClient();
     const response = await client.get<any>('/api/assets', {
-      params,
+      params: queryParams,
     });
 
     let rawItems: any[] = [];
@@ -944,45 +1525,167 @@ class ApiService {
       return reassignMockAsset(assetId, data);
     }
     const client = createAxiosClient();
-    const response = await client.post<ReassignAssetResponse>(`/api/assets/${assetId}/reassign`, data);
-    return response.data;
+
+    // Standardize asset_status to exact uppercase value (defaulting to 'ACTIVE' for manual assignment)
+    const assetStatus: StandardAssetStatus = data.asset_status
+      ? toStandardAssetStatus(data.asset_status)
+      : ASSET_STATUSES.ACTIVE;
+
+    const payload: Record<string, any> = {
+      asset_status: assetStatus,
+      assignment_type: 'MANUAL',
+      assigned_username: data.assigned_username || data.user_id,
+      user_id: data.user_id,
+      managed_by: data.managed_by,
+    };
+
+    if (data.remarks !== undefined && data.remarks !== null && data.remarks !== '') {
+      payload.remarks = data.remarks;
+      payload.notes = data.remarks;
+    }
+
+    let response: any;
+    try {
+      response = await client.post<any>(`/api/assets/${assetId}/reassign`, payload);
+    } catch (err: any) {
+      const status = err?.status || err?.response?.status;
+      if (status === 404 || status === 405) {
+        try {
+          response = await client.post<any>(`/api/assets/${assetId}/assign`, payload);
+        } catch {
+          try {
+            response = await client.put<any>(`/api/assets/${assetId}/reassign`, payload);
+          } catch {
+            throw err;
+          }
+        }
+      } else {
+        throw err;
+      }
+    }
+
+    const resData = response.data?.data ?? response.data ?? {};
+    return {
+      asset_id: resData.asset_id ?? resData.assetId ?? assetId,
+      assigned_username: resData.assigned_username ?? resData.assignedUsername ?? data.user_id,
+      managed_by: resData.managed_by ?? resData.managedBy ?? data.managed_by,
+      assignment_type: resData.assignment_type ?? resData.assignmentType ?? 'Manual',
+      verified_employee_name: resData.verified_employee_name ?? resData.verifiedEmployeeName,
+      notes: resData.notes ?? resData.remarks ?? data.remarks,
+      updated_at: resData.updated_at ?? resData.updatedAt ?? new Date().toISOString(),
+      message: resData.message ?? `Asset ${assetId} successfully assigned to ${data.user_id}.`,
+    };
   }
 
-  // Employees list
+  // Assignment API alias
+  public async assignAsset(assetId: string | number, data: ReassignAssetRequest): Promise<ReassignAssetResponse> {
+    return this.reassignAsset(assetId, data);
+  }
+
+  // Employees list with safe parameter normalization to prevent FastAPI HTTP 422
   public async getEmployees(params: EmployeeQueryParams): Promise<PaginatedResponse<Employee>> {
     if (this.isMockMode) {
       await this.simulateLatency();
       return filterAndPaginateEmployees(params);
     }
     const client = createAxiosClient();
-    const response = await client.get<any>('/api/employees', {
-      params,
-    });
-    if (Array.isArray(response.data)) {
-      return {
-        items: response.data,
-        total: response.data.length,
-        page: params.page || 1,
-        page_size: params.page_size || response.data.length,
-        total_pages: 1,
-      };
+
+    const page = Math.max(1, Number(params.page) || 1);
+    // FastAPI standard pagination limits page_size (le=100)
+    const pageSize = Math.min(100, Math.max(1, Number(params.page_size ?? (params as any).size) || 10));
+
+    const cleanParams: Record<string, any> = {
+      page,
+      page_size: pageSize,
+    };
+    if (params.search && params.search.trim()) {
+      cleanParams.search = params.search.trim();
     }
-    if (response.data && (Array.isArray(response.data.items) || Array.isArray(response.data.data))) {
-      const rawList = response.data.items ?? response.data.data;
-      const total = response.data.total ?? response.data.count ?? rawList.length;
-      return {
-        items: rawList,
-        total: Number(total) || rawList.length,
-        page: Number(response.data.page) || params.page || 1,
-        page_size: Number(response.data.page_size) || params.page_size || rawList.length,
-        total_pages: Number(response.data.total_pages) || 1,
-      };
+    if (params.department && params.department.trim()) {
+      cleanParams.department = params.department.trim();
     }
-    throw new ApiError({
-      type: 'INVALID_RESPONSE_DATA',
-      url: `${getApiBaseUrl()}/api/employees`,
-      message: `[Invalid Response Data] /api/employees expected a paginated object ({ items: [...] }) or array, received: ${typeof response.data}.`,
-    });
+    if (params.division && params.division.trim()) {
+      cleanParams.division = params.division.trim();
+    }
+    if (params.employee_status && params.employee_status.trim()) {
+      cleanParams.employee_status = params.employee_status.trim();
+    }
+    if (params.sort_by && params.sort_by.trim()) {
+      cleanParams.sort_by = params.sort_by.trim();
+    }
+    if (params.sort_order && params.sort_order.trim()) {
+      cleanParams.sort_order = params.sort_order.trim();
+    }
+
+    const parseResponse = (data: any): PaginatedResponse<Employee> => {
+      let rawList: any[] = [];
+      let total = 0;
+      let respPage = page;
+      let respPageSize = pageSize;
+      let totalPages = 1;
+
+      if (Array.isArray(data)) {
+        rawList = data;
+        total = data.length;
+        totalPages = Math.max(1, Math.ceil(total / respPageSize));
+      } else if (data && typeof data === 'object') {
+        rawList = data.items ?? data.data ?? data.results ?? data.employees ?? [];
+        const extractedTotal =
+          data.total ??
+          data.count ??
+          data.total_count ??
+          data.totalCount ??
+          data.total_records ??
+          data.totalRecords;
+        total = typeof extractedTotal === 'number' && !isNaN(extractedTotal)
+          ? extractedTotal
+          : Number(extractedTotal) || rawList.length;
+        respPage = Number(data.page) || respPage;
+        respPageSize = Number(data.page_size ?? data.pageSize ?? data.size) || respPageSize;
+        totalPages = Number(data.total_pages ?? data.totalPages) || Math.max(1, Math.ceil(total / respPageSize));
+      } else {
+        throw new ApiError({
+          type: 'INVALID_RESPONSE_DATA',
+          url: `${getApiBaseUrl()}/api/employees`,
+          message: `[Invalid Response Data] /api/employees expected a paginated object ({ items: [...] }) or array, received: ${typeof data}.`,
+        });
+      }
+
+      return {
+        items: rawList.map(normalizeEmployee),
+        total,
+        page: respPage,
+        page_size: respPageSize,
+        total_pages: totalPages,
+      };
+    };
+
+    try {
+      const response = await client.get<any>('/api/employees', { params: cleanParams });
+      return parseResponse(response.data);
+    } catch (err: any) {
+      // If 422 Unprocessable Entity, attempt fallback parameter formats (e.g., 'size' for fastapi-pagination)
+      const status = err?.status || err?.response?.status;
+      if (status === 422) {
+        try {
+          const fallbackParams: Record<string, any> = { ...cleanParams, size: pageSize };
+          delete fallbackParams.page_size;
+          const retryResp = await client.get<any>('/api/employees', { params: fallbackParams });
+          return parseResponse(retryResp.data);
+        } catch {
+          try {
+            // Minimal pagination params
+            const minParams: Record<string, any> = { page, page_size: Math.min(pageSize, 20) };
+            if (cleanParams.search) minParams.search = cleanParams.search;
+            const minResp = await client.get<any>('/api/employees', { params: minParams });
+            return parseResponse(minResp.data);
+          } catch {
+            throw err;
+          }
+        }
+      }
+      throw err;
+    }
   }
 
   // Employee by ID
@@ -999,8 +1702,23 @@ class ApiService {
       };
     }
     const client = createAxiosClient();
-    const response = await client.get<Employee>(`/api/employees/${employeeId}`);
-    return response.data;
+    const response = await client.get<any>(`/api/employees/${employeeId}`);
+    const data = response.data;
+    const mgrUser =
+      data.manager_user_name ??
+      data.manager_username ??
+      data.managerUsername ??
+      data.manager_user ??
+      null;
+    const mgrName = data.manager_name ?? data.managerName ?? null;
+    return {
+      ...data,
+      manager_user_name: mgrUser,
+      manager_username: mgrUser,
+      managerUsername: mgrUser,
+      manager_name: mgrName,
+      managerName: mgrName,
+    };
   }
 
   // EOL list
@@ -1112,10 +1830,32 @@ class ApiService {
       return getMockAvailableWorkdayUsers(search);
     }
     const client = createAxiosClient();
-    const routes = ['/api/admin-users/available-users', '/api/admin_users/available_users', '/api/admin-users/available-users/'];
-    return this.requestWithRouteFallback<AvailableWorkdayUser[]>(client, 'GET', routes, {
-      params: search ? { search } : undefined,
-    });
+    const cleanSearch = search?.trim();
+    const queryParams: Record<string, string> = {};
+    if (cleanSearch) {
+      queryParams.search = cleanSearch;
+      queryParams.q = cleanSearch;
+    }
+
+    // Call GET /api/admin-users/available-users
+    try {
+      const response = await client.get<any>('/api/admin-users/available-users', {
+        params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+      });
+      const data = response.data?.data ?? response.data?.items ?? response.data?.results ?? response.data;
+      return Array.isArray(data) ? data : [];
+    } catch (err: any) {
+      const status = err?.status || err?.response?.status;
+      if (status === 404) {
+        // Fallback to snake_case route if 404
+        const altResponse = await client.get<any>('/api/admin_users/available_users', {
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+        });
+        const altData = altResponse.data?.data ?? altResponse.data?.items ?? altResponse.data?.results ?? altResponse.data;
+        return Array.isArray(altData) ? altData : [];
+      }
+      throw err;
+    }
   }
 
   public async bulkAddAdminUsers(userIds: string[]): Promise<BulkAddAdminUsersResponse> {
@@ -1125,8 +1865,64 @@ class ApiService {
     }
     const client = createAxiosClient();
     const payload: BulkAddAdminUsersRequest = { user_ids: userIds };
-    const routes = ['/api/admin-users/bulk', '/api/admin_users/bulk', '/api/admin-users/bulk/'];
-    return this.requestWithRouteFallback<BulkAddAdminUsersResponse>(client, 'POST', routes, undefined, payload);
+
+    // Primary backend contract: POST /api/admin-users
+    try {
+      const response = await client.post<any>('/api/admin-users', payload);
+      const res = response.data?.data ?? response.data ?? {};
+      return this.normalizeBulkAddResponse(res, userIds);
+    } catch (err: any) {
+      const status = err?.status || err?.response?.status;
+      if (status === 404) {
+        try {
+          const altResponse = await client.post<any>('/api/admin_users', payload);
+          const altRes = altResponse.data?.data ?? altResponse.data ?? {};
+          return this.normalizeBulkAddResponse(altRes, userIds);
+        } catch {
+          try {
+            const bulkResponse = await client.post<any>('/api/admin-users/bulk', payload);
+            const bulkRes = bulkResponse.data?.data ?? bulkResponse.data ?? {};
+            return this.normalizeBulkAddResponse(bulkRes, userIds);
+          } catch {
+            throw err;
+          }
+        }
+      }
+      throw err;
+    }
+  }
+
+  private normalizeBulkAddResponse(res: any, requestedUserIds: string[]): BulkAddAdminUsersResponse {
+    const addedCount = typeof res.added_count === 'number'
+      ? res.added_count
+      : Array.isArray(res.added_user_ids)
+      ? res.added_user_ids.length
+      : Array.isArray(res)
+      ? res.length
+      : requestedUserIds.length;
+
+    const addedUserIds = Array.isArray(res.added_user_ids)
+      ? res.added_user_ids
+      : Array.isArray(res)
+      ? res.map((r: any) => r.admin_user_id || r.user_id || r)
+      : requestedUserIds;
+
+    const skippedUserIds = Array.isArray(res.skipped_user_ids)
+      ? res.skipped_user_ids
+      : [];
+
+    const message = res.message || (
+      skippedUserIds.length > 0
+        ? `Added ${addedCount} user(s); skipped ${skippedUserIds.length} user(s).`
+        : `Successfully registered ${addedCount} administrator user${addedCount === 1 ? '' : 's'}.`
+    );
+
+    return {
+      added_count: addedCount,
+      added_user_ids: addedUserIds,
+      skipped_user_ids: skippedUserIds,
+      message,
+    };
   }
 
   public async deleteAdminUser(adminUserId: string): Promise<void> {

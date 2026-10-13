@@ -29,6 +29,7 @@ class EmployeeRepository:
         limit: int = 25,
         user_id: Optional[str] = None,
         name: Optional[str] = None,
+        email: Optional[str] = None,
         department: Optional[str] = None,
         division: Optional[str] = None,
         employee_status: Optional[str] = None,
@@ -39,26 +40,36 @@ class EmployeeRepository:
         """
         stmt: Select = select(WorkdayEmployee)
 
-        if user_id:
+        if user_id and user_id.strip():
+            clean_uid = user_id.strip().lower()
             stmt = stmt.where(
-                func.lower(func.trim(WorkdayEmployee.user_id)) == user_id.strip().lower()
+                or_(
+                    func.lower(func.trim(WorkdayEmployee.user_id)) == clean_uid,
+                    func.lower(WorkdayEmployee.user_id).like(f"%{clean_uid}%"),
+                )
             )
-        if name:
+        if name and name.strip():
             stmt = stmt.where(
                 func.lower(WorkdayEmployee.full_name).like(f"%{name.strip().lower()}%")
             )
-        if department:
+        if email and email.strip():
+            stmt = stmt.where(
+                func.lower(WorkdayEmployee.email_work).like(f"%{email.strip().lower()}%")
+            )
+        if department and department.strip():
             stmt = stmt.where(
                 func.lower(WorkdayEmployee.department) == department.strip().lower()
             )
-        if division:
+        if division and division.strip():
             stmt = stmt.where(
                 func.lower(WorkdayEmployee.division) == division.strip().lower()
             )
-        if employee_status:
-            stmt = stmt.where(WorkdayEmployee.employee_status == employee_status)
+        if employee_status and employee_status.strip():
+            stmt = stmt.where(
+                func.lower(WorkdayEmployee.employee_status) == employee_status.strip().lower()
+            )
 
-        if search:
+        if search and search.strip():
             search_pattern = f"%{search.strip().lower()}%"
             stmt = stmt.where(
                 or_(
@@ -66,6 +77,8 @@ class EmployeeRepository:
                     func.lower(WorkdayEmployee.full_name).like(search_pattern),
                     func.lower(WorkdayEmployee.email_work).like(search_pattern),
                     func.lower(WorkdayEmployee.department).like(search_pattern),
+                    func.lower(WorkdayEmployee.division).like(search_pattern),
+                    func.lower(WorkdayEmployee.job_title).like(search_pattern),
                 )
             )
 
@@ -78,3 +91,4 @@ class EmployeeRepository:
         items = list(db.execute(paginated_stmt).scalars().all())
 
         return items, total_count
+

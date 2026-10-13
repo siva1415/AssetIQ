@@ -1,8 +1,129 @@
 export type AssetSource = 'BIGFIX' | 'JAMF';
 export type DeviceType = 'Desktop' | 'Laptop' | 'Server';
-export type AssetStatus = 'Active' | 'Need Validation' | 'In Stock' | 'Retired';
+
+// Standardized uppercase asset status values for PostgreSQL & FastAPI
+export const ASSET_STATUSES = {
+  ACTIVE: 'ACTIVE',
+  REVIEW: 'REVIEW',
+  NEED_VALIDATION: 'REVIEW',
+  IN_STOCK: 'IN STOCK',
+  RETIRED: 'RETIRED',
+} as const;
+
+export type StandardAssetStatus = 'ACTIVE' | 'REVIEW' | 'IN STOCK' | 'RETIRED';
+
+// Friendly UI labels mapping to standardized API values
+export const ASSET_STATUS_LABELS: Record<StandardAssetStatus, string> = {
+  ACTIVE: 'Active',
+  REVIEW: 'Review',
+  'IN STOCK': 'In Stock',
+  RETIRED: 'Retired',
+};
+
+// Normalized AssetStatus supporting both exact API enum and casing
+export type AssetStatus =
+  | StandardAssetStatus
+  | 'Active'
+  | 'Review'
+  | 'Need Validation'
+  | 'In Stock'
+  | 'Retired';
+
+export function toStandardAssetStatus(status?: string | null): StandardAssetStatus {
+  if (!status) return ASSET_STATUSES.ACTIVE;
+  const s = status.trim().toUpperCase().replace(/_/g, ' ');
+  if (s === 'ACTIVE') return ASSET_STATUSES.ACTIVE;
+  if (s === 'REVIEW' || s === 'NEED VALIDATION' || s === 'NEEDVALIDATION') return ASSET_STATUSES.REVIEW;
+  if (s === 'IN STOCK' || s === 'INSTOCK') return ASSET_STATUSES.IN_STOCK;
+  if (s === 'RETIRED') return ASSET_STATUSES.RETIRED;
+  return ASSET_STATUSES.ACTIVE;
+}
+
 export type AssignmentType = 'Automatic' | 'Manual' | 'Unassigned';
-export type EOLStatus = 'Active' | 'Nearing EOL' | 'Expired' | 'Unknown';
+
+export const EOL_STATUSES = {
+  ACTIVE: 'ACTIVE',
+  EOL_SOON: 'EOL SOON',
+  NEARING_EOL: 'EOL SOON',
+  EXPIRED: 'EXPIRED',
+  UNKNOWN: 'UNKNOWN',
+} as const;
+
+export type StandardEOLStatus = 'ACTIVE' | 'EOL SOON' | 'EXPIRED' | 'UNKNOWN';
+
+export type EOLStatus =
+  | 'Active'
+  | 'EOL Soon'
+  | 'Nearing EOL'
+  | 'Expired'
+  | 'Unknown'
+  | StandardEOLStatus;
+
+export function toStandardEOLStatus(status?: string | null): StandardEOLStatus {
+  if (!status) return EOL_STATUSES.UNKNOWN;
+  const s = status.trim().toUpperCase().replace(/_/g, ' ');
+  if (s === 'ACTIVE') return EOL_STATUSES.ACTIVE;
+  if (s === 'EOL SOON' || s === 'EOLSOON' || s === 'NEARING EOL' || s === 'NEARINGEOL' || s.startsWith('NEARING')) {
+    return EOL_STATUSES.EOL_SOON;
+  }
+  if (s === 'EXPIRED') return EOL_STATUSES.EXPIRED;
+  if (s === 'UNKNOWN') return EOL_STATUSES.UNKNOWN;
+  return EOL_STATUSES.UNKNOWN;
+}
+
+export function formatEolDate(dateVal?: string | null): string {
+  if (!dateVal) return '—';
+  const str = String(dateVal).trim();
+  if (
+    !str ||
+    str === '—' ||
+    str === 'null' ||
+    str === 'undefined' ||
+    str.toUpperCase() === 'UNKNOWN'
+  ) {
+    return '—';
+  }
+  if (str.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(str)) {
+    return str.slice(0, 10);
+  }
+  try {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+  } catch {
+    // fallback
+  }
+  return str;
+}
+
+/**
+ * Format the days-left text displayed on the second line below the EOL Status badge.
+ * Format:
+ * - ACTIVE: "896d left"
+ * - EOL SOON: "86d left"
+ * - EXPIRED: "-32d left"
+ * - UNKNOWN: "-"
+ * - If status is unknown or days-left value is unavailable, displays "-"
+ */
+export function formatEolDaysLeft(
+  status?: string | null,
+  daysRemaining?: number | null
+): string {
+  const standardStatus = toStandardEOLStatus(status);
+  if (standardStatus === 'UNKNOWN') {
+    return '-';
+  }
+  if (daysRemaining === null || daysRemaining === undefined || isNaN(Number(daysRemaining))) {
+    return '-';
+  }
+  const days = Math.round(Number(daysRemaining));
+  return `${days}d left`;
+}
+
 export type EmployeeStatus = 'Active' | 'Terminated' | 'On Leave';
 export type WorkdayMatchStatus = 'Matched' | 'Not Found in Workday' | 'Admin Account' | 'Unassigned';
 
@@ -115,7 +236,10 @@ export interface Employee {
   job_title: string;
   employee_status: EmployeeStatus;
   manager_username: string | null;
+  manager_user_name?: string | null;
+  managerUsername?: string | null;
   manager_name: string | null;
+  managerName?: string | null;
   location: string;
   hire_date: string;
   assigned_assets_count?: number;
@@ -125,6 +249,7 @@ export interface Employee {
 export interface DashboardSummary {
   total_assets: number;
   active_assets: number;
+  review?: number;
   need_validation: number;
   in_stock: number;
   bigfix_assets: number;
@@ -162,6 +287,7 @@ export interface OperationalStatusItem {
 export interface DepartmentDistributionItem {
   department: string;
   count: number;
+  asset_count: number;
   percentage: number;
 }
 
@@ -184,11 +310,13 @@ export interface FleetKpiMetrics {
   total_assets?: number;
   active: number;
   active_assets?: number;
-  needValidation: number;
+  review?: number;
+  needValidation?: number;
   need_validation?: number;
   inStock: number;
   in_stock?: number;
-  nearingEol: number;
+  eolSoon?: number;
+  nearingEol?: number;
   nearing_eol?: number;
 }
 
@@ -217,6 +345,7 @@ export interface AssetQueryParams {
   page_size?: number;
   search?: string;
   source?: string;
+  devicetype?: string;
   device_type?: string;
   asset_status?: string;
   manufacturer?: string;
@@ -231,7 +360,9 @@ export interface AssetQueryParams {
 export interface EmployeeQueryParams {
   page?: number;
   page_size?: number;
+  size?: number;
   search?: string;
+  q?: string;
   department?: string;
   division?: string;
   employee_status?: string;
@@ -284,8 +415,11 @@ export interface BulkAddAdminUsersResponse {
 
 export interface ReassignAssetRequest {
   user_id: string;
-  managed_by: 'INDIVIDUAL' | 'GROUP';
+  managed_by: 'INDIVIDUAL' | 'GROUP' | string;
   remarks?: string;
+  assigned_username?: string;
+  assignment_type?: 'MANUAL' | 'AUTOMATIC' | string;
+  asset_status?: StandardAssetStatus | string;
 }
 
 export interface ReassignAssetResponse {

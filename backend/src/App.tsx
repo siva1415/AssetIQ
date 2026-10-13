@@ -901,11 +901,18 @@ export default function App() {
 
                   <div className="grid grid-cols-2 gap-4 text-xs">
                     <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-                      <span className="text-slate-400 font-semibold uppercase text-[10px] block">Hardware Telemetry</span>
-                      <p><strong className="text-slate-400">AssetID (PK):</strong> <span className="font-mono text-cyan-300">{selectedAssetDetail.AssetID}</span></p>
-                      <p><strong className="text-slate-400">DeviceType:</strong> <span className="text-white font-medium">{selectedAssetDetail.DeviceType}</span></p>
-                      <p><strong className="text-slate-400">MAC Address:</strong> <span className="font-mono text-white">{selectedAssetDetail.macAddress || 'None'}</span></p>
-                      <p><strong className="text-slate-400">LastDiscoveryDate:</strong> <span className="font-mono text-white">{selectedAssetDetail.LastDiscoveryDate ? new Date(selectedAssetDetail.LastDiscoveryDate).toLocaleString() : 'None'}</span></p>
+                      <span className="text-slate-400 font-semibold uppercase text-[10px] block">Hardware Identification</span>
+                      <p><strong className="text-slate-400">AssetID (PK):</strong> <span className="font-mono text-cyan-300">{selectedAssetDetail.AssetID || selectedAssetDetail.asset_id}</span></p>
+                      <p><strong className="text-slate-400">DeviceType:</strong> <span className="text-white font-medium">{selectedAssetDetail.DeviceType || selectedAssetDetail.devicetype}</span></p>
+                      <p><strong className="text-slate-400">Managed By:</strong> <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                        (selectedAssetDetail.managed_by || selectedAssetDetail.managedBy) === 'GROUP'
+                          ? 'bg-purple-500/10 border border-purple-500/30 text-purple-400'
+                          : 'bg-blue-500/10 border border-blue-500/30 text-blue-400'
+                      }`}>
+                        {selectedAssetDetail.managed_by || selectedAssetDetail.managedBy || 'INDIVIDUAL'}
+                      </span></p>
+                      <p><strong className="text-slate-400">MAC Address:</strong> <span className="font-mono text-white">{selectedAssetDetail.macAddress || selectedAssetDetail.macaddress || 'None'}</span></p>
+                      <p><strong className="text-slate-400">LastDiscoveryDate:</strong> <span className="font-mono text-white">{(selectedAssetDetail.LastDiscoveryDate || selectedAssetDetail.lastreporttime) ? new Date(selectedAssetDetail.LastDiscoveryDate || selectedAssetDetail.lastreporttime).toLocaleString() : 'None'}</span></p>
                       <p><strong className="text-slate-400">Source:</strong> <span className="text-indigo-400 font-bold">{selectedAssetDetail.source}</span></p>
                       <p><strong className="text-slate-400">Remarks:</strong> <span className="text-slate-300 italic">{selectedAssetDetail.remarks || 'None'}</span></p>
                     </div>

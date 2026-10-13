@@ -12,9 +12,9 @@ export const SourceBadge: React.FC<SourceBadgeProps> = ({ source, className = ''
 
   // Enterprise solid color styling:
   // BIGFIX -> Rich enterprise blue
-  // JAMF   -> Rich enterprise purple
+  // JAMF   -> Rich enterprise pink
   const colorClass = isJamf
-    ? 'bg-purple-600 text-white'
+    ? 'bg-pink-600 text-white'
     : isBigFix
     ? 'bg-blue-600 text-white'
     : 'bg-slate-700 text-white';

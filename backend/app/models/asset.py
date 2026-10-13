@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, Column, DateTime, Identity, String
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Identity, String
 from app.db.base import Base
 
 
@@ -10,13 +10,20 @@ class Asset(Base):
     """
     __tablename__ = "assets"
 
+    __table_args__ = (
+        CheckConstraint(
+            "asset_status IN ('ACTIVE', 'REVIEW', 'IN STOCK', 'RETIRED')",
+            name="assets_asset_status_check",
+        ),
+    )
+
     asset_id = Column(BigInteger, Identity(always=False), primary_key=True, autoincrement=True)
     asset_number = Column(String(150), nullable=False, index=True)
-    serial_number = Column(String(100), nullable=False, index=True)
+    serial_number = Column(String(100), nullable=True, index=True)
     source = Column(String(10), nullable=True, index=True)  # BIGFIX or JAMF
-    manufacturer = Column(String(100), nullable=False, index=True)
-    model = Column(String(150), nullable=False, index=True)
-    os_name = Column(String(100), nullable=False)
+    manufacturer = Column(String(100), nullable=True, index=True)
+    model = Column(String(150), nullable=True, index=True)
+    os_name = Column(String(100), nullable=True)
     macaddress = Column(String(50), nullable=True)
     devicetype = Column(String(30), nullable=True, index=True)  # Server or Desktop
     managed_by = Column(String(20), nullable=True)  # GROUP or INDIVIDUAL

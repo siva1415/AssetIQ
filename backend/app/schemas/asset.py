@@ -1,237 +1,177 @@
 from datetime import date, datetime
 from typing import Any, Optional, Union
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from app.schemas.employee import EmployeeSummary
 from app.schemas.eol import EolInfo
 
 
 class AssetResponse(BaseModel):
     """
-    Unified Asset response model supporting both snake_case and camelCase field mappings
-    expected by the frontend across All Assets, Windows, Mac, and Ownership pages.
+    Canonical Asset response model exposing exactly one canonical lowercase
+    property for each logical field without redundant alias duplications.
     """
     # Primary Identifiers
     asset_id: int
-    assetId: Optional[int] = None
-    AssetID: Optional[Union[int, str]] = None
     asset_number: str
-    assetNumber: Optional[str] = None
-    serial_number: str
-    serialNumber: Optional[str] = None
+    serial_number: Optional[str] = None
 
     # Telemetry and Hardware Specs
     source: Optional[str] = None
-    manufacturer: str
-    model: str
-    os_name: str
-    osName: Optional[str] = None
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    os_name: Optional[str] = None
     macaddress: Optional[str] = None
-    macAddress: Optional[str] = None
     devicetype: Optional[str] = None
-    deviceType: Optional[str] = None
-    DeviceType: Optional[str] = None
     managed_by: Optional[str] = None
-    managedBy: Optional[str] = None
 
     # Reporting & Fleet Status
+    assigned_username: Optional[str] = None
     lastreporttime: Optional[datetime] = None
-    lastReportTime: Optional[datetime] = None
-    last_discovery_date: Optional[datetime] = None
-    lastDiscoveryDate: Optional[datetime] = None
-    LastDiscoveryDate: Optional[datetime] = None
     asset_status: Optional[str] = None
-    assetStatus: Optional[str] = None
     assignment_type: Optional[str] = None
-    assignmentType: Optional[str] = None
     remarks: Optional[str] = None
 
     # EOL Lifecycle Governance
     eol_date: Optional[date] = None
-    eolDate: Optional[date] = None
     days_remaining: Optional[int] = None
-    daysRemaining: Optional[int] = None
-    eol_status: str = "Unknown"
-    eolStatus: str = "Unknown"
+    eol_status: str = "UNKNOWN"
     reference_source: Optional[str] = None
-    referenceSource: Optional[str] = None
     eol_info: Optional[EolInfo] = None
-    eolInfo: Optional[EolInfo] = None
 
     # Workday HCM Correlation & Ownership
-    assigned_username: Optional[str] = None
-    assignedUsername: Optional[str] = None
     workday_status: str = "No assigned username"
-    workdayStatus: str = "No assigned username"
     ownership_status: str = "UNASSIGNED"
-    ownershipStatus: str = "UNASSIGNED"
-    correlation_status: str = "UNASSIGNED"
-    correlationStatus: str = "UNASSIGNED"
 
     # Correlated Employee Details (flattened + nested for UI compatibility)
     full_name: Optional[str] = None
-    fullName: Optional[str] = None
-    employee_name: Optional[str] = None
-    employeeName: Optional[str] = None
     employee_user_id: Optional[str] = None
     email_work: Optional[str] = None
-    emailWork: Optional[str] = None
     department: Optional[str] = None
     division: Optional[str] = None
     job_title: Optional[str] = None
-    jobTitle: Optional[str] = None
     employee_status: Optional[str] = None
-    employeeStatus: Optional[str] = None
     manager_name: Optional[str] = None
-    managerName: Optional[str] = None
     manager_user_name: Optional[str] = None
-    managerUserName: Optional[str] = None
     location: Optional[str] = None
     matched_employee: Optional[EmployeeSummary] = None
-    correlated_employee: Optional[EmployeeSummary] = None
-    employee: Optional[EmployeeSummary] = None
 
     # Audit Timestamps
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     last_synced_at: Optional[datetime] = None
 
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True, extra="ignore")
 
     @model_validator(mode="before")
     @classmethod
-    def populate_aliases_and_mappings(cls, data: Any) -> Any:
+    def normalize_aliases_to_canonical(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            # 1. Sync Asset ID
-            aid = data.get("asset_id", data.get("assetId"))
-            if aid is not None:
-                data["asset_id"] = aid
-                data["assetId"] = aid
-                data["AssetID"] = aid
+            # Normalize incoming dictionary keys to canonical properties if canonical is missing
+            if data.get("asset_id") is None and data.get("assetId") is not None:
+                data["asset_id"] = data["assetId"]
+            elif data.get("asset_id") is None and data.get("AssetID") is not None:
+                data["asset_id"] = data["AssetID"]
 
-            num = data.get("asset_number", data.get("assetNumber"))
-            if num is not None:
-                data["asset_number"] = num
-                data["assetNumber"] = num
+            if data.get("asset_number") is None and data.get("assetNumber") is not None:
+                data["asset_number"] = data["assetNumber"]
 
-            sn = data.get("serial_number", data.get("serialNumber"))
-            if sn is not None:
-                data["serial_number"] = sn
-                data["serialNumber"] = sn
+            if data.get("serial_number") is None and data.get("serialNumber") is not None:
+                data["serial_number"] = data["serialNumber"]
 
-            osn = data.get("os_name", data.get("osName"))
-            if osn is not None:
-                data["os_name"] = osn
-                data["osName"] = osn
+            if data.get("os_name") is None and data.get("osName") is not None:
+                data["os_name"] = data["osName"]
 
-            # 2. Sync Device Type (devicetype -> deviceType -> DeviceType)
-            dtype = data.get("devicetype") or data.get("deviceType") or data.get("DeviceType")
-            data["devicetype"] = dtype
-            data["deviceType"] = dtype
-            data["DeviceType"] = dtype
+            if data.get("macaddress") is None and data.get("macAddress") is not None:
+                data["macaddress"] = data["macAddress"]
 
-            # 3. Sync MAC Address (macaddress -> macAddress)
-            mac = data.get("macaddress") or data.get("macAddress")
-            data["macaddress"] = mac
-            data["macAddress"] = mac
+            if data.get("devicetype") is None:
+                data["devicetype"] = data.get("deviceType") or data.get("DeviceType")
 
-            # 4. Sync Discovery Date (lastreporttime -> lastDiscoveryDate -> LastDiscoveryDate)
-            lrt = (
-                data.get("lastreporttime")
-                or data.get("lastReportTime")
-                or data.get("last_discovery_date")
-                or data.get("lastDiscoveryDate")
-                or data.get("LastDiscoveryDate")
-            )
-            data["lastreporttime"] = lrt
-            data["lastReportTime"] = lrt
-            data["last_discovery_date"] = lrt
-            data["lastDiscoveryDate"] = lrt
-            data["LastDiscoveryDate"] = lrt
+            if data.get("managed_by") is None and data.get("managedBy") is not None:
+                data["managed_by"] = data["managedBy"]
 
-            # 5. Sync Asset & Assignment Status
-            astatus = data.get("asset_status") or data.get("assetStatus")
-            data["asset_status"] = astatus
-            data["assetStatus"] = astatus
+            if data.get("assigned_username") is None and data.get("assignedUsername") is not None:
+                data["assigned_username"] = data["assignedUsername"]
 
-            atype = data.get("assignment_type") or data.get("assignmentType")
-            data["assignment_type"] = atype
-            data["assignmentType"] = atype
+            if data.get("lastreporttime") is None:
+                data["lastreporttime"] = (
+                    data.get("lastReportTime")
+                    or data.get("last_discovery_date")
+                    or data.get("lastDiscoveryDate")
+                    or data.get("LastDiscoveryDate")
+                )
 
-            mb = data.get("managed_by") or data.get("managedBy")
-            data["managed_by"] = mb
-            data["managedBy"] = mb
+            if data.get("asset_status") is None and data.get("assetStatus") is not None:
+                data["asset_status"] = data["assetStatus"]
 
-            # 6. Sync EOL Status & Dates
-            edate = data.get("eol_date") or data.get("eolDate")
-            data["eol_date"] = edate
-            data["eolDate"] = edate
+            if data.get("manufacturer") is None and data.get("Manufacturer") is not None:
+                data["manufacturer"] = data["Manufacturer"]
 
-            drem = data.get("days_remaining") if data.get("days_remaining") is not None else data.get("daysRemaining")
-            data["days_remaining"] = drem
-            data["daysRemaining"] = drem
+            if data.get("model") is None and data.get("Model") is not None:
+                data["model"] = data["Model"]
 
-            estatus = data.get("eol_status") or data.get("eolStatus") or "Unknown"
-            data["eol_status"] = estatus
-            data["eolStatus"] = estatus
+            if data.get("source") is None and data.get("Source") is not None:
+                data["source"] = data["Source"]
 
-            ref_src = data.get("reference_source") or data.get("referenceSource")
-            data["reference_source"] = ref_src
-            data["referenceSource"] = ref_src
+            if data.get("last_synced_at") is None and data.get("lastSyncedAt") is not None:
+                data["last_synced_at"] = data["lastSyncedAt"]
 
-            # Sync eol_info / eolInfo
-            einfo = data.get("eol_info") or data.get("eolInfo")
-            if einfo:
-                data["eol_info"] = einfo
-                data["eolInfo"] = einfo
+            if data.get("assignment_type") is None and data.get("assignmentType") is not None:
+                data["assignment_type"] = data["assignmentType"]
 
-            # 7. Sync Workday Ownership & Status
-            user = data.get("assigned_username") or data.get("assignedUsername")
-            data["assigned_username"] = user
-            data["assignedUsername"] = user
+            if data.get("eol_date") is None and data.get("eolDate") is not None:
+                data["eol_date"] = data["eolDate"]
 
-            wstatus = data.get("workday_status") or data.get("workdayStatus") or "No assigned username"
-            data["workday_status"] = wstatus
-            data["workdayStatus"] = wstatus
+            if data.get("days_remaining") is None and data.get("daysRemaining") is not None:
+                data["days_remaining"] = data["daysRemaining"]
 
-            ostatus = data.get("ownership_status") or data.get("ownershipStatus") or data.get("correlation_status") or "UNASSIGNED"
-            data["ownership_status"] = ostatus
-            data["ownershipStatus"] = ostatus
-            data["correlation_status"] = ostatus
-            data["correlationStatus"] = ostatus
+            if data.get("eol_status") is None and data.get("eolStatus") is not None:
+                data["eol_status"] = data["eolStatus"]
 
-            # Sync Employee details
-            fname = data.get("full_name") or data.get("fullName") or data.get("employee_name") or data.get("employeeName")
-            data["full_name"] = fname
-            data["fullName"] = fname
-            data["employee_name"] = fname
-            data["employeeName"] = fname
+            if data.get("reference_source") is None and data.get("referenceSource") is not None:
+                data["reference_source"] = data["referenceSource"]
 
-            ew = data.get("email_work") or data.get("emailWork")
-            data["email_work"] = ew
-            data["emailWork"] = ew
+            if data.get("eol_info") is None and data.get("eolInfo") is not None:
+                data["eol_info"] = data["eolInfo"]
 
-            jt = data.get("job_title") or data.get("jobTitle")
-            data["job_title"] = jt
-            data["jobTitle"] = jt
+            if data.get("workday_status") is None and data.get("workdayStatus") is not None:
+                data["workday_status"] = data["workdayStatus"]
 
-            es = data.get("employee_status") or data.get("employeeStatus")
-            data["employee_status"] = es
-            data["employeeStatus"] = es
+            if data.get("ownership_status") is None:
+                data["ownership_status"] = (
+                    data.get("ownershipStatus")
+                    or data.get("correlation_status")
+                    or data.get("correlationStatus")
+                    or "UNASSIGNED"
+                )
 
-            mn = data.get("manager_name") or data.get("managerName")
-            data["manager_name"] = mn
-            data["managerName"] = mn
+            if data.get("full_name") is None:
+                data["full_name"] = (
+                    data.get("fullName")
+                    or data.get("employee_name")
+                    or data.get("employeeName")
+                )
 
-            mun = data.get("manager_user_name") or data.get("managerUserName")
-            data["manager_user_name"] = mun
-            data["managerUserName"] = mun
+            if data.get("email_work") is None and data.get("emailWork") is not None:
+                data["email_work"] = data["emailWork"]
 
-            # Sync employee nested object
-            emp = data.get("matched_employee") or data.get("correlated_employee") or data.get("employee")
-            if emp:
-                data["matched_employee"] = emp
-                data["correlated_employee"] = emp
-                data["employee"] = emp
+            if data.get("job_title") is None and data.get("jobTitle") is not None:
+                data["job_title"] = data["jobTitle"]
+
+            if data.get("employee_status") is None and data.get("employeeStatus") is not None:
+                data["employee_status"] = data["employeeStatus"]
+
+            if data.get("manager_name") is None and data.get("managerName") is not None:
+                data["manager_name"] = data["managerName"]
+
+            if data.get("manager_user_name") is None and data.get("managerUserName") is not None:
+                data["manager_user_name"] = data["managerUserName"]
+
+            if data.get("matched_employee") is None:
+                data["matched_employee"] = (
+                    data.get("correlated_employee")
+                    or data.get("employee")
+                )
 
         return data
 
@@ -242,3 +182,90 @@ class AssetDetailResponse(AssetResponse):
     and computed EOL references.
     """
     pass
+
+
+class AssetAssignmentRequest(BaseModel):
+    """
+    Request model for assigning, reassigning, or updating an asset.
+    Accommodates snake_case, camelCase, and alternate parameter names from the UI popup.
+    """
+    asset_id: Optional[int] = None
+    assetId: Optional[int] = None
+    AssetID: Optional[Union[int, str]] = None
+
+    # Telemetry and Hardware Specs
+    serial_number: Optional[str] = None
+    source: Optional[str] = None
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    os_name: Optional[str] = None
+    macaddress: Optional[str] = None
+    devicetype: Optional[str] = None
+    lastreporttime: Optional[datetime] = None
+    last_synced_at: Optional[datetime] = None
+
+    managed_by: Optional[str] = None
+    managedBy: Optional[str] = None
+    management_group: Optional[str] = None
+    managementGroup: Optional[str] = None
+
+    assigned_username: Optional[str] = None
+    assignedUsername: Optional[str] = None
+    user_id: Optional[str] = None
+    userId: Optional[str] = None
+    username: Optional[str] = None
+    employee_id: Optional[int] = None
+    employeeId: Optional[int] = None
+
+    asset_status: Optional[str] = None
+    assetStatus: Optional[str] = None
+    status: Optional[str] = None
+
+    assignment_type: Optional[str] = None
+    assignmentType: Optional[str] = None
+
+    remarks: Optional[str] = None
+    remark: Optional[str] = None
+    notes: Optional[str] = None
+    comment: Optional[str] = None
+
+    @field_validator("asset_status", "assetStatus", "status", mode="after")
+    @classmethod
+    def validate_asset_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        allowed_statuses = {"ACTIVE", "REVIEW", "IN STOCK", "RETIRED"}
+        if v not in allowed_statuses:
+            raise ValueError(
+                f"Invalid asset_status '{v}'. Allowed values are: 'ACTIVE', 'REVIEW', 'IN STOCK', 'RETIRED'"
+            )
+        return v
+
+    @field_validator("assignment_type", "assignmentType", mode="after")
+    @classmethod
+    def validate_assignment_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        clean = v.strip().upper()
+        if clean in ("AUTO", "MANUAL"):
+            return clean
+        raise ValueError(
+            f"Invalid assignment_type '{v}'. Allowed values are: 'AUTO', 'MANUAL'"
+        )
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+
+class AssetUpdateRequest(AssetAssignmentRequest):
+    """
+    Request model for partial or full updates of asset records.
+    """
+    pass
+
+
+class AssetCreateRequest(AssetAssignmentRequest):
+    """
+    Request model for creating an asset with optional/nullable fields.
+    """
+    asset_number: Optional[str] = None
+

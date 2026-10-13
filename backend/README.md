@@ -316,6 +316,26 @@ pytest --cov=app -v
 
 ---
 
+### E.2 Fleet Operational Status Breakdown
+`GET /api/dashboard/operational-status`
+
+**Example Response (200 OK):**
+```json
+{
+  "active": 70,
+  "needValidation": 15,
+  "inStock": 5,
+  "total": 90,
+  "by_status": {
+    "Active": 70,
+    "Need Validation": 15,
+    "InStock": 5
+  }
+}
+```
+
+---
+
 ### F. Paginated Asset Inventory
 `GET /api/assets?page=1&page_size=25&source=BIGFIX&asset_status=Active`
 

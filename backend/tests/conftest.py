@@ -129,7 +129,7 @@ def db_session() -> Session:
     )
     session.add_all([eol1, eol2, eol3])
 
-    # 4. Seed Assets
+    # 4. Seed Assets (using migrated uppercase asset_status compliant with assets_asset_status_check)
     asset1 = Asset(
         asset_id=1,
         asset_number="AST-1001",
@@ -142,7 +142,7 @@ def db_session() -> Session:
         devicetype="Desktop",
         managed_by="INDIVIDUAL",
         assigned_username="  JOHNDOE  ",  # tests uppercase + whitespace
-        asset_status="Active",
+        asset_status="ACTIVE",
         assignment_type="AUTO",
         remarks="Primary developer laptop",
         lastreporttime=now_utc,
@@ -160,7 +160,7 @@ def db_session() -> Session:
         devicetype="Desktop",
         managed_by="INDIVIDUAL",
         assigned_username="sarahconnor",
-        asset_status="Need Validation",
+        asset_status="REVIEW",
         assignment_type="MANUAL",
         remarks="Needs security check",
         lastreporttime=now_utc,
@@ -178,7 +178,7 @@ def db_session() -> Session:
         devicetype="Server",
         managed_by="GROUP",
         assigned_username=None,  # Unassigned
-        asset_status="InStock",
+        asset_status="IN STOCK",
         assignment_type=None,
         remarks=None,
         lastreporttime=now_utc,
@@ -196,7 +196,7 @@ def db_session() -> Session:
         devicetype="Desktop",
         managed_by="INDIVIDUAL",
         assigned_username="admin_local",  # Not in Workday
-        asset_status="Active",
+        asset_status="ACTIVE",
         assignment_type="MANUAL",
         remarks=None,
         lastreporttime=now_utc,
@@ -214,7 +214,7 @@ def db_session() -> Session:
         devicetype="Desktop",
         managed_by="INDIVIDUAL",
         assigned_username="alexturner",  # Inactive employee in Workday
-        asset_status="Active",
+        asset_status="ACTIVE",
         assignment_type="AUTO",
         remarks=None,
         lastreporttime=now_utc,
@@ -232,7 +232,7 @@ def db_session() -> Session:
         devicetype="Server",
         managed_by="GROUP",
         assigned_username="   ",  # blank string -> Unassigned
-        asset_status="InStock",
+        asset_status="IN STOCK",
         assignment_type=None,
         remarks=None,
         lastreporttime=now_utc,

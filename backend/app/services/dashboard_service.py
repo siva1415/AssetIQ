@@ -1,17 +1,21 @@
 from datetime import date, timedelta
-from typing import Optional
+from typing import List, Optional
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.asset import Asset
 from app.models.device_eol_reference import DeviceEolReference
 from app.models.workday_employee import WorkdayEmployee
+from app.repositories.eol_repository import EolRepository
 from app.schemas.dashboard import (
     DashboardSummaryResponse,
     AssetsBySourceResponse,
+    SourceSummaryItem,
     OwnershipSummaryResponse,
     DepartmentSummaryResponse,
     DepartmentSummaryItem,
+    OperationalStatusResponse,
+    OperationalStatusItem,
 )
 
 
@@ -25,22 +29,10 @@ class DashboardService:
     @staticmethod
     def _get_deduplicated_eol_subquery():
         """
-        Deduplicates EOL reference dates by normalized manufacturer and model.
+        Deduplicates EOL reference dates by exact manufacturer and model.
         Guarantees that at most one reference record is joined per hardware model.
         """
-        return (
-            select(
-                func.lower(func.trim(DeviceEolReference.manufacturer)).label("mfg"),
-                func.lower(func.trim(DeviceEolReference.model)).label("mdl"),
-                func.max(DeviceEolReference.eol_date).label("eol_date"),
-            )
-            .where(DeviceEolReference.eol_date.is_not(None))
-            .group_by(
-                func.lower(func.trim(DeviceEolReference.manufacturer)),
-                func.lower(func.trim(DeviceEolReference.model)),
-            )
-            .subquery()
-        )
+        return EolRepository.get_eol_subquery()
 
     @classmethod
     def _apply_scope_and_filters(
@@ -85,10 +77,10 @@ class DashboardService:
                 stmt = stmt.where(
                     func.lower(func.trim(Asset.asset_status)).in_(["instock", "in stock", "in_stock"])
                 )
-            elif clean_status in ["need validation", "needvalidation", "need_validation"]:
+            elif clean_status in ["review", "need validation", "needvalidation", "need_validation"]:
                 stmt = stmt.where(
                     func.lower(func.trim(Asset.asset_status)).in_(
-                        ["need validation", "needvalidation", "need_validation"]
+                        ["review", "need validation", "needvalidation", "need_validation"]
                     )
                 )
             else:
@@ -109,7 +101,26 @@ class DashboardService:
             )
 
         if assignment_type and assignment_type.strip().upper() != "ALL":
-            stmt = stmt.where(func.upper(Asset.assignment_type) == assignment_type.strip().upper())
+            clean_type = assignment_type.strip().upper()
+            if clean_type in (
+                "AUTO",
+                "AUTOMATIC",
+                "AUTOMATIC MATCH",
+                "AUTOMATIC_MATCH",
+                "AUTO MATCH",
+                "AUTO_MATCH",
+            ):
+                stmt = stmt.where(func.upper(Asset.assignment_type) == "AUTO")
+            elif clean_type in (
+                "MANUAL",
+                "MANUAL ASSIGNMENT",
+                "MANUAL_ASSIGNMENT",
+                "MANUAL MATCH",
+                "MANUAL_MATCH",
+            ):
+                stmt = stmt.where(func.upper(Asset.assignment_type) == "MANUAL")
+            else:
+                stmt = stmt.where(func.upper(Asset.assignment_type) == clean_type)
 
         if is_unassigned is True:
             stmt = stmt.where(
@@ -175,7 +186,7 @@ class DashboardService:
                     case(
                         (
                             func.lower(func.trim(Asset.asset_status)).in_(
-                                ["need validation", "needvalidation", "need_validation"]
+                                ["review", "need validation", "needvalidation", "need_validation"]
                             ),
                             1,
                         ),
@@ -230,8 +241,7 @@ class DashboardService:
             .select_from(Asset)
             .outerjoin(
                 eol_sub,
-                (func.lower(func.trim(Asset.manufacturer)) == eol_sub.c.mfg)
-                & (func.lower(func.trim(Asset.model)) == eol_sub.c.mdl),
+                EolRepository.get_eol_join_condition(eol_sub),
             )
         )
 
@@ -288,19 +298,36 @@ class DashboardService:
 
     @classmethod
     def get_assets_by_source(cls, db: Session, source: Optional[str] = None) -> AssetsBySourceResponse:
-        stmt = select(func.count(Asset.asset_id))
+        """
+        Calculates asset counts grouped by discovery source (BIGFIX, JAMF, and OTHER/unknown).
+        Fetches counts from PostgreSQL assets table grouped by actual source values.
+        Accurately classifies trimmed case-insensitive 'BIGFIX' and 'JAMF',
+        while routing NULL, blank, or unrecognized sources to other_count.
+        """
+        stmt = select(
+            func.upper(func.trim(Asset.source)).label("norm_source"),
+            func.count(Asset.asset_id).label("source_count"),
+        )
         stmt = cls._apply_scope_and_filters(stmt, source=source)
-        total_assets = db.execute(stmt).scalar() or 0
+        stmt = stmt.group_by(func.upper(func.trim(Asset.source)))
 
-        bigfix_stmt = select(func.count(Asset.asset_id)).where(func.upper(Asset.source) == "BIGFIX")
-        bigfix_stmt = cls._apply_scope_and_filters(bigfix_stmt, source=source)
-        bigfix_count = db.execute(bigfix_stmt).scalar() or 0
+        rows = db.execute(stmt).fetchall()
 
-        jamf_stmt = select(func.count(Asset.asset_id)).where(func.upper(Asset.source) == "JAMF")
-        jamf_stmt = cls._apply_scope_and_filters(jamf_stmt, source=source)
-        jamf_count = db.execute(jamf_stmt).scalar() or 0
+        bigfix_count = 0
+        jamf_count = 0
+        other_count = 0
 
-        other_count = max(0, total_assets - (bigfix_count + jamf_count))
+        for row in rows:
+            src = row.norm_source
+            cnt = int(row.source_count or 0)
+            if src == "BIGFIX":
+                bigfix_count += cnt
+            elif src == "JAMF":
+                jamf_count += cnt
+            else:
+                other_count += cnt
+
+        total_assets = bigfix_count + jamf_count + other_count
 
         return AssetsBySourceResponse.model_validate({
             "bigfix_count": bigfix_count,
@@ -349,6 +376,14 @@ class DashboardService:
         db: Session,
         source: Optional[str] = None,
         scope: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        devicetype: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        search: Optional[str] = None,
     ) -> DepartmentSummaryResponse:
         """
         Calculates department-level asset distribution by joining assets with workday_employees.
@@ -408,7 +443,19 @@ class DashboardService:
             )
         )
 
-        stmt = cls._apply_scope_and_filters(stmt, source=source, scope=scope)
+        stmt = cls._apply_scope_and_filters(
+            stmt,
+            source=source,
+            scope=scope,
+            asset_status=asset_status,
+            devicetype=devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=assignment_type,
+            is_unassigned=is_unassigned,
+            search=search,
+        )
         rows = db.execute(stmt).all()
 
         dept_groups: dict[str, dict] = {}
@@ -436,7 +483,7 @@ class DashboardService:
             status_clean = (row.asset_status or "").strip().lower()
             if status_clean == "active":
                 grp["active_assets"] += 1
-            elif status_clean in ["need validation", "needvalidation", "need_validation"]:
+            elif status_clean in ["review", "need validation", "needvalidation", "need_validation"]:
                 grp["need_validation_assets"] += 1
             elif status_clean in ["instock", "in stock", "in_stock"]:
                 grp["in_stock_assets"] += 1
@@ -474,3 +521,90 @@ class DashboardService:
             "total_departments": total_departments,
             "total_assets": total_assets,
         })
+
+    @classmethod
+    def get_operational_status(
+        cls,
+        db: Session,
+        source: Optional[str] = None,
+        scope: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        devicetype: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        search: Optional[str] = None,
+    ) -> List[OperationalStatusItem]:
+        """
+        Calculates counts grouped by operational status (ACTIVE, REVIEW, IN STOCK, RETIRED)
+        from actual PostgreSQL records in the assets table.
+        Normalizes legacy values (e.g. 'NEED VALIDATION' -> 'REVIEW') and case variants.
+        Counts each asset exactly once using mutually exclusive conditional aggregations.
+        Explicitly excludes NULL and unrecognized statuses from canonical buckets.
+        Returns a consistent record with numeric count (0 if no matching records) for all 4 supported statuses.
+        """
+        stmt = select(
+            func.count(
+                case(
+                    (func.lower(func.trim(Asset.asset_status)) == "active", 1),
+                    else_=None,
+                )
+            ).label("active_count"),
+            func.count(
+                case(
+                    (
+                        func.lower(func.trim(Asset.asset_status)).in_(
+                            ["review", "need validation", "needvalidation", "need_validation"]
+                        ),
+                        1,
+                    ),
+                    else_=None,
+                )
+            ).label("review_count"),
+            func.count(
+                case(
+                    (
+                        func.lower(func.trim(Asset.asset_status)).in_(
+                            ["instock", "in stock", "in_stock"]
+                        ),
+                        1,
+                    ),
+                    else_=None,
+                )
+            ).label("in_stock_count"),
+            func.count(
+                case(
+                    (func.lower(func.trim(Asset.asset_status)) == "retired", 1),
+                    else_=None,
+                )
+            ).label("retired_count"),
+        ).select_from(Asset)
+
+        stmt = cls._apply_scope_and_filters(
+            stmt,
+            source=source,
+            scope=scope,
+            asset_status=asset_status,
+            devicetype=devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=assignment_type,
+            is_unassigned=is_unassigned,
+            search=search,
+        )
+        row = db.execute(stmt).first()
+
+        active = int(row.active_count or 0) if row else 0
+        review = int(row.review_count or 0) if row else 0
+        in_stock = int(row.in_stock_count or 0) if row else 0
+        retired = int(row.retired_count or 0) if row else 0
+
+        return [
+            OperationalStatusItem(status="ACTIVE", count=active),
+            OperationalStatusItem(status="REVIEW", count=review),
+            OperationalStatusItem(status="IN STOCK", count=in_stock),
+            OperationalStatusItem(status="RETIRED", count=retired),
+        ]

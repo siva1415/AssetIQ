@@ -2,6 +2,7 @@ import React from 'react';
 import { X, User, Mail, Briefcase, MapPin, Calendar, Laptop, Monitor, AlertCircle } from 'lucide-react';
 import { Employee, Asset } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
+import { DeviceTypeIcon } from '../common/DeviceTypeIcon';
 
 interface EmployeeDetailDrawerProps {
   employee: Employee | null;
@@ -141,11 +142,7 @@ export const EmployeeDetailDrawer: React.FC<EmployeeDetailDrawerProps> = ({
                     >
                       <div className="flex items-start justify-between gap-2 mb-2">
                         <div className="flex items-center gap-2">
-                          {asset.device_type === 'Laptop' ? (
-                            <Laptop className="w-4 h-4 text-blue-600" />
-                          ) : (
-                            <Monitor className="w-4 h-4 text-indigo-600" />
-                          )}
+                          <DeviceTypeIcon type={asset.devicetype || asset.device_type} className="w-4 h-4 shrink-0" />
                           <div>
                             <span className="font-mono font-bold text-slate-900 text-xs">
                               {asset.asset_number}
@@ -156,7 +153,7 @@ export const EmployeeDetailDrawer: React.FC<EmployeeDetailDrawerProps> = ({
                           </div>
                         </div>
 
-                        <StatusBadge status={asset.asset_status} />
+                        <StatusBadge status={asset.asset_status} type="asset_status" />
                       </div>
 
                       <div className="text-xs text-slate-700 font-medium mb-1">
@@ -168,10 +165,9 @@ export const EmployeeDetailDrawer: React.FC<EmployeeDetailDrawerProps> = ({
                         <span>·</span>
                         <span>OS: <span className="text-slate-700">{asset.os_name}</span></span>
                         <span>·</span>
-                        <span>
-                          EOL: <strong className={asset.days_remaining && asset.days_remaining <= 90 ? 'text-amber-600' : 'text-emerald-700'}>
-                            {asset.calculated_eol_status}
-                          </strong>
+                        <span className="inline-flex items-center gap-1">
+                          <span>EOL:</span>
+                          <StatusBadge status={asset.eol_status || 'UNKNOWN'} type="eol_status" />
                         </span>
                       </div>
 

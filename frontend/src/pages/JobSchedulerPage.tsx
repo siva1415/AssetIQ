@@ -177,7 +177,7 @@ export const JobSchedulerPage: React.FC = () => {
       </div>
 
       {/* Jobs Table */}
-      <div className="p-5 bg-white rounded-lg border border-slate-200 space-y-4 shadow-2xs">
+      <div className="p-3 sm:p-5 bg-white rounded-lg border border-slate-200 space-y-4 shadow-2xs w-full">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-bold text-slate-900">Configured Synchronization Tasks</h3>
@@ -185,17 +185,17 @@ export const JobSchedulerPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto w-full">
           <table className="w-full text-left text-xs border-collapse">
-            <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold select-none">
+            <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold select-none text-[11px] sm:text-xs">
               <tr>
-                <th className="py-2.5 px-3">Job Name &amp; Connector</th>
-                <th className="py-2.5 px-3">Schedule Cadence</th>
-                <th className="py-2.5 px-3">Status</th>
-                <th className="py-2.5 px-3">Last Result</th>
-                <th className="py-2.5 px-3">Records Ingested</th>
-                <th className="py-2.5 px-3">Last Run Time</th>
-                <th className="py-2.5 px-3 text-right">Actions</th>
+                <th className="py-2.5 px-2 sm:px-3">Job Name &amp; Connector</th>
+                <th className="py-2.5 px-2 sm:px-3">Schedule Cadence</th>
+                <th className="py-2.5 px-2 sm:px-3">Status</th>
+                <th className="py-2.5 px-2 sm:px-3">Last Result</th>
+                <th className="py-2.5 px-2 sm:px-3">Records Ingested</th>
+                <th className="py-2.5 px-2 sm:px-3">Last Run Time</th>
+                <th className="py-2.5 px-2 sm:px-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
