@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AssetIQ Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:#f8f9fb; --card:#ffffff; --text:#0f172a; --muted:#64748b; --line:#e2e8f0; --grid:#e8ecf2;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:"Plus Jakarta Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size:14px; }
+  .page { max-width:1600px; margin:0 auto; padding:32px; }
+
+  /* ---------- KPI tiles ---------- */
+  .tiles { display:grid; grid-template-columns:repeat(5, 1fr); gap:16px; margin-bottom:24px; }
+  .tile { border:1px solid var(--line); border-radius:12px; padding:18px; background:var(--card); }
+  .tile .top { display:flex; justify-content:space-between; align-items:center; }
+  .tile .label { font-size:13px; font-weight:500; }
+  .tile .icon { width:32px; height:32px; border-radius:8px; display:grid; place-items:center; }
+  .tile .icon svg { width:16px; height:16px; }
+  .tile .value { font-size:26px; font-weight:700; margin:14px 0 8px; }
+  .tile .sub { font-size:12px; color:var(--muted); }
+  .t-total  { border-color:#bfd3fb; }                      .t-total .icon  { background:#eef2f7; color:#475569; }
+  .t-active { border-color:#a7e3c7; background:#fbfffd; }  .t-active .icon { background:#dcf5e8; color:#059669; }  .t-active .value { color:#065f46; }
+  .t-warn   { border-color:#f6d77a; background:#fffef9; }  .t-warn .icon   { background:#fdf1c8; color:#d97706; }  .t-warn .value   { color:#78350f; }
+  .t-stock  { border-color:#c9d6f3; }                      .t-stock .icon  { background:#eef2f7; color:#475569; }
+  .t-emp    { border-color:#c9d6f3; }                      .t-emp .icon    { background:#eef2f7; color:#475569; }
+
+  /* ---------- chart cards ---------- */
+  .row { display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px 18px 18px; min-width:0; }
+  .card h3 { margin:0 0 6px; font-size:15px; font-weight:700; }
+  .card p { margin:0 0 14px; font-size:13px; color:var(--muted); }
+  .box { position:relative; height:290px; }
+  .box.wide { height:260px; }
+
+  .legend { display:flex; justify-content:center; gap:18px; margin-top:12px; font-size:13px; }
+  .legend span { display:inline-flex; align-items:center; gap:7px; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .legend2 { display:grid; grid-template-columns:1fr 1fr; gap:8px 28px; margin-top:12px; font-size:13px; }
+  .legend2 div { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .legend2 span { display:inline-flex; align-items:center; gap:7px; }
+  .legend2 b { font-weight:600; }
+
+  /* ---------- source summary table ---------- */
+  .tcard { margin-top:16px; }
+  .twrap { overflow-x:auto; }
+  table.sum { width:100%; border-collapse:collapse; font-size:13px; min-width:900px; }
+  table.sum th, table.sum td { padding:12px 14px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap; }
+  table.sum th:first-child, table.sum td:first-child { text-align:left; }
+  table.sum thead tr.grp th { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:700; text-align:center; border-bottom:0; padding-bottom:4px; }
+  table.sum thead tr.grp th.g { border-bottom:2px solid var(--line); }
+  table.sum thead tr.cols th { font-size:12px; font-weight:600; color:var(--muted); background:#fafbfd; }
+  table.sum thead tr.cols th, table.sum td.sep, table.sum th.sep { border-left:1px solid var(--line); }
+  table.sum thead tr.cols th:first-child { border-left:0; }
+  table.sum tbody tr:hover { background:#f8faff; }
+  table.sum td.src { font-weight:700; }
+  table.sum td.src i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:9px; }
+  table.sum td.zero { color:#cbd5e1; }
+  table.sum tfoot td { font-weight:700; background:#fafbfd; border-bottom:0; }
+  .num { font-variant-numeric:tabular-nums; }
+  .badge { display:inline-block; min-width:26px; padding:2px 8px; border-radius:20px; font-weight:600; text-align:center; }
+  .b-green { background:#dcf5e8; color:#047857; } .b-amber { background:#fdf1c8; color:#92400e; }
+  .b-red { background:#fde2e2; color:#b91c1c; }   .b-grey { background:#eef2f7; color:#475569; }
+  .b-warn { background:#fdf1c8; color:#92400e; }
+  .bar { display:inline-block; vertical-align:middle; width:70px; height:6px; border-radius:6px; background:#eef2f7; margin-left:10px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:#16a34a; }
+
+  @media (max-width:1100px) { .tiles { grid-template-columns:repeat(3, 1fr); } .row { grid-template-columns:1fr 1fr; } }
+  @media (max-width:700px)  { .page { padding:16px; } .tiles { grid-template-columns:1fr 1fr; } .row { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="row">
+    <div class="card">
+      <h3>Assets by Source</h3><p>Discovery platform telemetry (BigFix vs Jamf Pro)</p>
+      <div class="box"><canvas id="cSource"></canvas></div>
+      <div class="legend" id="lgSource"></div>
+    </div>
+    <div class="card">
+      <h3>EOL Exposure by Hardware Model</h3><p>Models past or nearing end of life (bar = assets affected)</p>
+      <div class="box" id="boxModel"><canvas id="cModel"></canvas></div>
+      <div class="legend" id="lgModel"></div>
+    </div>
+    <div class="card">
+      <h3>EOL Status Distribution</h3><p>Hardware lifecycle support &amp; expiration posture</p>
+      <div class="box"><canvas id="cEol"></canvas></div>
+      <div class="legend2" id="lgEol"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Assets by Department</h3><p>Organizational distribution across business units</p>
+    <div class="box wide"><canvas id="cDept"></canvas></div>
+  </div>
+
+  <div class="card tcard">
+    <h3>Source Summary</h3><p>BigFix vs Jamf Pro: inventory, assignment and end-of-life posture</p>
+    <div class="twrap"><table class="sum" id="tSum"></table></div>
+  </div>
+
+</div>
+
+<script>
+/* =====================================================================
+   SAMPLE DATA - replace `assets` with rows from your API / SQL.
+   Needed fields: source, status, manufacturer, model, eol_days (null if unknown), dept (owner's Workday dept or null), owner
+   ===================================================================== */
+const DEPTS = ['Engineering','Engineering','Engineering','Engineering','Engineering','Finance','Finance','Marketing','Marketing','IT Operations','IT Operations','Sales','Sales','Human Resources'];
+const ownerSeq = [0,1,2,3,4,0,1, 5,6, 7,8, 9,10, 11,12, 13,13];          // 17 assets with a Workday-matched owner
+const statuses = ['ACTIVE','ACTIVE','REVIEW','ACTIVE','ACTIVE','REVIEW','ACTIVE','ACTIVE','ACTIVE','ACTIVE','ACTIVE','REVIEW','ACTIVE','ACTIVE','ACTIVE','REVIEW','ACTIVE','REVIEW','REVIEW','IN STOCK','IN STOCK','REVIEW'];   // ACTIVE | REVIEW | IN STOCK | RETIRED
+// EOL Management reference, one entry per hardware model: days until EOL from today.
+// A model that is missing here has no EOL record => UNKNOWN.
+const EOL_REF = {
+  'Dell|OptiPlex 7010':720, 'Dell|PowerEdge R650':1200, 'Lenovo|ThinkCentre M90q':400, 'Lenovo|ThinkSystem SR650':380,
+  'HP|EliteDesk 800 G9':45, 'HP|ProDesk 600 G6':-30,
+  'Apple|Mac mini M2':900, 'Apple|Mac Studio M2':30, 'Apple|iMac 24 M3':500, 'Apple|Mac mini M1':-90
+};
+const eolDaysOf = k => (k in EOL_REF) ? EOL_REF[k] : null;
+// Model of each sample asset (first 14 = BigFix, last 8 = Jamf)
+const modelOf = [
+  'Dell|OptiPlex 7010','Lenovo|ThinkCentre M90q','Dell|PowerEdge R650','HP|EliteDesk 800 G9','Dell|OptiPlex 7010','Lenovo|ThinkSystem SR650','Lenovo|ThinkCentre M90q',
+  'HP|ProDesk 600 G6','Dell|OptiPlex 7010','Dell|PowerEdge R650','Lenovo|ThinkCentre M90q','HP|EliteDesk 800 G9','Dell|OptiPlex 7010','Lenovo|ThinkSystem SR650',
+  'Apple|Mac mini M2','Apple|Mac Studio M2','Apple|MacBook Pro 14','Apple|Mac mini M2','Apple|iMac 24 M3','Apple|Mac Studio M2','Apple|Mac mini M1','Apple|Mac mini M2'
+];
+
+// EOL status rule: ACTIVE > 90 days left | EOL SOON within 90 days | EXPIRED date passed | UNKNOWN no EOL record
+const eolStatus = d => d === null || d === undefined ? 'UNKNOWN' : d < 0 ? 'EXPIRED' : d <= 90 ? 'EOL SOON' : 'ACTIVE';
+
+const assets = statuses.map((status, i) => {
+  const matched = i < ownerSeq.length;
+  return {
+    source: i < 14 ? 'BIGFIX' : 'JAMF',
+    status, manufacturer: modelOf[i].split('|')[0], model: modelOf[i].split('|')[1],
+    eol_days: eolDaysOf(modelOf[i]), eol: eolStatus(eolDaysOf(modelOf[i])),
+    assign: i >= 19 ? 'Unassigned' : (i % 4 === 3 || i === 9 ? 'Manual' : 'Auto'),   // 14 Auto / 5 Manual / 3 Unassigned
+    owner: matched ? 'user' + ownerSeq[i] : null,        // last 5 = unassigned / unmatched
+    dept: matched ? DEPTS[ownerSeq[i]] : null
+  };
+});
+
+/* =====================================================================
+   DERIVED NUMBERS
+   ===================================================================== */
+const count = (arr, fn) => arr.reduce((m, x) => { const k = fn(x); if (k != null) m[k] = (m[k] || 0) + 1; return m; }, {});
+const bySource = count(assets, a => a.source);
+const byStatus = count(assets, a => a.status);
+const byEol    = count(assets, a => a.eol);
+const byDept   = count(assets, a => a.dept);
+const employeeCount = new Set(assets.map(a => a.owner).filter(Boolean)).size;
+
+/* =====================================================================
+   KPI TILES (5)
+   ===================================================================== */
+const I = {
+  drive:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+  warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  box:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
+  users:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+};
+const TILES = [
+  { cls:'t-total',  label:'Total Assets',    value:assets.length,              sub:'All discovered endpoints',     icon:I.drive },
+  { cls:'t-active', label:'Active Assets',   value:byStatus['ACTIVE'] || 0,    sub:'Assigned and in use',         icon:I.check },
+  { cls:'t-warn',   label:'Review', value:byStatus['REVIEW'] || 0, sub:'Needs validation or verification', icon:I.warn },
+  { cls:'t-stock',  label:'In Stock',        value:byStatus['IN STOCK'] || 0,   sub:'Available, not assigned',    icon:I.box },
+  { cls:'t-emp',    label:'Employee Count',  value:employeeCount,              sub:'Authoritative directory',      icon:I.users }
+];
+document.getElementById('tiles').innerHTML = TILES.map(t =>
+  `<div class="tile ${t.cls}"><div class="top"><span class="label">${t.label}</span><span class="icon">${t.icon}</span></div><div class="value">${t.value}</div><div class="sub">${t.sub}</div></div>`
+).join('');
+
+/* =====================================================================
+   CHARTS (4)
+   ===================================================================== */
+const COL = { bigfix:'#2563eb', jamf:'#0d9488', blue:'#3b82f6', indigo:'#4f46e5', green:'#16a34a', amber:'#d97706', red:'#dc2626', grey:'#94a3b8' };
+Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+Chart.defaults.color = '#64748b';
+Chart.defaults.font.size = 12;
+const tooltip = { backgroundColor:'rgba(15,23,42,.95)', padding:10, cornerRadius:8, titleFont:{ weight:'600' } };
+const dashGrid = { color:'#e8ecf2', borderDash:[4, 4], drawTicks:false };
+
+// 1. Assets by Source (donut)
+const srcLabels = ['BIGFIX', 'JAMF'];
+new Chart(document.getElementById('cSource'), {
+  type:'doughnut',
+  data:{ labels:srcLabels, datasets:[{ data:srcLabels.map(l => bySource[l] || 0), backgroundColor:[COL.bigfix, COL.jamf], borderColor:'#fff', borderWidth:3, hoverOffset:5 }] },
+  options:{ responsive:true, maintainAspectRatio:false, cutout:'62%', plugins:{ legend:{ display:false }, tooltip } }
+});
+document.getElementById('lgSource').innerHTML = srcLabels.map((l, i) =>
+  `<span><i class="dot" style="background:${[COL.bigfix, COL.jamf][i]}"></i>${l} (${bySource[l] || 0})</span>`).join('');
+
+// 2. EOL Exposure by Hardware Model (horizontal bar, coloured by the model's EOL status)
+const EOL_COLOR = { 'EXPIRED':COL.red, 'EOL SOON':COL.amber, 'UNKNOWN':COL.grey };
+const urgency = m => m.eol === 'EXPIRED' ? 0 : m.eol === 'EOL SOON' ? 1 : 2;
+const modelAgg = {};
+assets.forEach(a => {
+  const k = a.manufacturer + ' ' + a.model;
+  (modelAgg[k] = modelAgg[k] || { name:k, eol:a.eol, days:a.eol_days, n:0 }).n++;
+});
+const exposed = Object.values(modelAgg).filter(m => m.eol !== 'ACTIVE')
+  .sort((a, b) => urgency(a) - urgency(b) || (a.days === null ? 0 : a.days) - (b.days === null ? 0 : b.days) || b.n - a.n)
+  .slice(0, 7);
+if (!exposed.length) {
+  document.getElementById('boxModel').innerHTML = '<p style="text-align:center;padding-top:110px;margin:0">No models are expired, nearing EOL or missing an EOL record.</p>';
+} else {
+  const endLabels = { id:'endLabels', afterDatasetsDraw(ch) {
+    const ctx = ch.ctx; ctx.save(); ctx.fillStyle = '#334155'; ctx.font = '600 12px ' + Chart.defaults.font.family;
+    ctx.textBaseline = 'middle';
+    ch.getDatasetMeta(0).data.forEach((bar, i) => ctx.fillText(ch.data.datasets[0].data[i], bar.x + 8, bar.y));
+    ctx.restore();
+  } };
+  new Chart(document.getElementById('cModel'), {
+    type:'bar',
+    data:{ labels:exposed.map(m => m.name), datasets:[{ data:exposed.map(m => m.n), backgroundColor:exposed.map(m => EOL_COLOR[m.eol]), borderRadius:{ topRight:6, bottomRight:6 }, barPercentage:.7, categoryPercentage:.9 }] },
+    plugins:[endLabels],
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false, layout:{ padding:{ right:24 } },
+      plugins:{ legend:{ display:false }, tooltip:{ ...tooltip, callbacks:{
+        label:c => `${c.parsed.x} asset${c.parsed.x === 1 ? '' : 's'} · ${exposed[c.dataIndex].eol}`,
+        afterLabel:c => { const m = exposed[c.dataIndex]; return m.days === null ? 'No EOL record found' : m.days < 0 ? `EOL passed ${-m.days} days ago` : `${m.days} days until EOL`; }
+      } } },
+      scales:{ x:{ beginAtZero:true, grace:'10%', grid:dashGrid, border:{ display:false }, ticks:{ precision:0, stepSize:1 } }, y:{ grid:{ display:false }, border:{ color:'#cbd5e1' } } }
+    }
+  });
+}
+document.getElementById('lgModel').innerHTML = ['EXPIRED', 'EOL SOON', 'UNKNOWN'].map(l =>
+  `<span><i class="dot" style="background:${EOL_COLOR[l]}"></i>${l}</span>`).join('');
+
+// 3. EOL Status Distribution (pie)
+const eolLabels = ['ACTIVE', 'EOL SOON', 'EXPIRED', 'UNKNOWN'], eolColors = [COL.green, COL.amber, COL.red, COL.grey];
+new Chart(document.getElementById('cEol'), {
+  type:'pie',
+  data:{ labels:eolLabels, datasets:[{ data:eolLabels.map(l => byEol[l] || 0), backgroundColor:eolColors, borderColor:'#fff', borderWidth:2, hoverOffset:5 }] },
+  options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false }, tooltip } }
+});
+document.getElementById('lgEol').innerHTML = eolLabels.map((l, i) =>
+  `<div><span><i class="dot" style="background:${eolColors[i]}"></i>${l}</span><b>${byEol[l] || 0}</b></div>`).join('');
+
+// 5. Source summary table (BigFix vs Jamf Pro + total)
+(function () {
+  const SRC = [{ key:'BIGFIX', name:'BigFix', color:COL.bigfix }, { key:'JAMF', name:'Jamf Pro', color:COL.jamf }];
+  const stat = rows => ({
+    total:rows.length,
+    active:rows.filter(a => a.status === 'ACTIVE').length,
+    nv:rows.filter(a => a.status === 'REVIEW').length,
+    stock:rows.filter(a => a.status === 'IN STOCK').length,
+    retired:rows.filter(a => a.status === 'RETIRED').length,
+    auto:rows.filter(a => a.assign === 'Auto').length,
+    manual:rows.filter(a => a.assign === 'Manual').length,
+    unassigned:rows.filter(a => a.assign === 'Unassigned').length,
+    eolOk:rows.filter(a => a.eol === 'ACTIVE').length,
+    eolNear:rows.filter(a => a.eol === 'EOL SOON').length,
+    eolExp:rows.filter(a => a.eol === 'EXPIRED').length,
+    eolUnk:rows.filter(a => a.eol === 'UNKNOWN').length,
+    owners:new Set(rows.map(a => a.owner).filter(Boolean)).size
+  });
+  const cell = (v, cls, sep) => v === 0 ? `<td class="num zero${sep ? ' sep' : ''}">-</td>` : `<td class="num${sep ? ' sep' : ''}">${cls ? `<span class="badge ${cls}">${v}</span>` : v}</td>`;
+  const rows = SRC.map(s => ({ s, d:stat(assets.filter(a => a.source === s.key)) }));
+  const tot = stat(assets);
+  const body = (d, isTotal) => {
+    const pct = d.total ? Math.round(d.eolOk / d.total * 100) : 0;
+    return cell(d.total, '', false) + cell(d.active, 'b-green') + cell(d.nv, 'b-warn') + cell(d.stock, 'b-grey') + cell(d.retired, 'b-grey') +
+      cell(d.auto, '', true) + cell(d.manual, '') + cell(d.unassigned, d.unassigned ? 'b-grey' : '') +
+      cell(d.eolOk, 'b-green', true) + cell(d.eolNear, 'b-amber') + cell(d.eolExp, 'b-red') + cell(d.eolUnk, 'b-grey') +
+      `<td class="num sep">${pct}%<span class="bar"><i style="width:${pct}%"></i></span></td>`;
+  };
+  document.getElementById('tSum').innerHTML =
+    `<thead>
+      <tr class="grp"><th></th><th colspan="5" class="g">Asset status</th><th colspan="3" class="g">Assignment</th><th colspan="4" class="g">EOL status</th><th class="g">Health</th></tr>
+      <tr class="cols"><th>Source</th><th>Total assets</th><th title="Assigned to a user or group and in use">Active</th><th title="Details require validation or verification">Review</th><th title="Available in inventory, not assigned">In stock</th><th title="No longer in service">Retired</th>
+        <th class="sep">Auto assigned</th><th>Manual</th><th>Unassigned</th>
+        <th class="sep" title="More than 90 days remaining">Active</th><th title="EOL within 90 days">EOL soon</th><th title="EOL date has passed">Expired</th><th title="Model not found in EOL Management">Unknown</th><th class="sep">Active share</th></tr>
+    </thead><tbody>` +
+    rows.map(r => `<tr><td class="src"><i style="background:${r.s.color}"></i>${r.s.name}</td>${body(r.d)}</tr>`).join('') +
+    `</tbody><tfoot><tr><td>Total</td>${body(tot, true)}</tr></tfoot>`;
+})();
+
+// 4. Assets by Department (column)
+const deptLabels = Object.keys(byDept).sort((a, b) => byDept[b] - byDept[a]);   // stable: ties keep data order
+new Chart(document.getElementById('cDept'), {
+  type:'bar',
+  data:{ labels:deptLabels, datasets:[{ data:deptLabels.map(l => byDept[l]), backgroundColor:COL.indigo, borderRadius:{ topLeft:6, topRight:6 }, barPercentage:.8, categoryPercentage:.8 }] },
+  options:{
+    responsive:true, maintainAspectRatio:false,
+    plugins:{ legend:{ display:false }, tooltip },
+    scales:{ x:{ grid:{ display:false }, border:{ color:'#cbd5e1' }, ticks:{ maxRotation:20, minRotation:20 } }, y:{ beginAtZero:true, grid:dashGrid, border:{ color:'#cbd5e1' }, ticks:{ precision:0, stepSize:2 } } }
+  }
+});
+</script>
+</body>
+</html>
