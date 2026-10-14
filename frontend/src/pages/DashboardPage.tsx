@@ -59,6 +59,15 @@ export const DashboardPage: React.FC = () => {
   if (!data) return null;
 
   const kpis = data.kpis;
+  const summaryTotals = data.source_summary.reduce((totals, row) => ({
+    total: totals.total + row.total, active: totals.active + row.active,
+    review: totals.review + row.review, in_stock: totals.in_stock + row.in_stock,
+    retired: totals.retired + row.retired, auto: totals.auto + row.auto,
+    manual: totals.manual + row.manual, unassigned: totals.unassigned + row.unassigned,
+    eol_active: totals.eol_active + row.eol_active, eol_soon: totals.eol_soon + row.eol_soon,
+    eol_expired: totals.eol_expired + row.eol_expired, eol_unknown: totals.eol_unknown + row.eol_unknown,
+  }), { total: 0, active: 0, review: 0, in_stock: 0, retired: 0, auto: 0, manual: 0, unassigned: 0, eol_active: 0, eol_soon: 0, eol_expired: 0, eol_unknown: 0 });
+  const overallActiveShare = summaryTotals.total ? Math.round((summaryTotals.active / summaryTotals.total) * 100) : 0;
   return (
     <div className="di-dashboard">
       {error && <div className="di-inline-error">{error}<button onClick={() => void loadDashboard()}>Retry</button></div>}
@@ -101,6 +110,13 @@ export const DashboardPage: React.FC = () => {
 
       <ChartCard title="Source Summary" description="BigFix vs Jamf Pro: inventory, assignment and end-of-life posture" className="di-source-table-card">
         <div className="di-table-scroll"><table className="di-source-table">
+          <colgroup>
+            <col className="di-col-source" /><col className="di-col-total" />
+            {Array.from({ length: 4 }, (_, i) => <col key={`status-${i}`} className="di-col-metric" />)}
+            {Array.from({ length: 3 }, (_, i) => <col key={`assignment-${i}`} className="di-col-metric" />)}
+            {Array.from({ length: 4 }, (_, i) => <col key={`eol-${i}`} className="di-col-metric" />)}
+            <col className="di-col-share" />
+          </colgroup>
           <thead>
             <tr className="di-group-head"><th rowSpan={2}>Source</th><th colSpan={5}>Asset status</th><th colSpan={3}>Assignment</th><th colSpan={4}>EOL status</th><th rowSpan={2}>Active share</th></tr>
             <tr><th>Total assets</th><th>Active</th><th>Review</th><th>In stock</th><th>Retired</th><th>Auto assigned</th><th>Manual</th><th>Unassigned</th><th>Active</th><th>EOL soon</th><th>Expired</th><th>Unknown</th></tr>
@@ -112,7 +128,7 @@ export const DashboardPage: React.FC = () => {
             <td className="di-separator"><span className="di-value-pill di-green">{row.eol_active || '–'}</span></td><td><span className="di-value-pill di-amber">{row.eol_soon || '–'}</span></td><td><span className="di-value-pill di-red">{row.eol_expired || '–'}</span></td><td><span className="di-value-pill di-grey">{row.eol_unknown || '–'}</span></td>
             <td className="di-health-cell di-separator">{row.active_share}%<span className="di-health-bar"><i style={{ width: `${row.active_share}%` }} /></span></td>
           </tr>)}</tbody>
-          <tfoot><tr><td>Total</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.total, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.active, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.review, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.in_stock, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.retired, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.auto, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.manual, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.unassigned, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.eol_active, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.eol_soon, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.eol_expired, 0))}</td><td>{formatNumber(data.source_summary.reduce((n, r) => n + r.eol_unknown, 0))}</td><td>—</td></tr></tfoot>
+          <tfoot><tr><td>Total</td><td>{formatNumber(summaryTotals.total)}</td><td>{formatNumber(summaryTotals.active)}</td><td>{formatNumber(summaryTotals.review)}</td><td>{formatNumber(summaryTotals.in_stock)}</td><td>{formatNumber(summaryTotals.retired)}</td><td>{formatNumber(summaryTotals.auto)}</td><td>{formatNumber(summaryTotals.manual)}</td><td>{formatNumber(summaryTotals.unassigned)}</td><td>{formatNumber(summaryTotals.eol_active)}</td><td>{formatNumber(summaryTotals.eol_soon)}</td><td>{formatNumber(summaryTotals.eol_expired)}</td><td>{formatNumber(summaryTotals.eol_unknown)}</td><td className="di-health-cell di-separator">{overallActiveShare}%<span className="di-health-bar"><i style={{ width: `${overallActiveShare}%` }} /></span></td></tr></tfoot>
         </table></div>
       </ChartCard>
     </div>
