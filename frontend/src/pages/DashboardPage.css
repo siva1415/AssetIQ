@@ -31,3 +31,11 @@
 /* Dashboard layout update: lifecycle in row two; source and department charts side by side in row three. */
 .di-chart-row>.di-eol-lifecycle{margin:0;min-width:0;padding:18px 16px}.di-chart-row .di-eol-lifecycle-heading{display:block;margin-bottom:12px}.di-chart-row .di-lifecycle-tag{display:inline-block;margin-top:8px}.di-chart-row .di-eol-rules{grid-template-columns:1fr;gap:8px}.di-chart-row .di-eol-rule{padding:9px 10px}.di-chart-row .di-eol-rule p{font-size:11px}.di-lower-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:stretch;margin-top:16px}.di-lower-row>.di-card{margin:0;min-width:0}.di-lower-row .di-chart-box{height:290px}.di-lower-row .di-department-chart{height:260px}.di-source-table .di-col-share{display:none}
 @media(max-width:900px){.di-lower-row{grid-template-columns:1fr}.di-chart-row>.di-eol-lifecycle{grid-column:auto}}
+
+/* Follow-up layout and EOL model chart readability fixes. */
+.di-lower-row{grid-template-columns:minmax(260px,0.8fr) minmax(0,2.2fr);align-items:stretch}
+.di-lower-row>.di-department-card,.di-lower-row>.di-card.di-department-card{min-width:0}
+.di-lower-row .di-department-chart{height:320px}
+.di-model-chart-scroll{max-height:390px;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;min-width:0}
+.di-model-chart{width:100%;min-width:0}
+@media(max-width:900px){.di-lower-row{grid-template-columns:1fr}.di-lower-row .di-department-chart{height:280px}.di-model-chart-scroll{max-height:360px}}
