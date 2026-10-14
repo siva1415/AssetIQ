@@ -350,7 +350,7 @@ def get_redesign_dashboard_overview(db: Session = Depends(get_database)):
             "active_assets": status_counts["ACTIVE"],
             "review": status_counts["REVIEW"],
             "in_stock": status_counts["IN STOCK"],
-            "employee_count": len(matched_owners),
+            "employee_count": len(employees),
         },
         "assets_by_source": [
             {"source": key, "count": value["total"]} for key, value in source_stats.items()
