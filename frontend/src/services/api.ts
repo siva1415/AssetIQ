@@ -18,6 +18,7 @@ import {
   DeviceEOLReferenceCreate,
   DeviceEOLReferenceUpdate,
   DashboardSummary,
+  DashboardRedesignOverview,
   AssetsBySourceItem,
   OwnershipSummaryItem,
   EOLSummaryItem,
@@ -779,6 +780,65 @@ class ApiService {
     const client = createAxiosClient();
     const response = await client.get<DashboardSummary>('/api/dashboard/summary');
     return response.data;
+  }
+
+  // New dashboard layout overview. Existing dashboard endpoints are unchanged.
+  public async getDashboardRedesignOverview(): Promise<DashboardRedesignOverview> {
+    if (!this.isMockMode) {
+      const client = createAxiosClient();
+      const response = await client.get<DashboardRedesignOverview>('/api/dashboard/redesign-overview');
+      return response.data;
+    }
+
+    await this.simulateLatency();
+    const sources = ['BIGFIX', 'JAMF'];
+    const sourceSummary = sources.map(source => ({
+      source, total: 0, active: 0, review: 0, in_stock: 0, retired: 0, auto: 0, manual: 0, unassigned: 0,
+      eol_active: 0, eol_soon: 0, eol_expired: 0, eol_unknown: 0, active_share: 0,
+    }));
+    const eolCounts: Record<string, number> = { ACTIVE: 0, 'EOL SOON': 0, EXPIRED: 0, UNKNOWN: 0 };
+    const statusCounts: Record<string, number> = { ACTIVE: 0, REVIEW: 0, 'IN STOCK': 0, RETIRED: 0 };
+    const deptCounts: Record<string, number> = {};
+    const modelCounts: Record<string, { model: string; eol_status: string; days_remaining: number | null; count: number }> = {};
+    const owners = new Set<string>();
+    for (const asset of MOCK_ASSETS) {
+      const source = String(asset.source || '').toUpperCase();
+      const stat = sourceSummary.find(item => item.source === source);
+      if (!stat) continue;
+      const status = toStandardAssetStatus(String(asset.asset_status));
+      const eol = toStandardEOLStatus(String(asset.calculated_eol_status));
+      const eolKey = eol === 'ACTIVE' || eol === 'EOL SOON' || eol === 'EXPIRED' ? eol : 'UNKNOWN';
+      stat.total += 1;
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
+      if (status === 'ACTIVE') stat.active += 1;
+      else if (status === 'REVIEW') stat.review += 1;
+      else if (status === 'IN STOCK') stat.in_stock += 1;
+      else stat.retired += 1;
+      eolCounts[eolKey] += 1;
+      if (eolKey === 'ACTIVE') stat.eol_active += 1;
+      else if (eolKey === 'EOL SOON') stat.eol_soon += 1;
+      else if (eolKey === 'EXPIRED') stat.eol_expired += 1;
+      else stat.eol_unknown += 1;
+      const username = String(asset.assigned_username || '').trim();
+      const assignment = String(asset.assignment_type || '').toUpperCase();
+      if (!username) stat.unassigned += 1;
+      else if (assignment.includes('AUTO')) stat.auto += 1;
+      else stat.manual += 1;
+      if (username && asset.department) { owners.add(username.toLowerCase()); deptCounts[asset.department] = (deptCounts[asset.department] || 0) + 1; }
+      const modelName = `${asset.manufacturer || 'Unknown'} ${asset.model || 'Unknown'}`.trim();
+      const model = modelCounts[modelName] || (modelCounts[modelName] = { model: modelName, eol_status: eolKey, days_remaining: asset.days_remaining ?? null, count: 0 });
+      model.count += 1;
+    }
+    sourceSummary.forEach(item => { item.active_share = item.total ? Math.round(item.eol_active / item.total * 100) : 0; });
+    const urgency: Record<string, number> = { EXPIRED: 0, 'EOL SOON': 1, UNKNOWN: 2, ACTIVE: 3 };
+    return {
+      kpis: { total_assets: MOCK_ASSETS.length, active_assets: statusCounts.ACTIVE, review: statusCounts.REVIEW, in_stock: statusCounts['IN STOCK'], employee_count: owners.size },
+      assets_by_source: sourceSummary.map(({ source, total }) => ({ source, count: total })),
+      eol_distribution: Object.entries(eolCounts).map(([status, count]) => ({ status, count })),
+      eol_exposure: Object.values(modelCounts).filter(item => item.eol_status !== 'ACTIVE').sort((a, b) => (urgency[a.eol_status] ?? 3) - (urgency[b.eol_status] ?? 3) || (a.days_remaining ?? 1e9) - (b.days_remaining ?? 1e9)).slice(0, 7),
+      assets_by_department: Object.entries(deptCounts).map(([department, count]) => ({ department, count })).sort((a, b) => b.count - a.count),
+      source_summary: sourceSummary,
+    };
   }
 
   // Assets by source

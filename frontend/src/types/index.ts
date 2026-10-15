@@ -291,6 +291,20 @@ export interface DepartmentDistributionItem {
   percentage: number;
 }
 
+
+export interface DashboardRedesignOverview {
+  kpis: { total_assets: number; active_assets: number; review: number; in_stock: number; employee_count: number };
+  assets_by_source: { source: string; count: number }[];
+  eol_distribution: { status: string; count: number }[];
+  eol_exposure: { model: string; eol_status: string; days_remaining: number | null; count: number }[];
+  assets_by_department: { department: string; count: number }[];
+  source_summary: {
+    source: string; total: number; active: number; review: number; in_stock: number; retired: number;
+    auto: number; manual: number; unassigned: number; eol_active: number; eol_soon: number;
+    eol_expired: number; eol_unknown: number; active_share: number;
+  }[];
+}
+
 export interface FilterOptions {
   sources: string[];
   device_types: string[];
