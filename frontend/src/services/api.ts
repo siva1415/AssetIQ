@@ -60,6 +60,56 @@ import {
   reassignMockAsset,
 } from './mockData';
 
+// User Management & Active Sessions Types
+export type ConsoleUserRole = 'super_admin' | 'admin' | 'viewer';
+
+export interface ConsoleUser {
+  username: string;
+  name: string;
+  email?: string | null;
+  role: ConsoleUserRole | string;
+  is_otp: boolean;
+  must_change_password: boolean;
+  is_online: boolean;
+  last_active?: string | null;
+  login_time?: string | null;
+  is_root_protected?: boolean;
+  is_current_user?: boolean;
+  ip_address?: string | null;
+  user_agent?: string | null;
+}
+
+export interface CreateConsoleUserRequest {
+  username: string;
+  name?: string;
+  email?: string;
+  password: string;
+  role?: string;
+  is_otp?: boolean;
+}
+
+export interface UpdateConsoleUserRequest {
+  name?: string;
+  email?: string;
+  role?: string;
+  resetPassword?: string;
+  password?: string;
+  is_otp?: boolean;
+}
+
+export interface ActiveSession {
+  sessionId: string;
+  username: string;
+  name: string;
+  email?: string | null;
+  role: string;
+  loginTime: string;
+  lastActive: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  status: string;
+}
+
 // Storage keys
 const MOCK_MODE_STORAGE_KEY = 'asset_iq_mock_mode';
 const CUSTOM_BASE_URL_KEY = 'asset_iq_custom_api_url';
@@ -96,22 +146,18 @@ export class ApiError extends Error {
 }
 
 export function getInitialMockMode(): boolean {
-  // 1. Explicit env variable override if provided
+  // Always default to false (live API mode) and clear legacy mock mode storage
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem(MOCK_MODE_STORAGE_KEY);
+    } catch {
+      // ignore storage errors
+    }
+  }
   const metaEnv = typeof import.meta !== 'undefined' ? import.meta.env : undefined;
-  if (metaEnv?.VITE_MOCK_MODE !== undefined) {
-    return metaEnv.VITE_MOCK_MODE === 'true';
+  if (metaEnv?.VITE_MOCK_MODE === 'true') {
+    return true;
   }
-  // 2. Saved user preference in localStorage
-  const saved = typeof window !== 'undefined' ? localStorage.getItem(MOCK_MODE_STORAGE_KEY) : null;
-  if (saved !== null) {
-    return saved === 'true';
-  }
-  // 3. Default to live mode if VITE_API_BASE_URL is provided, otherwise mock preview
-  const envUrl = (metaEnv?.VITE_API_BASE_URL || '').trim();
-  if (envUrl) {
-    return false;
-  }
-  // Default to false (live API mode) so live connection is attempted first as expected
   return false;
 }
 
@@ -1651,8 +1697,8 @@ class ApiService {
     const client = createAxiosClient();
 
     const page = Math.max(1, Number(params.page) || 1);
-    // FastAPI standard pagination limits page_size (le=100)
-    const pageSize = Math.min(100, Math.max(1, Number(params.page_size ?? (params as any).size) || 10));
+    // FastAPI standard pagination limits page_size (le=2000)
+    const pageSize = Math.min(2000, Math.max(1, Number(params.page_size ?? (params as any).size) || 10));
 
     const cleanParams: Record<string, any> = {
       page,
@@ -1995,6 +2041,176 @@ class ApiService {
     const encoded = encodeURIComponent(adminUserId);
     const routes = [`/api/admin-users/${encoded}`, `/api/admin_users/${encoded}`];
     await this.requestWithRouteFallback<void>(client, 'DELETE', routes);
+  }
+
+  // =========================================================================
+  // Console User Management & Real-Time Active Sessions Endpoints
+  // =========================================================================
+
+  public async getConsoleUsers(search?: string): Promise<ConsoleUser[]> {
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      try {
+        const stored = localStorage.getItem('workforceiq_console_users_v2');
+        if (stored) {
+          const list: ConsoleUser[] = JSON.parse(stored);
+          if (search?.trim()) {
+            const q = search.trim().toLowerCase();
+            return list.filter(
+              u =>
+                u.username.toLowerCase().includes(q) ||
+                u.name.toLowerCase().includes(q) ||
+                (u.email && u.email.toLowerCase().includes(q))
+            );
+          }
+          return list;
+        }
+      } catch {
+        // ignore
+      }
+      return [];
+    }
+    const client = createAxiosClient();
+    const cleanSearch = search?.trim();
+    const routes = ['/api/users', '/users', '/api/employees/users'];
+    const res = await this.requestWithRouteFallback<any>(client, 'GET', routes, {
+      params: cleanSearch ? { search: cleanSearch, q: cleanSearch } : undefined,
+    });
+    if (Array.isArray(res)) return res;
+    if (res && Array.isArray(res.items)) return res.items;
+    if (res && Array.isArray(res.users)) return res.users;
+    if (res && Array.isArray(res.data)) return res.data;
+    return [];
+  }
+
+  public async createConsoleUser(data: CreateConsoleUserRequest): Promise<ConsoleUser> {
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      const cleanUser = data.username.toLowerCase().replace(/^@/, '');
+      const newUser: ConsoleUser = {
+        username: cleanUser,
+        name: data.name || cleanUser,
+        email: data.email || `${cleanUser}@workforceiq.internal`,
+        role: data.role || 'admin',
+        is_otp: Boolean(data.is_otp),
+        must_change_password: Boolean(data.is_otp),
+        is_online: false,
+        last_active: 'Never logged in',
+      };
+      return newUser;
+    }
+    const client = createAxiosClient();
+    const routes = ['/api/auth/register', '/api/users', '/auth/register', '/users', '/api/employees/users'];
+    return this.requestWithRouteFallback<ConsoleUser>(client, 'POST', routes, undefined, data);
+  }
+
+  public async updateConsoleUser(username: string, data: UpdateConsoleUserRequest): Promise<ConsoleUser> {
+    const cleanUser = username.replace(/^@/, '');
+    const encoded = encodeURIComponent(cleanUser);
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return {
+        username: cleanUser,
+        name: data.name || cleanUser,
+        email: data.email,
+        role: data.role || 'admin',
+        is_otp: Boolean(data.is_otp),
+        must_change_password: Boolean(data.is_otp),
+        is_online: false,
+      };
+    }
+    const client = createAxiosClient();
+    const routes = [`/api/users/${encoded}`, `/users/${encoded}`, `/api/employees/users/${encoded}`];
+    return this.requestWithRouteFallback<ConsoleUser>(client, 'PUT', routes, undefined, data);
+  }
+
+  public async deleteConsoleUser(username: string): Promise<void> {
+    const cleanUser = username.replace(/^@/, '');
+    if (cleanUser.toLowerCase() === 'superadmin') {
+      throw new Error('The root account @superadmin is protected and cannot be deleted.');
+    }
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return;
+    }
+    const client = createAxiosClient();
+    const encoded = encodeURIComponent(cleanUser);
+    const routes = [`/api/users/${encoded}`, `/users/${encoded}`, `/api/employees/users/${encoded}`];
+    await this.requestWithRouteFallback<void>(client, 'DELETE', routes);
+  }
+
+  public async setOneTimePassword(username: string, temporaryPassword: string = 'TempPass123!'): Promise<any> {
+    const cleanUser = username.replace(/^@/, '');
+    const payload = {
+      username: cleanUser,
+      temporaryPassword,
+      password: temporaryPassword,
+      temporary_password: temporaryPassword,
+    };
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return { status: 'success', username: cleanUser, is_otp: true };
+    }
+    const client = createAxiosClient();
+    const routes = ['/api/auth/set-otp', '/auth/set-otp', '/api/users/set-otp'];
+    return this.requestWithRouteFallback<any>(client, 'POST', routes, undefined, payload);
+  }
+
+  public async processFirstLoginDecision(
+    username: string,
+    newPassword: string,
+    acceptTerms: boolean = true
+  ): Promise<any> {
+    const cleanUser = username.replace(/^@/, '');
+    const payload = {
+      username: cleanUser,
+      newPassword,
+      password: newPassword,
+      new_password: newPassword,
+      acceptTerms,
+      accept_terms: acceptTerms,
+    };
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return { status: 'success', username: cleanUser };
+    }
+    const client = createAxiosClient();
+    const routes = ['/api/auth/first-login-decision', '/auth/first-login-decision', '/api/users/first-login-decision'];
+    return this.requestWithRouteFallback<any>(client, 'POST', routes, undefined, payload);
+  }
+
+  public async getActiveSessions(): Promise<ActiveSession[]> {
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return [];
+    }
+    const client = createAxiosClient();
+    const routes = ['/api/auth/sessions', '/auth/sessions', '/api/sessions', '/sessions'];
+    const res = await this.requestWithRouteFallback<any>(client, 'GET', routes);
+    if (Array.isArray(res)) return res;
+    if (res && Array.isArray(res.sessions)) return res.sessions;
+    if (res && Array.isArray(res.data)) return res.data;
+    return [];
+  }
+
+  public async terminateSession(sessionId?: string, username?: string): Promise<void> {
+    const payload = {
+      sessionId,
+      session_id: sessionId,
+      username,
+    };
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return;
+    }
+    const client = createAxiosClient();
+    const routes = [
+      '/api/auth/sessions/terminate',
+      '/auth/sessions/terminate',
+      '/api/sessions/terminate',
+      '/sessions/terminate',
+    ];
+    await this.requestWithRouteFallback<void>(client, 'POST', routes, undefined, payload);
   }
 
   private async requestWithRouteFallback<T>(

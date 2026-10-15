@@ -1,21 +1,35 @@
-from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from typing import List, Optional
+from fastapi import APIRouter, Depends, Query, Path
 from sqlalchemy.orm import Session
+
 from app.api.deps import PaginationParams, get_database
 from app.schemas.employee import EmployeeResponse, EmployeeDetailResponse
 from app.schemas.common import PaginatedResponse
-from app.services.employee_service import EmployeeService
+from app.services.employee_service import (
+    EmployeeService,
+    ConsoleUserResponse,
+    CreateUserRequest,
+    UpdateUserRequest,
+    SetOtpRequest,
+    FirstLoginDecisionRequest,
+    SessionListResponse,
+    TerminateSessionRequest,
+)
 
-router = APIRouter(prefix="/employees", tags=["Employees"])
+router = APIRouter(tags=["Employees & Console User Management"])
 
+
+# ============================================================================
+# 1. Workday Employee Directory Endpoints
+# ============================================================================
 
 @router.get(
-    "",
+    "/employees",
     response_model=PaginatedResponse[EmployeeResponse],
     summary="Paginated Workday Employees Directory",
 )
 @router.get(
-    "/",
+    "/employees/",
     response_model=PaginatedResponse[EmployeeResponse],
     include_in_schema=False,
 )
@@ -66,9 +80,8 @@ def list_employees(
     )
 
 
-
 @router.get(
-    "/{employee_id}",
+    "/employees/{employee_id}",
     response_model=EmployeeDetailResponse,
     summary="Employee Profile with Correlated Assigned Assets",
 )
@@ -81,3 +94,180 @@ def get_employee_by_id(
     currently correlated to their user login.
     """
     return EmployeeService.get_employee_detail(db=db, employee_id=employee_id)
+
+
+# ============================================================================
+# 2. Console User Management Endpoints (/api/users)
+# ============================================================================
+
+@router.get(
+    "/users",
+    response_model=List[ConsoleUserResponse],
+    summary="List all console users with real-time online status",
+)
+@router.get(
+    "/employees/users",
+    response_model=List[ConsoleUserResponse],
+    include_in_schema=False,
+)
+def get_console_users(
+    search: Optional[str] = Query(None, description="Search users by name, username, email, or role"),
+    q: Optional[str] = Query(None, include_in_schema=False),
+    db: Session = Depends(get_database),
+):
+    """
+    Returns registered console accounts along with real-time active status,
+    password policy flags, and role assignments.
+    """
+    term = search or q
+    return EmployeeService.list_console_users(db=db, search=term)
+
+
+@router.post(
+    "/auth/register",
+    response_model=ConsoleUserResponse,
+    summary="Register a new console user account",
+)
+@router.post(
+    "/users",
+    response_model=ConsoleUserResponse,
+    summary="Create a new console user account",
+)
+@router.post(
+    "/employees/users",
+    response_model=ConsoleUserResponse,
+    include_in_schema=False,
+)
+def create_console_user(
+    payload: CreateUserRequest,
+    db: Session = Depends(get_database),
+):
+    """
+    Creates a new console administrator or viewer account.
+    Supports setting One-Time Password (OTP) policy.
+    """
+    return EmployeeService.create_console_user(db=db, payload=payload)
+
+
+@router.put(
+    "/users/{username}",
+    response_model=ConsoleUserResponse,
+    summary="Update console user details or reset password",
+)
+@router.put(
+    "/employees/users/{username}",
+    response_model=ConsoleUserResponse,
+    include_in_schema=False,
+)
+def update_console_user(
+    username: str = Path(..., description="Target username"),
+    payload: UpdateUserRequest = ...,
+    db: Session = Depends(get_database),
+):
+    """
+    Updates full name, email, role clearance, or issues a password update / OTP flag.
+    """
+    return EmployeeService.update_console_user(db=db, username=username, payload=payload)
+
+
+@router.delete(
+    "/users/{username}",
+    summary="Permanently delete a console user account",
+)
+@router.delete(
+    "/employees/users/{username}",
+    include_in_schema=False,
+)
+def delete_console_user(
+    username: str = Path(..., description="Target username to delete"),
+    db: Session = Depends(get_database),
+):
+    """
+    Deletes a user account from the system.
+    Guarantees root protection: @superadmin cannot be deleted.
+    """
+    return EmployeeService.delete_console_user(db=db, username=username)
+
+
+# ============================================================================
+# 3. OTP & Security Policy Governance Endpoints (/api/auth)
+# ============================================================================
+
+@router.post(
+    "/auth/set-otp",
+    summary="Issue a temporary One-Time Password (OTP)",
+)
+@router.post(
+    "/users/set-otp",
+    include_in_schema=False,
+)
+def set_one_time_password(
+    payload: SetOtpRequest,
+    db: Session = Depends(get_database),
+):
+    """
+    Issues a temporary One-Time Password for the target username and
+    forces a mandatory password reset upon their next login.
+    """
+    return EmployeeService.issue_one_time_password(db=db, payload=payload)
+
+
+@router.post(
+    "/auth/first-login-decision",
+    summary="Process first-login permanent password decision",
+)
+@router.post(
+    "/users/first-login-decision",
+    include_in_schema=False,
+)
+def process_first_login_decision(
+    payload: FirstLoginDecisionRequest,
+    db: Session = Depends(get_database),
+):
+    """
+    Allows a user logging in under an OTP to set a permanent password
+    and complete security onboarding.
+    """
+    return EmployeeService.process_first_login_decision(db=db, payload=payload)
+
+
+# ============================================================================
+# 4. Live Active Sessions Telemetry Endpoints (/api/auth/sessions)
+# ============================================================================
+
+@router.get(
+    "/auth/sessions",
+    response_model=SessionListResponse,
+    summary="Real-time active console sessions (Polled every 5s)",
+)
+@router.get(
+    "/sessions",
+    response_model=SessionListResponse,
+    include_in_schema=False,
+)
+def get_active_sessions(
+    db: Session = Depends(get_database),
+):
+    """
+    Returns real-time logged-in user telemetry (IP address, user-agent, login time,
+    and last active timestamp) for live dashboard tracking.
+    """
+    return EmployeeService.list_active_sessions(db=db)
+
+
+@router.post(
+    "/auth/sessions/terminate",
+    summary="Terminate an active user session",
+)
+@router.post(
+    "/sessions/terminate",
+    include_in_schema=False,
+)
+def terminate_session(
+    payload: TerminateSessionRequest,
+    db: Session = Depends(get_database),
+):
+    """
+    Terminates an active session by session ID or username.
+    """
+    return EmployeeService.terminate_session(db=db, payload=payload)
