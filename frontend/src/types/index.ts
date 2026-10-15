@@ -5,19 +5,23 @@ export type DeviceType = 'Desktop' | 'Laptop' | 'Server';
 export const ASSET_STATUSES = {
   ACTIVE: 'ACTIVE',
   REVIEW: 'REVIEW',
-  NEED_VALIDATION: 'REVIEW',
+  NEED_VALIDATION: 'NEED VALIDATION',
   IN_STOCK: 'IN STOCK',
   RETIRED: 'RETIRED',
 } as const;
 
-export type StandardAssetStatus = 'ACTIVE' | 'REVIEW' | 'IN STOCK' | 'RETIRED';
+export type StandardAssetStatus =
+  | 'ACTIVE' | 'REVIEW' | 'IN STOCK' | 'RETIRED'
+  | 'NEED VALIDATION'   // value the function actually returns
+  | 'NEEDVALIDATION';   // kept for backward compatibility
 
-// Friendly UI labels mapping to standardized API values
 export const ASSET_STATUS_LABELS: Record<StandardAssetStatus, string> = {
   ACTIVE: 'Active',
   REVIEW: 'Review',
   'IN STOCK': 'In Stock',
   RETIRED: 'Retired',
+  'NEED VALIDATION': 'Need Validation',
+  NEEDVALIDATION: 'Need Validation'
 };
 
 // Normalized AssetStatus supporting both exact API enum and casing
@@ -33,7 +37,7 @@ export function toStandardAssetStatus(status?: string | null): StandardAssetStat
   if (!status) return ASSET_STATUSES.ACTIVE;
   const s = status.trim().toUpperCase().replace(/_/g, ' ');
   if (s === 'ACTIVE') return ASSET_STATUSES.ACTIVE;
-  if (s === 'REVIEW' || s === 'NEED VALIDATION' || s === 'NEEDVALIDATION') return ASSET_STATUSES.REVIEW;
+  if (s === 'REVIEW' || s === 'NEED VALIDATION' || s === 'NEEDVALIDATION') return ASSET_STATUSES.NEED_VALIDATION;
   if (s === 'IN STOCK' || s === 'INSTOCK') return ASSET_STATUSES.IN_STOCK;
   if (s === 'RETIRED') return ASSET_STATUSES.RETIRED;
   return ASSET_STATUSES.ACTIVE;
