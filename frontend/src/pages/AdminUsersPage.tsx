@@ -80,13 +80,17 @@ export const AdminUsersPage: React.FC = () => {
   }, [dataRefreshKey]);
 
   // Load available Workday users when modal is opened or user searches
+  const searchReqIdRef = useRef<number>(0);
   const loadAvailableUsers = async (searchQuery?: string) => {
+    const reqId = ++searchReqIdRef.current;
     setAvailableLoading(true);
     setModalError(null);
     try {
       const data = await api.getAvailableWorkdayUsers(searchQuery);
+      if (reqId !== searchReqIdRef.current) return;
       setAvailableUsers(data);
     } catch (err: any) {
+      if (reqId !== searchReqIdRef.current) return;
       const status = err?.status || err?.response?.status;
       let errorMsg = 'Failed to fetch available users from Workday.';
       if (status === 405) {
@@ -96,7 +100,9 @@ export const AdminUsersPage: React.FC = () => {
       }
       setModalError(errorMsg);
     } finally {
-      setAvailableLoading(false);
+      if (reqId === searchReqIdRef.current) {
+        setAvailableLoading(false);
+      }
     }
   };
 
@@ -107,7 +113,7 @@ export const AdminUsersPage: React.FC = () => {
     setSelectedUserIds(new Set());
     setModalError(null);
     setIsAddModalOpen(true);
-    loadAvailableUsers();
+    loadAvailableUsers('');
   };
 
   // Debounce search in modal
@@ -136,10 +142,39 @@ export const AdminUsersPage: React.FC = () => {
     );
   }, [adminUsers, search]);
 
-  // Selectable users in the modal (relying on backend filter, plus safeguarding against any with is_admin: true)
+  // Selectable users in the modal:
+  // Excludes users with is_admin: true, users already registered as administrators, and non-active employees
   const selectableAvailableUsers = useMemo(() => {
-    return availableUsers.filter(u => !u.is_admin);
-  }, [availableUsers]);
+    const adminIdSet = new Set(adminUsers.map(a => a.admin_user_id.toLowerCase()));
+    let list = availableUsers.filter(u => {
+      if (u.is_admin) return false;
+      if (adminIdSet.has(u.user_id.toLowerCase())) return false;
+      if (u.employee_status && u.employee_status.toLowerCase() !== 'active') return false;
+      return true;
+    });
+
+    // If a search query is active and the list contains non-matching records (i.e. server returned all records without filtering)
+    if (userSearch.trim()) {
+      const q = userSearch.trim().toLowerCase();
+      const hasUnmatched = list.some(
+        u =>
+          !u.user_id.toLowerCase().includes(q) &&
+          !(u.full_name && u.full_name.toLowerCase().includes(q)) &&
+          !(u.email_work && u.email_work.toLowerCase().includes(q)) &&
+          !(u.department && u.department.toLowerCase().includes(q))
+      );
+      if (hasUnmatched) {
+        list = list.filter(
+          u =>
+            u.user_id.toLowerCase().includes(q) ||
+            (u.full_name && u.full_name.toLowerCase().includes(q)) ||
+            (u.email_work && u.email_work.toLowerCase().includes(q)) ||
+            (u.department && u.department.toLowerCase().includes(q))
+        );
+      }
+    }
+    return list;
+  }, [availableUsers, adminUsers, userSearch]);
 
   // Total pages for modal table
   const totalModalPages = useMemo(() => {
@@ -601,16 +636,31 @@ export const AdminUsersPage: React.FC = () => {
                       <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
                       <span className="text-xs font-medium">Loading eligible Workday employees...</span>
                     </div>
+                  ) : modalError && selectableAvailableUsers.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+                      <AlertCircle className="w-8 h-8 text-rose-500 mb-2" />
+                      <h4 className="text-xs font-semibold text-slate-800">Unable to load employee records</h4>
+                      <p className="text-[11px] text-slate-500 max-w-sm mt-1 mb-3">
+                        {modalError}
+                      </p>
+                      <button
+                        onClick={() => loadAvailableUsers(userSearch)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md shadow-xs transition-colors cursor-pointer"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Retry Request</span>
+                      </button>
+                    </div>
                   ) : selectableAvailableUsers.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
                       <Users className="w-8 h-8 text-slate-300 mb-2" />
                       <h4 className="text-xs font-semibold text-slate-800">
-                        {userSearch ? 'No matching employees' : 'No available users to add'}
+                        {userSearch ? 'No matching active employees' : 'No available active employees to add'}
                       </h4>
                       <p className="text-[11px] text-slate-500 max-w-sm mt-1 mb-3">
                         {userSearch
-                          ? `No Workday employees match "${userSearch}". Try searching by another User ID, Name, or Email.`
-                          : 'All eligible Workday employees are already registered as administrators, or no employee records were found.'}
+                          ? `No active Workday employees match "${userSearch}". Try searching by another User ID, Full Name, or Work Email.`
+                          : 'All active Workday employees are already registered as administrators, or no active employee records were found.'}
                       </p>
                       {userSearch && (
                         <button
@@ -619,7 +669,7 @@ export const AdminUsersPage: React.FC = () => {
                             loadAvailableUsers('');
                             setModalPage(1);
                           }}
-                          className="px-3 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium transition-colors"
+                          className="px-3 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium transition-colors cursor-pointer"
                         >
                           Clear Search
                         </button>

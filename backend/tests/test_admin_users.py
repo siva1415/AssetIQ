@@ -22,26 +22,27 @@ def test_list_admin_users_joined_with_workday(client: TestClient):
 
 def test_available_users_endpoint_returns_non_admin_workday_employees(client: TestClient):
     """
-    Test GET /api/admin-users/available-users returns Workday employees not already in admin_users.
+    Test GET /api/admin-users/available-users returns only ACTIVE Workday employees not already in admin_users.
     Verifies required fields: user_id, full_name, email_work, employee_status.
     Verifies that registered admin (johndoe) is excluded.
+    Verifies that inactive/terminated employee (alexturner) is excluded.
     """
     response = client.get("/api/admin-users/available-users")
     assert response.status_code == 200
     data = response.json()
 
-    # Pagination metadata
-    assert data["total"] == 2
+    # Pagination metadata - only sarahconnor is active and not an admin
+    assert data["total"] == 1
     assert data["total_pages"] == 1
     assert data["page"] == 1
     assert data["page_size"] == 25
 
     items = data["items"]
-    assert len(items) == 2
+    assert len(items) == 1
     user_ids = [item["user_id"] for item in items]
     assert "sarahconnor" in user_ids
-    assert "alexturner" in user_ids
-    assert "johndoe" not in user_ids
+    assert "alexturner" not in user_ids  # Terminated/inactive excluded
+    assert "johndoe" not in user_ids  # Already an admin excluded
 
     # Verify required fields
     sarah = next(i for i in items if i["user_id"] == "sarahconnor")
@@ -53,53 +54,190 @@ def test_available_users_endpoint_returns_non_admin_workday_employees(client: Te
 def test_available_users_searching_and_filtering(client: TestClient):
     """
     Test searching by user ID, full name, and work email on GET /api/admin-users/available-users.
+    Verifies case-insensitivity and ensures search results contain only active employees.
     """
-    # 1. Search by user ID
+    # 1. Search by user ID (case-insensitive)
     res_id = client.get("/api/admin-users/available-users?search=sarah")
     assert res_id.status_code == 200
     items_id = res_id.json()["items"]
     assert len(items_id) == 1
     assert items_id[0]["user_id"] == "sarahconnor"
 
-    # 2. Search by full name
-    res_name = client.get("/api/admin-users/available-users?search=Alex")
+    # 2. Search by full name for active employee (case-insensitive)
+    res_name = client.get("/api/admin-users/available-users?search=Sarah")
     assert res_name.status_code == 200
     items_name = res_name.json()["items"]
     assert len(items_name) == 1
-    assert items_name[0]["user_id"] == "alexturner"
+    assert items_name[0]["user_id"] == "sarahconnor"
 
-    # 3. Search by work email domain
+    # 3. Search for inactive employee "Alex" should return 0 results
+    res_inactive = client.get("/api/admin-users/available-users?search=Alex")
+    assert res_inactive.status_code == 200
+    assert len(res_inactive.json()["items"]) == 0
+    assert res_inactive.json()["total"] == 0
+
+    # 4. Search by work email domain - only active non-admin matches
     res_email = client.get("/api/admin-users/available-users?search=enterprise.com")
     assert res_email.status_code == 200
-    assert res_email.json()["total"] == 2
+    assert res_email.json()["total"] == 1
+    assert res_email.json()["items"][0]["user_id"] == "sarahconnor"
 
-    # 4. Explicit parameter filtering
+    # 5. Explicit parameter filtering
     res_param = client.get("/api/admin-users/available-users?user_id=sarahconnor")
     assert res_param.status_code == 200
     assert len(res_param.json()["items"]) == 1
 
+    # 6. Empty search string safely returns all available active employees without filtering out all
+    res_empty_str = client.get("/api/admin-users/available-users?search=   ")
+    assert res_empty_str.status_code == 200
+    assert res_empty_str.json()["total"] == 1
 
-def test_available_users_pagination(client: TestClient):
+
+def test_available_users_pagination(client: TestClient, db_session: Session):
     """
     Test pagination parameters (page, page_size) and envelopes on GET /api/admin-users/available-users.
+    Seeds additional active employees to test multi-page pagination.
     """
-    # Page 1, page_size 1
-    p1 = client.get("/api/admin-users/available-users?page=1&page_size=1")
+    from datetime import datetime, timezone
+    from app.models.workday_employee import WorkdayEmployee
+
+    now_utc = datetime.now(timezone.utc)
+    emp4 = WorkdayEmployee(
+        employee_id=4,
+        user_id="emilywatson",
+        full_name="Emily Watson",
+        email_work="emily.watson@enterprise.com",
+        department="Engineering",
+        division="Product Dev",
+        job_title="QA Engineer",
+        employee_status="ACTIVE",
+        created_at=now_utc,
+    )
+    emp5 = WorkdayEmployee(
+        employee_id=5,
+        user_id="charliebrown",
+        full_name="Charlie Brown",
+        email_work="charlie.brown@enterprise.com",
+        department="Finance",
+        division="Accounting",
+        job_title="Financial Analyst",
+        employee_status="active",
+        created_at=now_utc,
+    )
+    db_session.add_all([emp4, emp5])
+    db_session.commit()
+
+    # Total active non-admin employees = 3 (charliebrown, emilywatson, sarahconnor)
+    # Page 1, page_size 2
+    p1 = client.get("/api/admin-users/available-users?page=1&page_size=2")
     assert p1.status_code == 200
     d1 = p1.json()
-    assert len(d1["items"]) == 1
-    assert d1["total"] == 2
+    assert len(d1["items"]) == 2
+    assert d1["total"] == 3
     assert d1["total_pages"] == 2
     assert d1["page"] == 1
-    assert d1["page_size"] == 1
+    assert d1["page_size"] == 2
 
-    # Page 2, page_size 1
-    p2 = client.get("/api/admin-users/available-users?page=2&page_size=1")
+    # Page 2, page_size 2
+    p2 = client.get("/api/admin-users/available-users?page=2&page_size=2")
     assert p2.status_code == 200
     d2 = p2.json()
     assert len(d2["items"]) == 1
     assert d2["page"] == 2
-    assert d1["items"][0]["user_id"] != d2["items"][0]["user_id"]
+    assert d2["total"] == 3
+
+    # Ensure no duplicates between pages
+    page1_ids = [item["user_id"] for item in d1["items"]]
+    page2_ids = [item["user_id"] for item in d2["items"]]
+    assert not set(page1_ids).intersection(set(page2_ids))
+
+
+def test_available_users_active_status_filtering_variations(client: TestClient, db_session: Session):
+    """
+    Requirement 1: Verify case-insensitive filtering WHERE UPPER(TRIM(employee_status)) = 'ACTIVE'.
+    Must include 'ACTIVE', 'Active', 'active', and padded '  Active  ',
+    while strictly excluding 'INACTIVE', null, and other statuses.
+    """
+    from datetime import datetime, timezone
+    from app.models.workday_employee import WorkdayEmployee
+    from app.models.admin_user import AdminUser
+
+    now_utc = datetime.now(timezone.utc)
+    test_employees = [
+        WorkdayEmployee(
+            employee_id=10,
+            user_id="status_upper",
+            full_name="Status Upper",
+            email_work="upper@enterprise.com",
+            employee_status="ACTIVE",
+            created_at=now_utc,
+        ),
+        WorkdayEmployee(
+            employee_id=11,
+            user_id="status_lower",
+            full_name="Status Lower",
+            email_work="lower@enterprise.com",
+            employee_status="active",
+            created_at=now_utc,
+        ),
+        WorkdayEmployee(
+            employee_id=12,
+            user_id="status_padded",
+            full_name="Status Padded",
+            email_work="padded@enterprise.com",
+            employee_status="  Active  ",
+            created_at=now_utc,
+        ),
+        WorkdayEmployee(
+            employee_id=13,
+            user_id="status_inactive",
+            full_name="Status Inactive",
+            email_work="inactive@enterprise.com",
+            employee_status="INACTIVE",
+            created_at=now_utc,
+        ),
+        WorkdayEmployee(
+            employee_id=14,
+            user_id="status_null",
+            full_name="Status Null",
+            email_work="null@enterprise.com",
+            employee_status=None,
+            created_at=now_utc,
+        ),
+        WorkdayEmployee(
+            employee_id=15,
+            user_id="status_other",
+            full_name="Status Other",
+            email_work="other@enterprise.com",
+            employee_status="On Leave",
+            created_at=now_utc,
+        ),
+    ]
+    db_session.add_all(test_employees)
+    db_session.commit()
+    from sqlalchemy import text
+    db_session.execute(text("UPDATE workday_employees SET employee_status = NULL WHERE user_id = 'status_null'"))
+    db_session.commit()
+
+    response = client.get("/api/admin-users/available-users?page_size=100")
+    assert response.status_code == 200
+    data = response.json()
+    uids = [u["user_id"] for u in data["items"]]
+
+    # Active status variations should be included
+    assert "status_upper" in uids
+    assert "status_lower" in uids
+    assert "status_padded" in uids
+    assert "sarahconnor" in uids  # From default seed
+
+    # Inactive, Null, Terminated, and On Leave should NOT be included
+    assert "status_inactive" not in uids
+    assert "status_null" not in uids
+    assert "status_other" not in uids
+    assert "alexturner" not in uids
+
+    # Existing admin should NOT be included
+    assert "johndoe" not in uids
 
 
 def test_available_users_empty_result(client: TestClient):

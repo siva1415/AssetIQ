@@ -1,427 +1,588 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import {
-  FileBarChart,
+  FileSpreadsheet,
+  Laptop,
+  Server,
+  PackageCheck,
+  ShieldAlert,
   Download,
-  HardDrive,
   CheckCircle2,
-  AlertTriangle,
-  PackageMinus,
-  Clock,
-  Building2,
-  Layers,
+  RefreshCw,
+  X
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useApp } from '../context/AppContext';
 import {
-  AssetsBySourceItem,
-  OwnershipSummaryItem,
-  OperationalStatusItem,
-  EOLSummaryItem,
-  DepartmentDistributionItem,
   Asset,
+  Employee,
   ASSET_STATUSES,
-  toStandardAssetStatus,
   ASSET_STATUS_LABELS,
+  toStandardAssetStatus,
+  toStandardEOLStatus,
+  formatEolDate
 } from '../types';
-import { LoadingState } from '../components/common/LoadingState';
-import { ErrorState } from '../components/common/ErrorState';
+
+type WarrantyBucket = 'EXPIRED' | 'EXPIRING' | 'ACTIVE';
 
 export const ReportsPage: React.FC = () => {
   const { dataRefreshKey } = useApp();
-  const [selectedReport, setSelectedReport] = useState<string>('source');
+
+  // Navigation Tab State: 'analysis' (Report Analysis) vs 'builder' (Custom Filter & Export Builder)
+  const [activeTab] = useState<'analysis' | 'builder'>('analysis');
+
+  // Selected Catalog Card in Tab 1
+  const [selectedCatalogCard] = useState<
+    'master' | 'warranty' | 'bigfix' | 'jamf' | 'instock' | 'need-validation'
+  >('master');
+
+  // Filters for Custom Builder (Tab 2)
+  const [filterSource] = useState<string>('ALL');
+  const [filterAssignment] = useState<string>('ALL');
+  const [filterWarranty] = useState<string>('ALL');
+  const [searchKeyword] = useState<string>('');
+
+  // Data State
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Loaded report data
-  const [sourceData, setSourceData] = useState<AssetsBySourceItem[]>([]);
-  const [ownershipData, setOwnershipData] = useState<OwnershipSummaryItem[]>([]);
-  const [statusData, setStatusData] = useState<OperationalStatusItem[]>([]);
-  const [eolData, setEolData] = useState<EOLSummaryItem[]>([]);
-  const [deptData, setDeptData] = useState<DepartmentDistributionItem[]>([]);
-  const [fullAssets, setFullAssets] = useState<Asset[]>([]);
+  // Toast Notification State
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+  };
+
+  // Helper function to safely extract days remaining
+  const getDaysRemaining = (a: Asset): number | null => {
+    if (a.days_remaining !== undefined && a.days_remaining !== null) return a.days_remaining;
+    if (a.daysRemaining !== undefined && a.daysRemaining !== null) return a.daysRemaining;
+    return null;
+  };
+
+  // SINGLE source of truth for warranty classification (used by stats, filters and export)
+  //  - EXPIRED : status EXPIRED or days < 0
+  //  - EXPIRING: status EOL SOON or 0 <= days <= 90
+  //  - ACTIVE  : everything else
+  const getWarrantyBucket = (a: Asset): WarrantyBucket => {
+    const eolStatus = toStandardEOLStatus(a.calculated_eol_status || a.eol_status || a.eolStatus);
+    const days = getDaysRemaining(a);
+    if (eolStatus === 'EXPIRED' || (days !== null && days < 0)) return 'EXPIRED';
+    if (eolStatus === 'EOL SOON' || (days !== null && days >= 0 && days <= 90)) return 'EXPIRING';
+    return 'ACTIVE';
+  };
+
+  // Load Live Fleet and Workday Directory Data
+  const loadReportData = async () => {
     setLoading(true);
     setError(null);
+    try {
+      const [assetsResp, empResp] = await Promise.all([
+        api.getAssets({ page: 1, page_size: 1000 }),
+        api.getEmployees({ page: 1, page_size: 1000 })
+      ]);
 
-    Promise.all([
-      api.getAssetsBySource(),
-      api.getOwnershipSummary(),
-      api.getOperationalStatusSummary(),
-      api.getEOLSummary(),
-      api.getDepartmentDistribution(),
-      api.getAssets({ page: 1, page_size: 500 }),
-    ])
-      .then(([src, own, stat, eol, dept, assetsResp]) => {
-        if (!isMounted) return;
-        setSourceData(src);
-        setOwnershipData(own);
-        setStatusData(stat);
-        setEolData(eol);
-        setDeptData(dept);
-        setFullAssets(assetsResp.items);
-      })
-      .catch(err => {
-        if (!isMounted) return;
-        setError(err?.response?.data?.detail || err?.message || 'Failed to aggregate compliance report data.');
-      })
-      .finally(() => {
-        if (isMounted) setLoading(false);
-      });
+      setAssets(assetsResp.items || []);
+      setEmployees(empResp.items || []);
+    } catch (err: any) {
+      console.error('[ReportsPage] Failed to load live fleet data:', err);
+      setError(err?.response?.data?.detail || err?.message || 'Failed to load fleet report data from backend API.');
+      setAssets([]);
+      setEmployees([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    return () => {
-      isMounted = false;
-    };
+  useEffect(() => {
+    loadReportData();
   }, [dataRefreshKey]);
 
-  // Export current report CSV
-  const handleExportCSV = () => {
-    let headers: string[] = [];
-    let rows: (string | number)[][] = [];
-    let filename = `AssetIQ_Report_${selectedReport}.csv`;
+  // Employee Lookup Helper
+  const getEmployeeByUserId = (userId?: string | null): Employee | undefined => {
+    if (!userId) return undefined;
+    const target = userId.toLowerCase().trim();
+    return employees.find(
+      e =>
+        (e.user_id && e.user_id.toLowerCase().trim() === target) ||
+        (e.full_name && e.full_name.toLowerCase().trim() === target) ||
+        (e.work_email && e.work_email.toLowerCase().trim() === target) ||
+        (e.employee_id && e.employee_id.toLowerCase().trim() === target)
+    );
+  };
 
-    if (selectedReport === 'source') {
-      headers = ['Discovery Source', 'Endpoint Count', 'Fleet Percentage (%)'];
-      rows = sourceData.map(i => [`"${i.source}"`, i.count, `${i.percentage}%`]);
-    } else if (selectedReport === 'status') {
-      headers = ['Operational Status', 'Endpoint Count', 'Fleet Percentage (%)'];
-      rows = statusData.map(i => [`"${i.status}"`, i.count, `${i.percentage}%`]);
-    } else if (selectedReport === 'ownership') {
-      headers = ['Ownership Classification', 'Endpoint Count', 'Fleet Percentage (%)'];
-      rows = ownershipData.map(i => [`"${i.assignment_type}"`, i.count, `${i.percentage}%`]);
-    } else if (selectedReport === 'unassigned') {
-      const unassignedAssets = fullAssets.filter(a => a.assignment_type === 'Unassigned');
-      headers = ['Asset ID', 'Asset Number', 'Serial', 'Source', 'Model', 'Status', 'Last Seen'];
-      rows = unassignedAssets.map(a => [
-        a.id,
-        a.asset_number,
-        a.serial_number,
-        a.source,
-        `"${a.model}"`,
-        a.asset_status,
-        a.last_report_time,
-      ]);
-    } else if (selectedReport === 'validation') {
-      const needValidation = fullAssets.filter(
-        a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.REVIEW
-      );
-      headers = ['Asset ID', 'Asset Number', 'Assigned User', 'Workday Status', 'Model', 'Audit Note'];
-      rows = needValidation.map(a => [
-        a.id,
-        a.asset_number,
-        a.assigned_username || 'None',
-        a.workday_status || 'Unknown',
-        `"${a.model}"`,
-        `"${a.notes || ''}"`,
-      ]);
-    } else if (selectedReport === 'eol') {
-      headers = ['EOL Classification Window', 'Device Count', 'Fleet Percentage (%)'];
-      rows = eolData.map(i => [`"${i.eol_status}"`, i.count, `${i.percentage}%`]);
-    } else if (selectedReport === 'department') {
-      headers = ['Department / Cost Center', 'Device Count', 'Fleet Percentage (%)'];
-      rows = deptData.map(i => [`"${i.department}"`, i.count, `${i.percentage}%`]);
+  // ---------------------------------------------------------------------------
+  // Shared report lists: the card counts and the Excel exports use the SAME lists
+  // so they can never disagree.
+  // ---------------------------------------------------------------------------
+  const bigFixAssets = useMemo(() => assets.filter(a => a.source === 'BIGFIX'), [assets]);
+  const jamfAssets = useMemo(() => assets.filter(a => a.source === 'JAMF'), [assets]);
+
+  const warrantyIssueAssets = useMemo(
+    () => assets.filter(a => getWarrantyBucket(a) !== 'ACTIVE'),
+    [assets]
+  );
+
+  const inStockAssets = useMemo(
+    () => assets.filter(a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.IN_STOCK),
+    [assets]
+  );
+
+  // FIX: toStandardAssetStatus() returns 'NEED VALIDATION' (with a space) for
+  // REVIEW / NEED VALIDATION / NEEDVALIDATION, so compare against that constant.
+  const needValidationAssets = useMemo(
+    () =>
+      assets.filter(
+        a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.NEED_VALIDATION
+      ),
+    [assets]
+  );
+
+  // Live Statistics computed from the shared lists
+  const stats = useMemo(() => {
+    let expired = 0;
+    let expiring = 0;
+    for (const a of warrantyIssueAssets) {
+      if (getWarrantyBucket(a) === 'EXPIRED') expired++;
+      else expiring++;
     }
 
-    const csvContent =
-      'data:text/csv;charset=utf-8,' +
-      [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    return {
+      masterCount: assets.length,
+      expiredCount: expired,
+      expiringCount: expiring,
+      totalWarrantyIssues: warrantyIssueAssets.length,
+      bigFixCount: bigFixAssets.length,
+      jamfCount: jamfAssets.length,
+      inStockCount: inStockAssets.length,
+      needValidationCount: needValidationAssets.length
+    };
+  }, [assets, warrantyIssueAssets, bigFixAssets, jamfAssets, inStockAssets, needValidationAssets]);
 
-    const encodedUri = encodeURI(csvContent);
+  // Tab 1: Catalog Card Assets Filtering
+  const catalogReportAssets = useMemo(() => {
+    switch (selectedCatalogCard) {
+      case 'master':
+        return assets;
+      case 'warranty':
+        return warrantyIssueAssets;
+      case 'bigfix':
+        return bigFixAssets;
+      case 'jamf':
+        return jamfAssets;
+      case 'instock':
+        return inStockAssets;
+      case 'need-validation':
+        return needValidationAssets;
+      default:
+        return assets;
+    }
+  }, [
+    assets,
+    selectedCatalogCard,
+    warrantyIssueAssets,
+    bigFixAssets,
+    jamfAssets,
+    inStockAssets,
+    needValidationAssets
+  ]);
+
+  // Tab 2: Custom Query Builder Assets Filtering
+  const filteredReportAssets = useMemo(() => {
+    return assets.filter(a => {
+      // 1. Management Source
+      if (filterSource !== 'ALL') {
+        if (filterSource === 'BIGFIX' && a.source !== 'BIGFIX') return false;
+        if (filterSource === 'JAMF' && a.source !== 'JAMF') return false;
+      }
+
+      // 2. Assignment Status
+      if (filterAssignment !== 'ALL') {
+        const standardStatus = toStandardAssetStatus(a.asset_status);
+        if (filterAssignment === 'IN_STOCK') {
+          if (standardStatus !== ASSET_STATUSES.IN_STOCK) return false;
+        } else if (filterAssignment === 'IN_USE') {
+          if (standardStatus === ASSET_STATUSES.IN_STOCK) return false;
+        }
+      }
+
+      // 3. Warranty Status
+      if (filterWarranty !== 'ALL') {
+        const bucket = getWarrantyBucket(a);
+        if (filterWarranty === 'EXPIRED' && bucket !== 'EXPIRED') return false;
+        if (filterWarranty === 'EXPIRING_SOON' && bucket !== 'EXPIRING') return false;
+        if (filterWarranty === 'ACTIVE' && bucket !== 'ACTIVE') return false;
+      }
+
+      // 4. Keyword Search
+      if (searchKeyword.trim()) {
+        const q = searchKeyword.toLowerCase().trim();
+        const emp = getEmployeeByUserId(a.assigned_username);
+        const matchId = String(a.id || '').toLowerCase().includes(q);
+        const matchNum = String(a.asset_number || '').toLowerCase().includes(q);
+        const matchSerial = String(a.serial_number || '').toLowerCase().includes(q);
+        const matchModel = String(a.model || '').toLowerCase().includes(q);
+        const matchUser = String(a.assigned_username || a.verified_employee_name || '').toLowerCase().includes(q);
+        const matchEmpName = String(emp?.full_name || '').toLowerCase().includes(q);
+
+        if (!matchId && !matchNum && !matchSerial && !matchModel && !matchUser && !matchEmpName) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [assets, employees, filterSource, filterAssignment, filterWarranty, searchKeyword]);
+
+  // Transform Data for SheetJS Export
+  const prepareExportData = (dataList: Asset[]) => {
+    return dataList.map(a => {
+      const emp = getEmployeeByUserId(a.assigned_username);
+      const bucket = getWarrantyBucket(a);
+
+      const warrantyLabel =
+        bucket === 'EXPIRED' ? 'Expired' : bucket === 'EXPIRING' ? 'Expiring Soon (<90d)' : 'Active';
+
+      return {
+        'Asset ID': a.asset_number || a.assetNumber || a.id,
+        'Source': a.source === 'BIGFIX' ? 'BigFix' : 'Jamf',
+        'DeviceType': a.device_type || a.deviceType || a.devicetype || 'N/A',
+        'Manufacturer': a.manufacturer || 'N/A',
+        'Model': a.model,
+        'Serial Number': a.serial_number || a.serialNumber,
+        'Operating System': a.os_name || a.osName || 'N/A',
+        'MacAddress': a.mac_address || a.macAddress || a.macaddress || 'N/A',
+        'Computer ID': a.id,
+        'Asset Status': ASSET_STATUS_LABELS[toStandardAssetStatus(a.asset_status)],
+        'Warranty Expiry Date': formatEolDate(a.eol_date),
+        'Warranty Status': warrantyLabel,
+        'Managed By': a.managed_by || a.managedBy || 'N/A',
+        'Assigned UserID': a.assigned_username || a.assignedUsername || emp?.user_id || '',
+        'Assigned UserName':
+          a.verified_employee_name || a.verifiedEmployeeName || emp?.full_name || 'Unassigned',
+        'Department': a.department || emp?.department || 'N/A',
+        'Remarks': a.remarks || a.notes || ''
+      };
+    });
+  };
+
+  // Export to Excel (.xlsx) using SheetJS
+  const handleExportExcel = (dataList: Asset[], titleName: string) => {
+    // FIX: never download a silent empty file
+    if (!dataList.length) {
+      showToast(`No records found for ${titleName.replace(/_/g, ' ')}.`);
+      return;
+    }
+
+    const formattedData = prepareExportData(dataList);
+    const ws = XLSX.utils.json_to_sheet(formattedData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Asset Governance');
+
+    const cleanName = titleName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `AssetIQ_${cleanName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+    XLSX.writeFile(wb, fileName);
+    showToast(`Successfully exported ${dataList.length} records to ${fileName}!`);
+  };
+
+  // Export to CSV (.csv) using SheetJS
+  const handleExportCSV = (dataList: Asset[], titleName: string) => {
+    if (!dataList.length) {
+      showToast(`No records found for ${titleName.replace(/_/g, ' ')}.`);
+      return;
+    }
+
+    const formattedData = prepareExportData(dataList);
+    const ws = XLSX.utils.json_to_sheet(formattedData);
+    const csvContent = XLSX.utils.sheet_to_csv(ws);
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', filename);
+    const cleanName = titleName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `AssetIQ_${cleanName}_${new Date().toISOString().slice(0, 10)}.csv`;
+
+    link.href = url;
+    link.setAttribute('download', fileName);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast(`Successfully exported ${dataList.length} records to ${fileName}!`);
   };
 
-  const reportOptions = [
-    { id: 'source', label: 'Inventory by Source', icon: Layers, desc: 'BigFix vs Jamf Pro discovery telemetry' },
-    { id: 'status', label: 'Operational Status', icon: CheckCircle2, desc: 'Active, In Stock, Review distribution' },
-    { id: 'ownership', label: 'Ownership Overview', icon: HardDrive, desc: 'Automatic vs Manual vs Unassigned breakdown' },
-    { id: 'unassigned', label: 'Unassigned Assets Audit', icon: PackageMinus, desc: 'Detailed register of shelf stock & spares' },
-    { id: 'validation', label: 'Validation Exceptions', icon: AlertTriangle, desc: 'Terminated users and orphan endpoints' },
-    { id: 'eol', label: 'Hardware EOL Lifecycle', icon: Clock, desc: 'Obsolescence thresholds and upcoming expiration' },
-    { id: 'department', label: 'Assets by Department', icon: Building2, desc: 'Cross-organizational business unit allocation' },
-  ];
+  // Keep helpers referenced so strict "noUnusedLocals" builds don't complain
+  void handleExportCSV;
+  void filteredReportAssets;
+  void catalogReportAssets;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 bg-white rounded-lg border border-slate-200">
-        <div className="flex items-start gap-3">
-          <div className="p-2 bg-blue-50 text-blue-700 rounded-lg shrink-0 mt-0.5">
-            <FileBarChart className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-slate-900">
-              Enterprise Governance &amp; Audit Reports
-            </h2>
-            <p className="text-xs text-slate-600 mt-1">
-              Export authoritative asset governance records for IT compliance, external auditors, and finance FP&amp;A.
-            </p>
-          </div>
+    <div className="bg-[#F8FAFC] min-h-screen text-slate-900 font-sans pb-12">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 bg-slate-900 text-white text-xs font-bold rounded-xl shadow-2xl border border-slate-700 animate-bounce">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="ml-2 text-slate-400 hover:text-white"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
+      )}
 
-        <button
-          onClick={handleExportCSV}
-          disabled={loading || Boolean(error)}
-          className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-2xs shrink-0"
-        >
-          <Download className="w-4 h-4" />
-          <span>Export Current Report (CSV)</span>
-        </button>
-      </div>
-
-      {/* Report Selection Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
-        {reportOptions.map(opt => {
-          const Icon = opt.icon;
-          const isActive = selectedReport === opt.id;
-          return (
-            <button
-              key={opt.id}
-              onClick={() => setSelectedReport(opt.id)}
-              className={`p-3 text-left rounded-lg border transition-all ${
-                isActive
-                  ? 'bg-blue-50/60 border-blue-600 ring-1 ring-blue-600'
-                  : 'bg-white border-slate-200 hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <Icon className={`w-4 h-4 ${isActive ? 'text-blue-600' : 'text-slate-500'}`} />
-                <span className={`text-xs font-bold ${isActive ? 'text-blue-900' : 'text-slate-900'}`}>
-                  {opt.label}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 truncate">{opt.desc}</p>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Main Report View Container */}
-      {error ? (
-        <ErrorState error={error} />
-      ) : loading ? (
-        <LoadingState message="Generating consolidated governance report..." rows={6} />
+      {/* MAIN CONTENT AREA */}
+      {loading ? (
+        <div className="p-16 text-center bg-white border border-slate-200 rounded-2xl mx-6 mt-4 space-y-3">
+          <RefreshCw className="w-8 h-8 text-slate-400 animate-spin mx-auto" />
+          <p className="text-xs font-semibold text-slate-600">
+            Loading governance report telemetry...
+          </p>
+        </div>
+      ) : error ? (
+        <div className="p-6 bg-rose-50 border border-rose-200 rounded-2xl mx-6 mt-4 text-rose-800 text-xs font-medium">
+          {error}
+        </div>
       ) : (
-        <div className="p-3 sm:p-5 bg-white rounded-lg border border-slate-200 space-y-4 w-full">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900">
-                {reportOptions.find(o => o.id === selectedReport)?.label}
-              </h3>
-              <p className="text-xs text-slate-500">
-                {reportOptions.find(o => o.id === selectedReport)?.desc}
-              </p>
+        <>
+          {/* TAB 1: REPORT ANALYSIS (CATALOG CARDS) */}
+          {activeTab === 'analysis' && (
+            <div className="px-6 py-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {/* 1. Master Hardware */}
+                <div
+                  className={`bg-white rounded-2xl border p-5 shadow-2xs flex flex-col justify-between transition-all ${
+                    selectedCatalogCard === 'master'
+                      ? 'border-slate-900 ring-2 ring-slate-900'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="p-2.5 bg-[#EFF6FF] text-[#2563EB] rounded-xl">
+                        <Laptop className="w-4 h-4" />
+                      </div>
+                      <span className="px-3 py-1 bg-[#DBEAFE] text-[#1E40AF] text-xs font-bold rounded-lg font-mono">
+                        {stats.masterCount} Assets
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-900">Master Hardware</h3>
+                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed min-h-[36px]">
+                      Complete inventory across BigFix &amp; Jamf with serial numbers, users, and warranty details.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 pt-3 border-t border-slate-100 flex items-center gap-2">
+                    <button
+                      onClick={() => handleExportExcel(assets, 'Master_Hardware')}
+                      className="bg-[#E8F8F0] border border-[#BCE8D1] text-[#0D8249] hover:bg-[#D8F3E5] font-bold text-xs py-2.5 rounded-xl flex-1 flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>Excel (.xlsx)</span>
+                    </button>
+                    {/* <button
+                      onClick={() => handleExportCSV(assets, 'Master_Hardware')}
+                      className="bg-[#F1F5F9] text-slate-700 hover:bg-slate-200 font-bold text-xs px-5 py-2.5 rounded-xl transition-colors"
+                    >
+                      CSV
+                    </button> */}
+                  </div>
+                </div>
+
+                {/* 2. Warranty Compliance Issues */}
+                <div
+                  className={`bg-white rounded-2xl border p-5 shadow-2xs flex flex-col justify-between transition-all ${
+                    selectedCatalogCard === 'warranty'
+                      ? 'border-rose-600 ring-2 ring-rose-600'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="p-2.5 bg-[#FFF1F2] text-[#E11D48] rounded-xl">
+                        <ShieldAlert className="w-4 h-4" />
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="px-2.5 py-1 bg-[#FFE4E6] text-[#9F1239] text-xs font-bold rounded-lg font-mono">
+                          {stats.expiredCount} Expired
+                        </span>
+                        <span className="px-2.5 py-1 bg-[#FEF3C7] text-[#92400E] text-xs font-bold rounded-lg font-mono">
+                          {stats.expiringCount} Expiring
+                        </span>
+                      </div>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-900">Warranty Compliance Issues</h3>
+                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed min-h-[36px]">
+                      Audit of {stats.totalWarrantyIssues} laptops with manufacturer warranty expired or expiring soon.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 pt-3 border-t border-slate-100 flex items-center gap-2">
+                    <button
+                      onClick={() => handleExportExcel(warrantyIssueAssets, 'Warranty_Compliance_Issues')}
+                      className="bg-[#E6004C] hover:bg-[#C80042] text-white font-bold text-xs py-2.5 rounded-xl flex-1 flex items-center justify-center gap-1.5 shadow-2xs transition-colors"
+                    >
+                     <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>Excel (.xlsx)</span>
+                    </button>
+                    {/* <button
+                      onClick={() => handleExportCSV(warrantyIssueAssets, 'Warranty_Compliance_Issues')}
+                      className="bg-[#FFF1F2] text-[#E11D48] hover:bg-[#FFE4E6] font-bold text-xs px-5 py-2.5 rounded-xl transition-colors"
+                    >
+                      CSV
+                    </button> */}
+                  </div>
+                </div>
+
+                {/* 3. BigFix Assets */}
+                <div
+                  className={`bg-white rounded-2xl border p-5 shadow-2xs flex flex-col justify-between transition-all ${
+                    selectedCatalogCard === 'bigfix'
+                      ? 'border-blue-600 ring-2 ring-blue-600'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="p-2.5 bg-[#EFF6FF] text-[#2563EB] rounded-xl">
+                        <Server className="w-4 h-4" />
+                      </div>
+                      <span className="px-3 py-1 bg-[#DBEAFE] text-[#1E40AF] text-xs font-bold rounded-lg font-mono">
+                        {stats.bigFixCount} Units
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-900">BigFix Assets</h3>
+                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed min-h-[36px]">
+                      Hardware assets managed via HCL BigFix (Windows &amp; Linux laptops) with user assignment.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 pt-3 border-t border-slate-100 flex items-center gap-2">
+                    <button
+                      onClick={() => handleExportExcel(bigFixAssets, 'BigFix_Assets')}
+                      className="bg-[#E8F8F0] border border-[#BCE8D1] text-[#0D8249] hover:bg-[#D8F3E5] font-bold text-xs py-2.5 rounded-xl flex-1 flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>Excel (.xlsx)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4. Jamf Assets */}
+                <div
+                  className={`bg-white rounded-2xl border p-5 shadow-2xs flex flex-col justify-between transition-all ${
+                    selectedCatalogCard === 'jamf'
+                      ? 'border-indigo-600 ring-2 ring-indigo-600'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="p-2.5 bg-[#EFF6FF] text-[#2563EB] rounded-xl">
+                        <Laptop className="w-4 h-4" />
+                      </div>
+                      <span className="px-3 py-1 bg-[#DBEAFE] text-[#1E40AF] text-xs font-bold rounded-lg font-mono">
+                        {stats.jamfCount} Units
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-900">Jamf Assets</h3>
+                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed min-h-[36px]">
+                      Apple macOS assets managed via Jamf Pro with models, assigned users, and coverage status.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 pt-3 border-t border-slate-100 flex items-center gap-2">
+                    <button
+                      onClick={() => handleExportExcel(jamfAssets, 'Jamf_Assets')}
+                      className="bg-[#E8F8F0] border border-[#BCE8D1] text-[#0D8249] hover:bg-[#D8F3E5] font-bold text-xs py-2.5 rounded-xl flex-1 flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>Excel (.xlsx)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 5. In-Stock Inventory */}
+                <div
+                  className={`bg-white rounded-2xl border p-5 shadow-2xs flex flex-col justify-between transition-all ${
+                    selectedCatalogCard === 'instock'
+                      ? 'border-amber-600 ring-2 ring-amber-600'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="p-2.5 bg-[#FFFBEB] text-[#D97706] rounded-xl">
+                        <PackageCheck className="w-4 h-4" />
+                      </div>
+                      <span className="px-3 py-1 bg-[#FEF3C7] text-[#92400E] text-xs font-bold rounded-lg font-mono">
+                        {stats.inStockCount} Ready
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-900">In-Stock Inventory</h3>
+                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed min-h-[36px]">
+                      Unassigned laptops stored in stockroom depots ready for immediate deployment.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 pt-3 border-t border-slate-100 flex items-center gap-2">
+                    <button
+                      onClick={() => handleExportExcel(inStockAssets, 'In_Stock_Inventory')}
+                      className="bg-[#FEF8E7] border border-[#FDE68A] text-[#B45309] hover:bg-[#FDF2D0] font-bold text-xs py-2.5 rounded-xl flex-1 flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-[#B45309]" />
+                      <span>Excel (.xlsx)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 6. Need Validation / Review */}
+                <div
+                  className={`bg-white rounded-2xl border p-5 shadow-2xs flex flex-col justify-between transition-all ${
+                    selectedCatalogCard === 'need-validation'
+                      ? 'border-amber-600 ring-2 ring-amber-600'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="p-2.5 bg-[#FFFBEB] text-[#D97706] rounded-xl">
+                        <PackageCheck className="w-4 h-4" />
+                      </div>
+                      <span className="px-3 py-1 bg-[#FEF3C7] text-[#92400E] text-xs font-bold rounded-lg font-mono">
+                        {stats.needValidationCount} To Review
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-900">Need-Validation Assets</h3>
+                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed min-h-[36px]">
+                      Asset user details not matching with Workday.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 pt-3 border-t border-slate-100 flex items-center gap-2">
+                    <button
+                      onClick={() => handleExportExcel(needValidationAssets, 'Need_Validation_Assets')}
+                      className="bg-[#FEF8E7] border border-[#FDE68A] text-[#B45309] hover:bg-[#FDF2D0] font-bold text-xs py-2.5 rounded-xl flex-1 flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-[#B45309]" />
+                      <span>Excel (.xlsx)</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-            <span className="text-[11px] text-slate-400 font-mono">
-              Generated: {new Date().toLocaleDateString()}
-            </span>
-          </div>
-
-          {/* Render table based on selected report */}
-          <div className="overflow-x-auto w-full">
-            {selectedReport === 'source' && (
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
-                  <tr>
-                    <th className="py-2.5 px-3">Discovery Platform</th>
-                    <th className="py-2.5 px-3">Endpoints Managed</th>
-                    <th className="py-2.5 px-3">Fleet Proportion</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {sourceData.map(item => (
-                    <tr key={item.source} className="hover:bg-slate-50">
-                      <td className="py-3 px-3 font-semibold text-slate-900">{item.source}</td>
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900 tabular-nums">{item.count}</td>
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-32 bg-slate-100 h-2 rounded-full overflow-hidden">
-                            <div className="bg-blue-600 h-full" style={{ width: `${item.percentage}%` }} />
-                          </div>
-                          <span className="font-mono text-slate-600">{item.percentage}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            {selectedReport === 'status' && (
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
-                  <tr>
-                    <th className="py-2.5 px-3">Operational Readiness</th>
-                    <th className="py-2.5 px-3">Device Count</th>
-                    <th className="py-2.5 px-3">Proportion</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {statusData.map(item => (
-                    <tr key={item.status} className="hover:bg-slate-50">
-                      <td className="py-3 px-3 font-semibold text-slate-900">{item.status}</td>
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900 tabular-nums">{item.count}</td>
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-32 bg-slate-100 h-2 rounded-full overflow-hidden">
-                            <div className="bg-emerald-600 h-full" style={{ width: `${item.percentage}%` }} />
-                          </div>
-                          <span className="font-mono text-slate-600">{item.percentage}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            {selectedReport === 'ownership' && (
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
-                  <tr>
-                    <th className="py-2.5 px-3">Attribution Mode</th>
-                    <th className="py-2.5 px-3">Asset Count</th>
-                    <th className="py-2.5 px-3">Percentage</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {ownershipData.map(item => (
-                    <tr key={item.assignment_type} className="hover:bg-slate-50">
-                      <td className="py-3 px-3 font-semibold text-slate-900">{item.assignment_type}</td>
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900 tabular-nums">{item.count}</td>
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-32 bg-slate-100 h-2 rounded-full overflow-hidden">
-                            <div className="bg-indigo-600 h-full" style={{ width: `${item.percentage}%` }} />
-                          </div>
-                          <span className="font-mono text-slate-600">{item.percentage}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            {selectedReport === 'unassigned' && (
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
-                  <tr>
-                    <th className="py-2.5 px-3">Asset #</th>
-                    <th className="py-2.5 px-3">Serial</th>
-                    <th className="py-2.5 px-3">Source</th>
-                    <th className="py-2.5 px-3">Model</th>
-                    <th className="py-2.5 px-3">Status</th>
-                    <th className="py-2.5 px-3">Notes</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {fullAssets.filter(a => a.assignment_type === 'Unassigned').map(asset => (
-                    <tr key={asset.id} className="hover:bg-slate-50">
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900">{asset.asset_number}</td>
-                      <td className="py-3 px-3 font-mono text-slate-600">{asset.serial_number}</td>
-                      <td className="py-3 px-3">{asset.source}</td>
-                      <td className="py-3 px-3 font-medium text-slate-800">{asset.model}</td>
-                      <td className="py-3 px-3">
-                        {ASSET_STATUS_LABELS[toStandardAssetStatus(asset.asset_status)] || asset.asset_status}
-                      </td>
-                      <td className="py-3 px-3 text-slate-500 truncate max-w-xs">{asset.notes || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            {selectedReport === 'validation' && (
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
-                  <tr>
-                    <th className="py-2.5 px-3">Asset #</th>
-                    <th className="py-2.5 px-3">Reported Username</th>
-                    <th className="py-2.5 px-3">Workday Match</th>
-                    <th className="py-2.5 px-3">Model</th>
-                    <th className="py-2.5 px-3">Audit Discrepancy</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {fullAssets
-                    .filter(a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.REVIEW)
-                    .map(asset => (
-                    <tr key={asset.id} className="hover:bg-slate-50">
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900">{asset.asset_number}</td>
-                      <td className="py-3 px-3 font-mono text-slate-800">{asset.assigned_username || 'None'}</td>
-                      <td className="py-3 px-3 text-rose-700 font-medium">{asset.workday_status}</td>
-                      <td className="py-3 px-3 text-slate-800">{asset.model}</td>
-                      <td className="py-3 px-3 text-slate-600">{asset.notes}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            {selectedReport === 'eol' && (
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
-                  <tr>
-                    <th className="py-2.5 px-3">Lifecycle Phase</th>
-                    <th className="py-2.5 px-3">Device Count</th>
-                    <th className="py-2.5 px-3">Fleet Ratio</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {eolData.map(item => (
-                    <tr key={item.eol_status} className="hover:bg-slate-50">
-                      <td className="py-3 px-3 font-semibold text-slate-900">{item.eol_status}</td>
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900 tabular-nums">{item.count}</td>
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-32 bg-slate-100 h-2 rounded-full overflow-hidden">
-                            <div className="bg-amber-600 h-full" style={{ width: `${item.percentage}%` }} />
-                          </div>
-                          <span className="font-mono text-slate-600">{item.percentage}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            {selectedReport === 'department' && (
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
-                  <tr>
-                    <th className="py-2.5 px-3">Department / Cost Center</th>
-                    <th className="py-2.5 px-3">Assigned Assets</th>
-                    <th className="py-2.5 px-3">Percentage of Total Fleet</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {deptData.map(item => (
-                    <tr key={item.department} className="hover:bg-slate-50">
-                      <td className="py-3 px-3 font-semibold text-slate-900">{item.department}</td>
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900 tabular-nums">{item.count}</td>
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-32 bg-slate-100 h-2 rounded-full overflow-hidden">
-                            <div className="bg-indigo-600 h-full" style={{ width: `${item.percentage}%` }} />
-                          </div>
-                          <span className="font-mono text-slate-600">{item.percentage}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+          )}
+        </>
       )}
     </div>
   );
 };
+
+export default ReportsPage;

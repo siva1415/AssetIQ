@@ -29,11 +29,11 @@ export const EOLPage: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingRecord, setEditingRecord] = useState<DeviceEOLReference | null>(null);
   const [formData, setFormData] = useState<{
-    manufacturer: EOLManufacturer;
+    manufacturer: string;
     model: string;
     eol_date: string;
   }>({
-    manufacturer: 'DELL',
+    manufacturer: '',
     model: '',
     eol_date: '',
   });
@@ -140,7 +140,7 @@ export const EOLPage: React.FC = () => {
   const handleOpenCreateModal = () => {
     setEditingRecord(null);
     setFormData({
-      manufacturer: 'DELL',
+      manufacturer: '',
       model: '',
       eol_date: '',
     });
@@ -164,7 +164,7 @@ export const EOLPage: React.FC = () => {
   const validateForm = (): boolean => {
     const errors: { manufacturer?: string; model?: string; eol_date?: string } = {};
 
-    if (!formData.manufacturer) {
+    if (!formData.manufacturer.trim()) {
       errors.manufacturer = 'Manufacturer is mandatory.';
     }
 
@@ -187,30 +187,31 @@ export const EOLPage: React.FC = () => {
     if (!validateForm() || submitting) return;
 
     setSubmitting(true);
+    const trimmedManufacturer = formData.manufacturer.trim();
     const trimmedModel = formData.model.trim();
 
     try {
       if (editingRecord) {
         // Update existing record
         await api.updateEOLReference(editingRecord.eol_id, {
-          manufacturer: formData.manufacturer,
+          manufacturer: trimmedManufacturer,
           model: trimmedModel,
           eol_date: formData.eol_date,
         });
         setNotification({
           type: 'success',
-          message: `Successfully updated reference date for ${formData.manufacturer} ${trimmedModel}.`,
+          message: `Successfully updated reference date for ${trimmedManufacturer} ${trimmedModel}.`,
         });
       } else {
         // Create new record
         await api.createEOLReference({
-          manufacturer: formData.manufacturer,
+          manufacturer: trimmedManufacturer,
           model: trimmedModel,
           eol_date: formData.eol_date,
         });
         setNotification({
           type: 'success',
-          message: `Successfully registered EOL reference for ${formData.manufacturer} ${trimmedModel}.`,
+          message: `Successfully registered EOL reference for ${trimmedManufacturer} ${trimmedModel}.`,
         });
       }
 
@@ -498,26 +499,23 @@ export const EOLPage: React.FC = () => {
               <form onSubmit={handleSubmitForm} className="p-5 space-y-4 text-xs">
                 {/* Field 1: Manufacturer */}
                 <div>
-                  <label htmlFor="mfr-select" className="block font-semibold text-slate-700 mb-1">
+                  <label htmlFor="mfr-input" className="block font-semibold text-slate-700 mb-1">
                     Manufacturer <span className="text-rose-500">*</span>
                   </label>
-                  <select
-                    id="mfr-select"
+                  <input
+                    id="mfr-input"
+                    type="text"
+                    placeholder="e.g. DELL, HP, Lenovo, or Apple"
                     value={formData.manufacturer}
                     onChange={e =>
                       setFormData({
                         ...formData,
-                        manufacturer: e.target.value as EOLManufacturer,
+                        manufacturer: e.target.value,
                       })
                     }
                     disabled={submitting}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  >
-                    <option value="DELL">DELL</option>
-                    <option value="HP">HP</option>
-                    <option value="Lenovo">Lenovo</option>
-                    <option value="Apple">Apple</option>
-                  </select>
+                  />
                   {formErrors.manufacturer && (
                     <p className="text-[11px] text-rose-600 mt-1">{formErrors.manufacturer}</p>
                   )}

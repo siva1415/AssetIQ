@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search,
@@ -161,7 +161,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   }, [dataRefreshKey]);
 
   // Load Fleet Summary KPI metrics for the current source context
-  useEffect(() => {
+  const loadKpiMetrics = useCallback(() => {
     let isMounted = true;
     setKpiLoading(true);
     setKpiError(null);
@@ -184,7 +184,11 @@ export const AssetTable: React.FC<AssetTableProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [initialSourceFilter, dataRefreshKey]);
+  }, [initialSourceFilter]);
+
+  useEffect(() => {
+    return loadKpiMetrics();
+  }, [loadKpiMetrics, dataRefreshKey]);
 
   // Load filter dropdown options
   useEffect(() => {
@@ -1050,6 +1054,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
             setAssignAsset(null);
             triggerDataRefresh();
             fetchAssets();
+            loadKpiMetrics();
             setNotification({ type: 'success', message: msg });
           }}
         />

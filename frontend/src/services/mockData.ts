@@ -638,8 +638,8 @@ export function getMockAvailableWorkdayUsers(search?: string): AvailableWorkdayU
     };
   });
 
-  // Backend filters out users already listed as admins
-  list = list.filter(u => !u.is_admin);
+  // Backend filters out users already listed as admins and only includes active Workday employees
+  list = list.filter(u => !u.is_admin && (u.employee_status || '').toLowerCase() === 'active');
 
   if (search && search.trim() !== '') {
     const q = search.trim().toLowerCase();

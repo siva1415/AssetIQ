@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   X,
   Search,
@@ -44,7 +44,12 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
   }, [asset.managed_by]);
 
   const [group, setGroup] = useState<'INDIVIDUAL' | 'GROUP'>(initialGroup);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<Employee | null>(null);
+  const selectedUserIdRef = useRef<string | null>(null);
+  selectedUserIdRef.current = selectedUserId;
+  const isFirstSearchRef = useRef(true);
+
   const [remarks, setRemarks] = useState<string>(asset.notes || asset.remarks || '');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [debouncedSearch, setDebouncedSearch] = useState<string>('');
@@ -63,6 +68,11 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
 
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const handleSelectEmployee = (emp: Employee) => {
+    setSelectedUserId(emp.user_id);
+    setSelectedUser(emp);
+  };
 
   // Manufacturer and Model formatted as "Manufacturer - Model"
   const manufacturerAndModel = useMemo(() => {
@@ -146,22 +156,42 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
 
   // Prepopulate selectedUser if asset already has an assigned employee
   useEffect(() => {
-    if (!asset.assigned_username && !asset.verified_employee_id) return;
     const lookupKey = asset.verified_employee_id || asset.assigned_username;
-    if (lookupKey) {
-      api
-        .getEmployeeById(lookupKey)
-        .then(emp => {
-          setSelectedUser(prev => prev || emp);
-        })
-        .catch(() => {
-          // ignore lookup failure on initial prepopulate
-        });
+    if (!lookupKey) return;
+
+    if (asset.employee || asset.workday_employee || asset.matched_employee) {
+      const emp = (asset.employee || asset.workday_employee || asset.matched_employee) as Employee;
+      if (emp && emp.user_id) {
+        setSelectedUser(prev => prev || emp);
+        setSelectedUserId(prev => prev || emp.user_id);
+      }
     }
-  }, [asset.assigned_username, asset.verified_employee_id]);
+
+    api
+      .getEmployeeById(lookupKey)
+      .then(emp => {
+        if (emp && emp.user_id) {
+          setSelectedUser(prev => prev || emp);
+          setSelectedUserId(prev => prev || emp.user_id);
+        }
+      })
+      .catch(() => {
+        // ignore lookup failure on initial prepopulate
+      });
+  }, [
+    asset.assigned_username,
+    asset.verified_employee_id,
+    asset.employee,
+    asset.workday_employee,
+    asset.matched_employee,
+  ]);
 
   // Debounce search input to avoid spamming the backend API
   useEffect(() => {
+    if (isFirstSearchRef.current) {
+      isFirstSearchRef.current = false;
+      return;
+    }
     const timer = setTimeout(() => {
       setDebouncedSearch(searchQuery.trim());
       setPage(1);
@@ -180,6 +210,7 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
         page,
         page_size: pageSize,
         search: debouncedSearch || undefined,
+        employee_status: 'Active',
         sort_by: sortBy,
         sort_order: sortOrder,
       });
@@ -190,7 +221,7 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
       setTotalPages(res.total_pages || Math.max(1, Math.ceil(res.total / pageSize)));
 
       // If no employee is selected yet, check if current assigned user is in the page
-      if (!selectedUser && asset.assigned_username) {
+      if (!selectedUserIdRef.current && asset.assigned_username) {
         const currentUsername = asset.assigned_username.toLowerCase().trim();
         const found = res.items.find(
           e =>
@@ -198,6 +229,7 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
             (asset.verified_employee_id && e.employee_id === asset.verified_employee_id)
         );
         if (found) {
+          setSelectedUserId(found.user_id);
           setSelectedUser(found);
         }
       }
@@ -219,7 +251,6 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
     debouncedSearch,
     sortBy,
     sortOrder,
-    selectedUser,
     asset.assigned_username,
     asset.verified_employee_id,
   ]);
@@ -254,8 +285,9 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
     }
 
     setSubmitting(true);
+    const assetIdToUse = asset.id ?? asset.assetId ?? asset.asset_number;
     try {
-      const response = await api.reassignAsset(asset.id, {
+      const response = await api.reassignAsset(assetIdToUse, {
         user_id: selectedUser.user_id,
         assigned_username: selectedUser.user_id,
         managed_by: group,
@@ -473,7 +505,11 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
               {searchQuery && (
                 <button
                   type="button"
-                  onClick={() => setSearchQuery('')}
+                  onClick={() => {
+                    setSearchQuery('');
+                    setDebouncedSearch('');
+                    setPage(1);
+                  }}
                   className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
                   aria-label="Clear employee search"
                 >
@@ -553,12 +589,15 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {employees.map(emp => {
-                          const isSelected = selectedUser?.user_id === emp.user_id;
+                          const isSelected = Boolean(
+                            (selectedUserId && emp.user_id.toLowerCase() === selectedUserId.toLowerCase()) ||
+                            (selectedUser && emp.user_id.toLowerCase() === selectedUser.user_id.toLowerCase())
+                          );
 
                           return (
                             <tr
                               key={emp.user_id}
-                              onClick={() => setSelectedUser(emp)}
+                              onClick={() => handleSelectEmployee(emp)}
                               className={`cursor-pointer transition-colors ${
                                 isSelected
                                   ? 'bg-blue-50/80 hover:bg-blue-100/70'
@@ -571,7 +610,7 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
                                   type="radio"
                                   name="selectedWorkdayUser"
                                   checked={isSelected}
-                                  onChange={() => setSelectedUser(emp)}
+                                  onChange={() => handleSelectEmployee(emp)}
                                   className="w-3.5 h-3.5 text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer"
                                 />
                               </td>

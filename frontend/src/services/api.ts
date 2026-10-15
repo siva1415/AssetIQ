@@ -380,6 +380,40 @@ export function normalizeEmployee(raw: any): Employee {
   };
 }
 
+// Normalizer for AvailableWorkdayUser records from Workday directory API
+export function normalizeAvailableWorkdayUser(raw: any): AvailableWorkdayUser {
+  if (!raw) {
+    return {
+      user_id: '',
+      full_name: '—',
+      email_work: '—',
+      department: '—',
+      employee_status: 'Active',
+      is_admin: false,
+    };
+  }
+
+  const userId = String(raw.user_id ?? raw.userId ?? raw.username ?? raw.employee_id ?? '').trim();
+  const fullName = String(raw.full_name ?? raw.fullName ?? raw.name ?? raw.employee_name ?? userId ?? '—').trim();
+  const emailWork = String(raw.email_work ?? raw.work_email ?? raw.workEmail ?? raw.email ?? '—').trim();
+  const department = String(raw.department ?? raw.dept ?? raw.division ?? '—').trim();
+  const division = raw.division ? String(raw.division).trim() : undefined;
+  const jobTitle = raw.job_title ?? raw.jobTitle ?? raw.title ?? raw.position;
+  const employeeStatus = String(raw.employee_status ?? raw.employeeStatus ?? raw.status ?? 'Active').trim();
+  const isAdmin = Boolean(raw.is_admin ?? raw.isAdmin ?? false);
+
+  return {
+    user_id: userId,
+    full_name: fullName,
+    email_work: emailWork,
+    department: department,
+    division: division ? String(division) : undefined,
+    job_title: jobTitle ? String(jobTitle).trim() : undefined,
+    employee_status: employeeStatus,
+    is_admin: isAdmin,
+  };
+}
+
 // Helper to aggregate Fleet Summary KPI counts from a complete list of Asset items
 export function aggregateFleetKpisFromAssets(items: Asset[]): FleetKpiMetrics {
   const totalAssets = items.length;
@@ -1824,38 +1858,169 @@ class ApiService {
     });
   }
 
-  public async getAvailableWorkdayUsers(search?: string): Promise<AvailableWorkdayUser[]> {
+  public async getAvailableWorkdayUsers(
+    searchOrQuery?: string | { search?: string; page?: number; page_size?: number; fetch_all?: boolean }
+  ): Promise<AvailableWorkdayUser[]> {
+    const searchParam = typeof searchOrQuery === 'string' ? searchOrQuery : searchOrQuery?.search;
+    const cleanSearch = searchParam?.trim();
+
     if (this.isMockMode) {
       await this.simulateLatency();
-      return getMockAvailableWorkdayUsers(search);
+      return getMockAvailableWorkdayUsers(cleanSearch);
     }
+
     const client = createAxiosClient();
-    const cleanSearch = search?.trim();
-    const queryParams: Record<string, string> = {};
+    const queryParams: Record<string, any> = {};
     if (cleanSearch) {
       queryParams.search = cleanSearch;
       queryParams.q = cleanSearch;
     }
 
-    // Call GET /api/admin-users/available-users
+    // Determine target route with 404 fallback
+    const routes = ['/api/admin-users/available-users', '/api/admin_users/available_users'];
+
+    let initialResp: any = null;
+    let endpointUsed = routes[0];
+
     try {
-      const response = await client.get<any>('/api/admin-users/available-users', {
+      initialResp = await client.get<any>(routes[0], {
         params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
       });
-      const data = response.data?.data ?? response.data?.items ?? response.data?.results ?? response.data;
-      return Array.isArray(data) ? data : [];
+      endpointUsed = routes[0];
     } catch (err: any) {
       const status = err?.status || err?.response?.status;
       if (status === 404) {
-        // Fallback to snake_case route if 404
-        const altResponse = await client.get<any>('/api/admin_users/available_users', {
+        endpointUsed = routes[1];
+        initialResp = await client.get<any>(routes[1], {
           params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         });
-        const altData = altResponse.data?.data ?? altResponse.data?.items ?? altResponse.data?.results ?? altResponse.data;
-        return Array.isArray(altData) ? altData : [];
+      } else {
+        throw err;
       }
-      throw err;
     }
+
+    const parsePageResponse = (responseData: any, requestedPage = 1, requestedPageSize = 25) => {
+      if (!responseData) {
+        return { items: [], total: 0, page: requestedPage, pageSize: requestedPageSize, totalPages: 1, isPaginated: false };
+      }
+
+      // Scenario A: direct array returned
+      if (Array.isArray(responseData)) {
+        return {
+          items: responseData,
+          total: responseData.length,
+          page: 1,
+          pageSize: responseData.length || requestedPageSize,
+          totalPages: 1,
+          isPaginated: false,
+        };
+      }
+
+      // Scenario C: nested object wrappers, e.g. responseData.data or responseData.response
+      let target = responseData;
+      if (target.data && typeof target.data === 'object' && !Array.isArray(target.data)) {
+        if (target.data.items || target.data.results || target.data.users || target.data.employees || target.data.records) {
+          target = target.data;
+        }
+      }
+
+      const rawList =
+        target.items ??
+        target.data ??
+        target.results ??
+        target.users ??
+        target.employees ??
+        target.records ??
+        [];
+
+      const items = Array.isArray(rawList) ? rawList : [];
+
+      const rawTotal =
+        target.total ??
+        target.count ??
+        target.total_records ??
+        target.totalRecords ??
+        target.total_count ??
+        target.totalCount ??
+        target.records_total;
+
+      const hasExplicitTotal = rawTotal !== undefined && rawTotal !== null;
+      const total = hasExplicitTotal ? (Number(rawTotal) || items.length) : items.length;
+
+      const page = Number(target.page ?? target.current_page ?? target.currentPage) || requestedPage;
+      const pageSize = Number(target.page_size ?? target.pageSize ?? target.size ?? target.limit) || items.length || requestedPageSize;
+
+      const rawTotalPages = target.total_pages ?? target.totalPages ?? target.pages ?? target.page_count;
+      const totalPages = Number(rawTotalPages) || Math.max(1, Math.ceil(total / (pageSize || 1)));
+
+      const isPaginated = total > items.length && totalPages > 1;
+
+      return { items, total, page, pageSize, totalPages, isPaginated };
+    };
+
+    const firstPageParsed = parsePageResponse(initialResp.data, 1, 25);
+    const allRawItems: any[] = [...firstPageParsed.items];
+
+    // Scenario B: API uses server-side pagination (e.g. returns 25 items out of 191 total)
+    // Fetch subsequent pages so that all eligible employees returned by the API are accessible
+    if (firstPageParsed.isPaginated && firstPageParsed.totalPages > 1) {
+      const totalPages = Math.min(firstPageParsed.totalPages, 50); // safety cap up to 50 pages (1000+ items)
+      const pageSize = firstPageParsed.pageSize || 25;
+
+      const pagePromises: Promise<any[]>[] = [];
+
+      for (let p = 2; p <= totalPages; p++) {
+        pagePromises.push(
+          (async (pageNumber: number) => {
+            const pageParams: Record<string, any> = { ...queryParams };
+            pageParams.page = pageNumber;
+            pageParams.page_size = pageSize;
+            pageParams.size = pageSize;
+
+            try {
+              const resp = await client.get<any>(endpointUsed, { params: pageParams });
+              const parsed = parsePageResponse(resp.data, pageNumber, pageSize);
+              return parsed.items;
+            } catch (pageErr: any) {
+              const pageStatus = pageErr?.status || pageErr?.response?.status;
+              if (pageStatus === 422) {
+                // If 422 Unprocessable Entity (e.g. backend rejected 'size' or 'page_size'), retry with minimal params
+                try {
+                  const retryParams: Record<string, any> = { ...queryParams, page: pageNumber };
+                  const retryResp = await client.get<any>(endpointUsed, { params: retryParams });
+                  const retryParsed = parsePageResponse(retryResp.data, pageNumber, pageSize);
+                  return retryParsed.items;
+                } catch {
+                  return [];
+                }
+              }
+              return [];
+            }
+          })(p)
+        );
+      }
+
+      const subsequentPages = await Promise.all(pagePromises);
+      for (const pageItems of subsequentPages) {
+        allRawItems.push(...pageItems);
+      }
+    }
+
+    // Normalize all records and deduplicate by user_id
+    const seen = new Set<string>();
+    const deduplicated: AvailableWorkdayUser[] = [];
+
+    for (const raw of allRawItems) {
+      const normalized = normalizeAvailableWorkdayUser(raw);
+      if (!normalized.user_id) continue;
+      const lower = normalized.user_id.toLowerCase();
+      if (!seen.has(lower)) {
+        seen.add(lower);
+        deduplicated.push(normalized);
+      }
+    }
+
+    return deduplicated;
   }
 
   public async bulkAddAdminUsers(userIds: string[]): Promise<BulkAddAdminUsersResponse> {

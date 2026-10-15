@@ -131,7 +131,7 @@ export type EOLManufacturer = 'DELL' | 'HP' | 'Lenovo' | 'Apple';
 
 export interface DeviceEOLReference {
   eol_id: number;
-  manufacturer: 'DELL' | 'HP' | 'Lenovo' | 'Apple';
+  manufacturer: string;
   model: string;
   eol_date: string; // ISO date string (YYYY-MM-DD)
   reference_source?: string | null;
@@ -140,13 +140,13 @@ export interface DeviceEOLReference {
 }
 
 export interface DeviceEOLReferenceCreate {
-  manufacturer: 'DELL' | 'HP' | 'Lenovo' | 'Apple';
+  manufacturer: string;
   model: string;
   eol_date: string;
 }
 
 export interface DeviceEOLReferenceUpdate {
-  manufacturer: 'DELL' | 'HP' | 'Lenovo' | 'Apple';
+  manufacturer: string;
   model: string;
   eol_date: string;
 }

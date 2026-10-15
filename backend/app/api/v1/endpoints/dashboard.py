@@ -1,3 +1,4 @@
+from datetime import date
 from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -15,6 +16,9 @@ from app.schemas.dashboard import (
 from app.schemas.eol import EolSummaryResponse
 from app.services.dashboard_service import DashboardService
 from app.services.eol_service import EolService
+from app.models.asset import Asset
+from app.models.device_eol_reference import DeviceEolReference
+from app.models.workday_employee import WorkdayEmployee
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -244,3 +248,122 @@ def get_operational_status(
         is_unassigned=is_unassigned,
         search=search,
     )
+
+
+@router.get(
+    "/redesign-overview",
+    summary="Dashboard redesign aggregated metrics",
+)
+def get_redesign_dashboard_overview(db: Session = Depends(get_database)):
+    """
+    Additive endpoint used only by the redesigned dashboard. Existing API routes
+    and response contracts are intentionally left unchanged.
+    """
+    assets = db.query(Asset).all()
+    employees = db.query(WorkdayEmployee).all()
+    eol_refs = db.query(DeviceEolReference).all()
+
+    employee_by_user = {
+        str(employee.user_id or "").strip().casefold(): employee
+        for employee in employees if str(employee.user_id or "").strip()
+    }
+    eol_by_model = {}
+    for ref in eol_refs:
+        key = (str(ref.manufacturer or "").strip().casefold(), str(ref.model or "").strip().casefold())
+        if key not in eol_by_model or (ref.eol_date and (not eol_by_model[key] or ref.eol_date > eol_by_model[key])):
+            eol_by_model[key] = ref.eol_date
+
+    today = date.today()
+    def clean_status(value):
+        raw = str(value or "").strip().upper().replace("_", " ")
+        if raw in {"NEED VALIDATION", "NEEDVALIDATION", "REVIEW"}: return "REVIEW"
+        if raw in {"INSTOCK", "IN STOCK"}: return "IN STOCK"
+        if raw == "RETIRED": return "RETIRED"
+        return "ACTIVE" if raw == "ACTIVE" else (raw or "REVIEW")
+
+    def eol_for(asset):
+        key = (str(asset.manufacturer or "").strip().casefold(), str(asset.model or "").strip().casefold())
+        eol_date = eol_by_model.get(key)
+        if not eol_date: return "UNKNOWN", None
+        days = (eol_date - today).days
+        if days < 0: return "EXPIRED", days
+        if days <= 90: return "EOL SOON", days
+        return "ACTIVE", days
+
+    source_stats = {
+        "BIGFIX": {"total": 0, "active": 0, "review": 0, "in_stock": 0, "retired": 0, "auto": 0, "manual": 0, "unassigned": 0, "eol_active": 0, "eol_soon": 0, "eol_expired": 0, "eol_unknown": 0},
+        "JAMF": {"total": 0, "active": 0, "review": 0, "in_stock": 0, "retired": 0, "auto": 0, "manual": 0, "unassigned": 0, "eol_active": 0, "eol_soon": 0, "eol_expired": 0, "eol_unknown": 0},
+    }
+    status_counts = {"ACTIVE": 0, "REVIEW": 0, "IN STOCK": 0, "RETIRED": 0}
+    eol_counts = {"ACTIVE": 0, "EOL SOON": 0, "EXPIRED": 0, "UNKNOWN": 0}
+    departments = {}
+    models = {}
+    matched_owners = set()
+
+    for asset in assets:
+        source = str(asset.source or "").strip().upper()
+        if source not in source_stats:
+            continue
+        status = clean_status(asset.asset_status)
+        assign_user = str(asset.assigned_username or "").strip()
+        assignment = str(asset.assignment_type or "").strip().upper()
+        eol_status, days_remaining = eol_for(asset)
+        stats = source_stats[source]
+        stats["total"] += 1
+        stats[{"ACTIVE":"active", "REVIEW":"review", "IN STOCK":"in_stock", "RETIRED":"retired"}.get(status, "review")] += 1
+        status_counts[status if status in status_counts else "REVIEW"] += 1
+        stats[{"ACTIVE":"eol_active", "EOL SOON":"eol_soon", "EXPIRED":"eol_expired", "UNKNOWN":"eol_unknown"}[eol_status]] += 1
+        eol_counts[eol_status] += 1
+        if not assign_user:
+            stats["unassigned"] += 1
+            assignment_label = "Unassigned"
+        elif assignment == "AUTO":
+            stats["auto"] += 1
+            assignment_label = "Auto"
+        else:
+            stats["manual"] += 1
+            assignment_label = "Manual"
+
+        employee = employee_by_user.get(assign_user.casefold()) if assign_user else None
+        department = str(getattr(employee, "department", "") or "").strip() if employee else ""
+        if employee and assign_user:
+            matched_owners.add(assign_user.casefold())
+            if department:
+                departments[department] = departments.get(department, 0) + 1
+
+        model_name = f"{asset.manufacturer or 'Unknown'} {asset.model or 'Unknown'}".strip()
+        model = models.setdefault(model_name, {"model": model_name, "eol_status": eol_status, "days_remaining": days_remaining, "count": 0})
+        model["count"] += 1
+        if model["eol_status"] == "UNKNOWN" and eol_status != "UNKNOWN":
+            model["eol_status"] = eol_status
+            model["days_remaining"] = days_remaining
+
+    urgency = {"EXPIRED": 0, "EOL SOON": 1, "UNKNOWN": 2, "ACTIVE": 3}
+    eol_exposure = sorted(
+        (item for item in models.values() if item["eol_status"] != "ACTIVE"),
+        key=lambda item: (urgency.get(item["eol_status"], 3), item["days_remaining"] if item["days_remaining"] is not None else 10**9, -item["count"]),
+    )[:7]
+    total_assets = len(assets)
+    return {
+        "kpis": {
+            "total_assets": total_assets,
+            "active_assets": status_counts["ACTIVE"],
+            "review": status_counts["REVIEW"],
+            "in_stock": status_counts["IN STOCK"],
+            "employee_count": len(employees),
+        },
+        "assets_by_source": [
+            {"source": key, "count": value["total"]} for key, value in source_stats.items()
+        ],
+        "eol_distribution": [
+            {"status": key, "count": value} for key, value in eol_counts.items()
+        ],
+        "eol_exposure": eol_exposure,
+        "assets_by_department": [
+            {"department": key, "count": value} for key, value in sorted(departments.items(), key=lambda pair: (-pair[1], pair[0]))
+        ],
+        "source_summary": [
+            {"source": key, **value, "active_share": round((value["eol_active"] / value["total"]) * 100) if value["total"] else 0}
+            for key, value in source_stats.items()
+        ],
+    }

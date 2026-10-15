@@ -40,10 +40,13 @@ class AdminUserRepository:
         Retrieves employees from workday_employees who are not in admin_users,
         supporting search (user_id, full_name, email_work) and pagination.
         """
-        admin_subq = select(func.lower(func.trim(AdminUser.admin_user_id)))
+        admin_subq = select(func.lower(func.trim(AdminUser.admin_user_id))).where(
+            AdminUser.admin_user_id.isnot(None)
+        )
 
         base_query = select(WorkdayEmployee).where(
-            func.lower(func.trim(WorkdayEmployee.user_id)).not_in(admin_subq)
+            func.upper(func.trim(WorkdayEmployee.employee_status)) == "ACTIVE",
+            func.lower(func.trim(WorkdayEmployee.user_id)).not_in(admin_subq),
         )
 
         if search and search.strip():
