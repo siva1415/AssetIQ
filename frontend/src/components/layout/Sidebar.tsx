@@ -115,21 +115,43 @@ const NAV_ITEMS: MenuItem[] = [
   },
 ];
 
-const getInitials = (name?: string): string => {
-  if (!name) return 'U';
-  const clean = name.trim();
-  const parts = clean.split(/\s+/);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[1][0]).toUpperCase();
+// Requirement: "The user icon should contains the frist two letter of the username example 'yeshwanth'->'YE','Sachin'->'SA'"
+export const getUsernameAvatarInitials = (username?: string, name?: string): string => {
+  const target = (username || name || 'US').trim().replace(/^@/, '');
+  if (target.length >= 2) {
+    return target.slice(0, 2).toUpperCase();
   }
-  return clean.slice(0, Math.min(2, clean.length)).toUpperCase();
+  return (target + 'X').slice(0, 2).toUpperCase();
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
-  const { currentUser, logout } = useApp();
+  const { currentUser, isSuperAdmin, isAdmin, isViewer, logout } = useApp();
   const location = useLocation();
   const navigate = useNavigate();
   const currentPath = location.pathname;
+
+  // Filter NAV_ITEMS strictly by role:
+  // 1. Super Admin: complete access to all pages
+  // 2. Admin: hide (job scheduler, settings)
+  // 3. Viewers: only (dashboard, hardware inventory, reports) pages
+  const visibleNavItems = NAV_ITEMS.filter(item => {
+    if (isSuperAdmin) return true;
+
+    if (isViewer) {
+      return (
+        item.id === 'dashboard' ||
+        item.id === 'hardware-inventory' ||
+        item.id === 'reports'
+      );
+    }
+
+    if (isAdmin) {
+      // Hide job scheduler and settings for admin
+      return item.id !== 'job-scheduler' && item.id !== 'admin-settings';
+    }
+
+    return false;
+  });
 
   const handleLogout = () => {
     if (onCloseMobile) onCloseMobile();
@@ -227,7 +249,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
 
         {/* Navigation Menu List */}
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1.5" aria-label="Main Navigation">
-          {NAV_ITEMS.map(item => {
+          {visibleNavItems.map(item => {
             if (item.type === 'link') {
               const Icon = item.icon;
               const active = isLinkActive(item.path);
@@ -325,36 +347,54 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
           })}
         </nav>
 
-        {/* Logged-in User Profile Section */}
+        {/* Logged-in User Profile Section (Left bottom user profile) */}
         <div className="p-3 border-t border-[#1C2541] bg-[#080E21] shrink-0">
           <div className="p-2.5 rounded-lg bg-[#1C2541]/50 border border-slate-700/40 flex items-center gap-3">
-            {/* Avatar / Profile Icon */}
-            {currentUser.avatarUrl ? (
-              <img
-                src={currentUser.avatarUrl}
-                alt="Admin User"
-                className="w-8 h-8 rounded-full object-cover shrink-0 ring-1 ring-blue-400/40"
-              />
-            ) : (
-              <div
-                className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-xs border border-blue-400/30 select-none"
-                aria-hidden="true"
-              >
-                {getInitials('Admin User')}
-              </div>
-            )}
+            {/* User icon containing first two letters of username (e.g. yeshwanth -> YE, Sachin -> SA) */}
+            <div
+              className={`w-9 h-9 rounded-full font-bold text-xs flex items-center justify-center shrink-0 shadow-sm border select-none tracking-wider ${
+                currentUser.role === 'super_admin'
+                  ? 'bg-gradient-to-tr from-purple-600 to-indigo-600 text-white border-purple-400/40'
+                  : currentUser.role === 'viewer'
+                  ? 'bg-gradient-to-tr from-emerald-600 to-teal-600 text-white border-emerald-400/40'
+                  : 'bg-gradient-to-tr from-blue-600 to-indigo-500 text-white border-blue-400/40'
+              }`}
+              title={`@${currentUser.username || 'user'}`}
+              aria-label={`User avatar ${getUsernameAvatarInitials(currentUser.username, currentUser.name)}`}
+            >
+              {getUsernameAvatarInitials(currentUser.username, currentUser.name)}
+            </div>
 
-            {/* User Name & Privilege */}
+            {/* User Name & Role */}
             <div className="flex flex-col min-w-0 flex-1">
               <span
                 className="text-xs font-semibold text-white truncate leading-tight"
-                title="Admin User"
+                title={currentUser.name || currentUser.username}
               >
-                Admin User
+                {currentUser.name || currentUser.username || 'Console User'}
               </span>
-              <span className="text-[10px] font-medium text-slate-400 truncate leading-tight mt-0.5">
-                Admin
-              </span>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span
+                  className={`text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.2 rounded ${
+                    currentUser.role === 'super_admin'
+                      ? 'bg-purple-900/60 text-purple-300 border border-purple-500/30'
+                      : currentUser.role === 'viewer'
+                      ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-blue-900/60 text-blue-300 border border-blue-500/30'
+                  }`}
+                >
+                  {currentUser.role === 'super_admin'
+                    ? 'Super Admin'
+                    : currentUser.role === 'viewer'
+                    ? 'Viewer'
+                    : 'Admin'}
+                </span>
+                {currentUser.username && (
+                  <span className="text-[10px] text-slate-400 truncate max-w-[70px]">
+                    @{currentUser.username}
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Logout Action Icon */}

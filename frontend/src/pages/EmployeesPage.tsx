@@ -24,6 +24,8 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { useApp } from '../context/AppContext';
+import { FirstTimePasswordResetModal } from '../components/auth/FirstTimePasswordResetModal';
 
 export type UserRole = 'super_admin' | 'admin' | 'viewer';
 
@@ -32,8 +34,11 @@ export interface ConsoleUser {
   name: string;
   email: string;
   role: UserRole;
+  password?: string;
   is_otp: boolean;
   must_change_password: boolean;
+  mustChangePassword?: boolean;
+  isOneTimePassword?: boolean;
   is_online: boolean;
   last_active?: string;
   login_time?: string;
@@ -60,64 +65,65 @@ const STORAGE_USERS_KEY = 'workforceiq_console_users_v2';
 
 const INITIAL_USERS: ConsoleUser[] = [
   {
+    username: 'superadmin01',
+    name: 'Administrator',
+    email: 'superadmin01@assetiq.internal',
+    role: 'super_admin',
+    password: 'WorkForceIQ123!',
+    is_otp: true,
+    must_change_password: true,
+    isOneTimePassword: true,
+    mustChangePassword: true,
+    is_online: false,
+    last_active: 'Pending First-Time Login',
+    ip_address: '10.0.1.20',
+    user_agent: 'Chrome 122.0 / Windows 11',
+  },
+  {
     username: 'admin',
     name: 'Administrator',
     email: 'admin@workforceiq.internal',
     role: 'admin',
+    password: 'Admin123!',
     is_otp: false,
     must_change_password: false,
+    isOneTimePassword: false,
+    mustChangePassword: false,
     is_online: true,
-    last_active: 'Oct 13, 04:33 AM',
-    login_time: 'Oct 13, 04:33 AM',
+    last_active: 'Oct 15, 04:33 AM',
+    login_time: 'Oct 15, 04:33 AM',
     ip_address: '192.168.1.45',
     user_agent: 'Chrome 122.0 / macOS (Sonoma)',
   },
   {
-    username: 'alex',
-    name: 'Alex Morgan',
-    email: 'alex@workforceiq.internal',
+    username: 'yeshwanth',
+    name: 'Yeshwanth',
+    email: 'yeshwanth@assetiq.internal',
     role: 'admin',
+    password: 'WorkForceIQ123!',
     is_otp: false,
     must_change_password: false,
-    is_online: false,
-    last_active: 'Oct 12, 09:15 PM',
-    ip_address: '192.168.1.62',
-    user_agent: 'Firefox 124.0 / Windows 11',
-  },
-  {
-    username: 'elena',
-    name: 'Elena Rostova',
-    email: 'elena.rostova@workforceiq.corp',
-    role: 'admin',
-    is_otp: false,
-    must_change_password: false,
-    is_online: false,
-    last_active: 'Oct 12, 06:40 PM',
-    ip_address: '10.0.12.84',
-    user_agent: 'Safari 17.3 / macOS (Sonoma)',
-  },
-  {
-    username: 'firstuser',
-    name: 'Alex Morgan (First Login OTP)',
-    email: 'firstuser@workforceiq.internal',
-    role: 'viewer',
-    is_otp: true,
-    must_change_password: true,
-    is_online: false,
-    last_active: 'Pending Initial Login',
-    ip_address: '192.168.1.110',
-    user_agent: 'Edge 122.0 / Windows 10',
+    isOneTimePassword: false,
+    mustChangePassword: false,
+    is_online: true,
+    last_active: 'Oct 15, 08:30 AM',
+    login_time: 'Oct 15, 08:30 AM',
+    ip_address: '192.168.1.75',
+    user_agent: 'Chrome 122.0 / macOS (Sonoma)',
   },
   {
     username: 'sachin',
     name: 'Sachin',
-    email: 'sachin@123.com',
+    email: 'sachin@assetiq.internal',
     role: 'super_admin',
+    password: 'WorkForceIQ123!',
     is_otp: false,
     must_change_password: false,
+    isOneTimePassword: false,
+    mustChangePassword: false,
     is_online: true,
-    last_active: 'Oct 13, 04:13 AM',
-    login_time: 'Oct 13, 04:13 AM',
+    last_active: 'Oct 15, 04:13 AM',
+    login_time: 'Oct 15, 04:13 AM',
     ip_address: '10.0.4.12',
     user_agent: 'Chrome 122.0 / Windows 11 Enterprise',
   },
@@ -126,26 +132,92 @@ const INITIAL_USERS: ConsoleUser[] = [
     name: 'Super Administrator',
     email: 'superadmin@workforceiq.internal',
     role: 'super_admin',
+    password: 'SuperAdmin123!',
     is_otp: false,
     must_change_password: false,
+    isOneTimePassword: false,
+    mustChangePassword: false,
     is_online: true,
-    last_active: 'Oct 13, 06:30 AM',
-    login_time: 'Oct 13, 06:30 AM',
+    last_active: 'Oct 15, 06:30 AM',
+    login_time: 'Oct 15, 06:30 AM',
     is_root_protected: true,
     is_current_user: true,
     ip_address: '192.168.1.1',
     user_agent: 'Chrome 122.0 / Linux x86_64',
   },
   {
+    username: 'viewer',
+    name: 'Auditor View',
+    email: 'viewer@assetiq.internal',
+    role: 'viewer',
+    password: 'Viewer123!',
+    is_otp: false,
+    must_change_password: false,
+    isOneTimePassword: false,
+    mustChangePassword: false,
+    is_online: false,
+    last_active: 'Oct 14, 08:00 PM',
+    ip_address: '192.168.1.55',
+    user_agent: 'Chrome 122.0 / Windows 11',
+  },
+  {
+    username: 'alex',
+    name: 'Alex Morgan',
+    email: 'alex@workforceiq.internal',
+    role: 'admin',
+    password: 'WorkForceIQ123!',
+    is_otp: false,
+    must_change_password: false,
+    isOneTimePassword: false,
+    mustChangePassword: false,
+    is_online: false,
+    last_active: 'Oct 14, 09:15 PM',
+    ip_address: '192.168.1.62',
+    user_agent: 'Firefox 124.0 / Windows 11',
+  },
+  {
+    username: 'elena',
+    name: 'Elena Rostova',
+    email: 'elena.rostova@workforceiq.corp',
+    role: 'admin',
+    password: 'WorkForceIQ123!',
+    is_otp: false,
+    must_change_password: false,
+    isOneTimePassword: false,
+    mustChangePassword: false,
+    is_online: false,
+    last_active: 'Oct 14, 06:40 PM',
+    ip_address: '10.0.12.84',
+    user_agent: 'Safari 17.3 / macOS (Sonoma)',
+  },
+  {
+    username: 'firstuser',
+    name: 'Alex Morgan (First Login OTP)',
+    email: 'firstuser@workforceiq.internal',
+    role: 'viewer',
+    password: 'WorkForceIQ123!',
+    is_otp: true,
+    must_change_password: true,
+    isOneTimePassword: true,
+    mustChangePassword: true,
+    is_online: false,
+    last_active: 'Pending Initial Login',
+    ip_address: '192.168.1.110',
+    user_agent: 'Edge 122.0 / Windows 10',
+  },
+  {
     username: 'marcus',
     name: 'Marcus Kane',
     email: 'marcus.kane@workforceiq.internal',
     role: 'viewer',
+    password: 'WorkForceIQ123!',
     is_otp: false,
     must_change_password: false,
+    isOneTimePassword: false,
+    mustChangePassword: false,
     is_online: true,
-    last_active: 'Oct 13, 05:12 AM',
-    login_time: 'Oct 13, 05:12 AM',
+    last_active: 'Oct 15, 05:12 AM',
+    login_time: 'Oct 15, 05:12 AM',
     ip_address: '10.0.8.91',
     user_agent: 'Firefox 123.0 / macOS (Ventura)',
   },
@@ -154,26 +226,31 @@ const INITIAL_USERS: ConsoleUser[] = [
     name: 'Jane Doe',
     email: 'jdoe@workforceiq.internal',
     role: 'admin',
+    password: 'WorkForceIQ123!',
     is_otp: false,
     must_change_password: false,
+    isOneTimePassword: false,
+    mustChangePassword: false,
     is_online: true,
-    last_active: 'Oct 13, 05:45 AM',
-    login_time: 'Oct 13, 05:45 AM',
+    last_active: 'Oct 15, 05:45 AM',
+    login_time: 'Oct 15, 05:45 AM',
     ip_address: '192.168.1.88',
     user_agent: 'Safari 17.2 / macOS (Sonoma)',
   },
 ];
 
-const getInitials = (name?: string): string => {
-  if (!name) return 'U';
-  const parts = name.trim().split(/\s+/);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[1][0]).toUpperCase();
+// Requirement: "The user icon should contains the frist two letter of the username example 'yeshwanth'->'YE','Sachin'->'SA'"
+export const getUsernameAvatarInitials = (username?: string, name?: string): string => {
+  const target = (username || name || 'US').trim().replace(/^@/, '');
+  if (target.length >= 2) {
+    return target.slice(0, 2).toUpperCase();
   }
-  return name.slice(0, Math.min(2, name.length)).toUpperCase();
+  return (target + 'X').slice(0, 2).toUpperCase();
 };
 
 export const EmployeesPage: React.FC = () => {
+  const { isAdmin, isSuperAdmin, isViewer, currentUser, setOneTimePassword } = useApp();
+
   // --- State ---
   const [users, setUsers] = useState<ConsoleUser[]>(() => {
     try {
@@ -244,6 +321,50 @@ export const EmployeesPage: React.FC = () => {
     }
   }, [users]);
 
+  // Listen for external user updates (e.g. from FirstLoginPasswordModal or AppContext)
+  useEffect(() => {
+    const handleUsersUpdated = (e?: any) => {
+      try {
+        const stored = localStorage.getItem(STORAGE_USERS_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setUsers(parsed);
+            return;
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      if (e?.detail?.username) {
+        const target = String(e.detail.username).toLowerCase().replace(/^@/, '');
+        const isOtp = Boolean(e.detail.is_otp);
+        setUsers(prev =>
+          prev.map(u => {
+            if (u.username.toLowerCase().replace(/^@/, '') === target) {
+              return {
+                ...u,
+                is_otp: isOtp,
+                must_change_password: isOtp,
+                isOneTimePassword: isOtp,
+                mustChangePassword: isOtp,
+              };
+            }
+            return u;
+          })
+        );
+      }
+    };
+
+    window.addEventListener('workforceiq_users_updated', handleUsersUpdated);
+    window.addEventListener('storage', handleUsersUpdated);
+    return () => {
+      window.removeEventListener('workforceiq_users_updated', handleUsersUpdated);
+      window.removeEventListener('storage', handleUsersUpdated);
+    };
+  }, []);
+
   // Auto-dismiss notification after 4s
   useEffect(() => {
     if (!notification) return;
@@ -269,15 +390,54 @@ export const EmployeesPage: React.FC = () => {
     }
   }, []);
 
-  // Initial load from PostgreSQL backend via api.getConsoleUsers()
+  // Initial load from PostgreSQL backend or localStorage
   const loadUsers = useCallback(async () => {
+    let localUsers: ConsoleUser[] = [];
+    try {
+      const stored = localStorage.getItem(STORAGE_USERS_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          localUsers = parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     try {
       const fetched = await api.getConsoleUsers();
       if (Array.isArray(fetched) && fetched.length > 0) {
-        setUsers(fetched as ConsoleUser[]);
+        setUsers(prev => {
+          return fetched.map((fu: any) => {
+            const existingLocal = localUsers.find(lu => lu.username.toLowerCase() === fu.username.toLowerCase());
+            const existingPrev = prev.find(p => p.username.toLowerCase() === fu.username.toLowerCase());
+            const seeded = INITIAL_USERS.find(iu => iu.username.toLowerCase() === fu.username.toLowerCase());
+
+            const isOtp = existingLocal
+              ? Boolean(existingLocal.is_otp || existingLocal.isOneTimePassword)
+              : (fu.is_otp ?? existingPrev?.is_otp ?? seeded?.is_otp ?? false);
+            const mustChange = existingLocal
+              ? Boolean(existingLocal.must_change_password || existingLocal.mustChangePassword)
+              : (fu.must_change_password ?? existingPrev?.must_change_password ?? seeded?.must_change_password ?? false);
+
+            return {
+              ...fu,
+              password: existingLocal?.password || existingPrev?.password || fu.password || seeded?.password || (isOtp ? 'WorkForceIQ123!' : undefined),
+              is_otp: isOtp,
+              must_change_password: mustChange,
+              isOneTimePassword: isOtp,
+              mustChangePassword: mustChange,
+            };
+          });
+        });
+      } else if (localUsers.length > 0) {
+        setUsers(localUsers);
       }
     } catch {
-      // fallback to initial seeded / localStorage users
+      if (localUsers.length > 0) {
+        setUsers(localUsers);
+      }
     }
   }, []);
 
@@ -294,17 +454,57 @@ export const EmployeesPage: React.FC = () => {
   // Manual refresh
   const handleRefresh = async () => {
     setIsRefreshing(true);
+    let localUsers: ConsoleUser[] = [];
+    try {
+      const stored = localStorage.getItem(STORAGE_USERS_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          localUsers = parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     try {
       const fetched = await api.getConsoleUsers();
       if (Array.isArray(fetched) && fetched.length > 0) {
-        setUsers(fetched as ConsoleUser[]);
+        setUsers(prev => {
+          return fetched.map((fu: any) => {
+            const existingLocal = localUsers.find(lu => lu.username.toLowerCase() === fu.username.toLowerCase());
+            const existingPrev = prev.find(p => p.username.toLowerCase() === fu.username.toLowerCase());
+            const seeded = INITIAL_USERS.find(iu => iu.username.toLowerCase() === fu.username.toLowerCase());
+
+            const isOtp = existingLocal
+              ? Boolean(existingLocal.is_otp || existingLocal.isOneTimePassword)
+              : (fu.is_otp ?? existingPrev?.is_otp ?? seeded?.is_otp ?? false);
+            const mustChange = existingLocal
+              ? Boolean(existingLocal.must_change_password || existingLocal.mustChangePassword)
+              : (fu.must_change_password ?? existingPrev?.must_change_password ?? seeded?.must_change_password ?? false);
+
+            return {
+              ...fu,
+              password: existingLocal?.password || existingPrev?.password || fu.password || seeded?.password || (isOtp ? 'WorkForceIQ123!' : undefined),
+              is_otp: isOtp,
+              must_change_password: mustChange,
+              isOneTimePassword: isOtp,
+              mustChangePassword: mustChange,
+            };
+          });
+        });
+      } else if (localUsers.length > 0) {
+        setUsers(localUsers);
       }
       await fetchLiveSessions();
       setNotification({
         type: 'success',
-        message: 'User directory and session tracking updated from PostgreSQL.',
+        message: 'User directory and session tracking updated.',
       });
     } catch {
+      if (localUsers.length > 0) {
+        setUsers(localUsers);
+      }
       setNotification({
         type: 'success',
         message: 'User directory and session tracking updated.',
@@ -352,7 +552,8 @@ export const EmployeesPage: React.FC = () => {
       setNotification({ type: 'error', message: 'Username is required.' });
       return;
     }
-    if (!addForm.password) {
+    const initialPassword = addForm.password.trim() || (addForm.is_otp ? 'WorkForceIQ123!' : '');
+    if (!initialPassword) {
       setNotification({ type: 'error', message: 'Password is required.' });
       return;
     }
@@ -370,7 +571,7 @@ export const EmployeesPage: React.FC = () => {
       name: addForm.name.trim() || cleanUsername,
       email: addForm.email.trim() || `${cleanUsername}@workforceiq.internal`,
       role: addForm.role,
-      password: addForm.password,
+      password: initialPassword,
       is_otp: addForm.is_otp,
     };
 
@@ -385,19 +586,30 @@ export const EmployeesPage: React.FC = () => {
       name: payload.name,
       email: payload.email,
       role: payload.role as UserRole,
+      password: initialPassword,
       is_otp: payload.is_otp,
       must_change_password: payload.is_otp,
+      isOneTimePassword: payload.is_otp,
+      mustChangePassword: payload.is_otp,
       is_online: false,
-      last_active: 'Never logged in',
+      last_active: payload.is_otp ? 'Pending First-Time Login' : 'Just created',
       ip_address: '192.168.1.100',
       user_agent: 'Chrome 122.0 / Windows 11',
     };
 
-    setUsers(prev => [newUser, ...prev]);
+    setUsers(prev => {
+      const updated = [newUser, ...prev];
+      try {
+        localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
     setIsAddModalOpen(false);
     setNotification({
       type: 'success',
-      message: `User @${cleanUsername} successfully created in PostgreSQL with ${
+      message: `User @${cleanUsername} successfully created with ${
         addForm.is_otp ? 'One-Time Password policy' : 'active password'
       }.`,
     });
@@ -411,7 +623,7 @@ export const EmployeesPage: React.FC = () => {
       email: user.email,
       role: user.role,
       resetPassword: '',
-      is_otp: user.is_otp || user.must_change_password,
+      is_otp: Boolean(user.is_otp || user.must_change_password || user.isOneTimePassword || user.mustChangePassword),
     });
   };
 
@@ -420,17 +632,27 @@ export const EmployeesPage: React.FC = () => {
     if (!userToEdit) return;
 
     const targetUser = userToEdit.username;
-    const payload = {
+    // Step 4: Admin / Super Admin Direct Password Reset Flow
+    const updates = {
       name: editForm.name.trim() || userToEdit.name,
       email: editForm.email.trim() || userToEdit.email,
       role: editForm.role,
+      password: editForm.resetPassword.trim() ? editForm.resetPassword.trim() : undefined, // Optional password override
+      mustChangePassword: editForm.is_otp, // Checkbox to force OTP on next login
+      isOneTimePassword: editForm.is_otp,
+      must_change_password: editForm.is_otp,
       is_otp: editForm.is_otp,
-      password: editForm.resetPassword || undefined,
-      resetPassword: editForm.resetPassword || undefined,
     };
 
     try {
-      await api.updateConsoleUser(targetUser, payload);
+      await api.updateConsoleUser(targetUser, {
+        name: updates.name,
+        email: updates.email,
+        role: updates.role,
+        is_otp: updates.is_otp,
+        password: updates.password,
+        resetPassword: updates.password,
+      });
     } catch (err: any) {
       // Optimistic update
     }
@@ -440,11 +662,14 @@ export const EmployeesPage: React.FC = () => {
         if (u.username === targetUser) {
           return {
             ...u,
-            name: payload.name,
-            email: payload.email,
-            role: payload.role as UserRole,
-            is_otp: payload.is_otp,
-            must_change_password: payload.is_otp,
+            name: updates.name,
+            email: updates.email,
+            role: updates.role as UserRole,
+            is_otp: updates.is_otp,
+            must_change_password: updates.is_otp,
+            isOneTimePassword: updates.is_otp,
+            mustChangePassword: updates.is_otp,
+            password: updates.password || u.password,
           };
         }
         return u;
@@ -473,8 +698,13 @@ export const EmployeesPage: React.FC = () => {
     }
 
     const target = userToSetOtp.username;
+    const tempPass = otpPassword.trim() || 'WorkForceIQ123!';
+
+    // Invoke setOneTimePassword from AppContext
+    setOneTimePassword(target, tempPass);
+
     try {
-      await api.setOneTimePassword(target, otpPassword.trim());
+      await api.setOneTimePassword(target, tempPass);
     } catch (err: any) {
       // Optimistic update
     }
@@ -484,8 +714,11 @@ export const EmployeesPage: React.FC = () => {
         if (u.username === target) {
           return {
             ...u,
+            password: tempPass,
             is_otp: true,
             must_change_password: true,
+            isOneTimePassword: true,
+            mustChangePassword: true,
           };
         }
         return u;
@@ -705,16 +938,29 @@ export const EmployeesPage: React.FC = () => {
             <span>Refresh</span>
           </button>
 
-          <button
-            type="button"
-            onClick={handleOpenAddModal}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-2xs transition-colors cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4 text-white" />
-            <span>Add User</span>
-          </button>
+          {/* Super Admin only: Add User button (Admin cannot create a user) */}
+          {isSuperAdmin && (
+            <button
+              type="button"
+              onClick={handleOpenAddModal}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg shadow-2xs text-white bg-blue-600 hover:bg-blue-700 transition-colors cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Add User</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Admin View-Only Governance Notice */}
+      {!isSuperAdmin && (
+        <div className="flex items-center gap-3 p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl text-xs text-blue-900">
+          <AlertCircle className="w-4 h-4 text-blue-600 shrink-0" />
+          <span>
+            <strong>View-Only Administration:</strong> In User Management, Administrators have read-only privileges. Creating, editing, deleting users, or provisioning One-Time Passwords requires <span className="font-semibold text-blue-950">Super Admin</span> clearance.
+          </span>
+        </div>
+      )}
 
       {/* Main Table Card (Screenshot 1) */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
@@ -758,14 +1004,15 @@ export const EmployeesPage: React.FC = () => {
                 <th className="py-3.5 px-5">Email Address</th>
                 <th className="py-3.5 px-5">Role</th>
                 <th className="py-3.5 px-5">Password Policy</th>
-                <th className="py-3.5 px-5">Activity</th>
-                <th className="py-3.5 px-5 text-right">Actions (Super Admin)</th>
+                <th className="py-3.5 px-5 text-right">
+                  {isSuperAdmin ? 'Actions (Super Admin)' : 'Access Privilege'}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-400">
+                  <td colSpan={5} className="py-12 text-center text-slate-400">
                     <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                     <p className="font-semibold text-slate-700 text-sm">No console users found</p>
                     <p className="text-xs text-slate-400 mt-0.5">
@@ -788,9 +1035,9 @@ export const EmployeesPage: React.FC = () => {
                           <div
                             className={`w-9 h-9 rounded-xl ${getAvatarBg(
                               user
-                            )} text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-2xs select-none`}
+                            )} text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-2xs select-none tracking-wider`}
                           >
-                            {getInitials(user.name)}
+                            {getUsernameAvatarInitials(user.username, user.name)}
                           </div>
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -822,7 +1069,7 @@ export const EmployeesPage: React.FC = () => {
 
                       {/* Password Policy Column */}
                       <td className="py-3.5 px-5 align-middle">
-                        {user.is_otp || user.must_change_password ? (
+                        {Boolean(user.is_otp || user.must_change_password || user.isOneTimePassword || user.mustChangePassword) ? (
                           <button
                             type="button"
                             onClick={() => setFirstLoginPromptUser(user)}
@@ -840,75 +1087,61 @@ export const EmployeesPage: React.FC = () => {
                         )}
                       </td>
 
-                      {/* Activity Column */}
-                      <td className="py-3.5 px-5 align-middle">
-                        <div className="flex items-center gap-2">
-                          {user.is_online ? (
-                            <>
-                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                                <span>Active Online</span>
-                              </span>
-                              {user.last_active && (
-                                <span className="text-xs text-slate-400 font-normal">
-                                  ({user.last_active})
-                                </span>
-                              )}
-                            </>
-                          ) : (
-                            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-500 border border-slate-200">
-                              Offline
-                            </span>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Actions Column (Super Admin) */}
+                      {/* Actions Column: Super Admin has full CRUD; Admin is strictly View Only */}
                       <td className="py-3.5 px-5 align-middle text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {/* Set OTP button */}
-                          <button
-                            type="button"
-                            onClick={() => handleOpenSetOtp(user)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:border-slate-300 transition-colors shadow-2xs cursor-pointer"
-                            title="Issue temporary One-Time Password"
-                          >
-                            <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                            <span>Set OTP</span>
-                          </button>
-
-                          {/* Edit button */}
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEdit(user)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:border-slate-300 transition-colors shadow-2xs cursor-pointer"
-                            title="Edit user details"
-                          >
-                            <Edit2 className="w-3.5 h-3.5 text-slate-500" />
-                            <span>Edit</span>
-                          </button>
-
-                          {/* Delete button (Root Protected for @superadmin) */}
-                          {isRoot ? (
-                            <button
-                              type="button"
-                              disabled
-                              title="The root account @superadmin is protected and cannot be deleted"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-50 border border-slate-200 rounded-lg cursor-not-allowed opacity-60"
-                            >
-                              <Trash2 className="w-3.5 h-3.5 text-slate-300" />
-                              <span>Delete</span>
-                            </button>
+                          {!isSuperAdmin ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
+                              <Eye className="w-3.5 h-3.5 text-slate-400" />
+                              <span>View Only</span>
+                            </span>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenDelete(user)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-colors shadow-2xs cursor-pointer"
-                              title="Permanently delete user account"
-                            >
-                              <Trash2 className="w-3.5 h-3.5 text-slate-500" />
-                              <span>Delete</span>
-                            </button>
+                            <>
+                              {/* Set OTP button (Super Admin only) */}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenSetOtp(user)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:border-slate-300 transition-colors shadow-2xs cursor-pointer"
+                                title="Issue temporary One-Time Password"
+                              >
+                                <KeyRound className="w-3.5 h-3.5 text-slate-500" />
+                                <span>Set OTP</span>
+                              </button>
+
+                              {/* Edit button (Super Admin only) */}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEdit(user)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:border-slate-300 transition-colors shadow-2xs cursor-pointer"
+                                title="Edit user details"
+                              >
+                                <Edit2 className="w-3.5 h-3.5 text-slate-500" />
+                                <span>Edit</span>
+                              </button>
+
+                              {/* Delete button (Super Admin only, root protected for @superadmin) */}
+                              {isRoot ? (
+                                <button
+                                  type="button"
+                                  disabled
+                                  title="The root account @superadmin is protected and cannot be deleted"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-50 border border-slate-200 rounded-lg cursor-not-allowed opacity-60"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-slate-300" />
+                                  <span>Delete</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDelete(user)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-colors shadow-2xs cursor-pointer"
+                                  title="Permanently delete user account"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-slate-500" />
+                                  <span>Delete</span>
+                                </button>
+                              )}
+                            </>
                           )}
                         </div>
                       </td>
@@ -1002,12 +1235,12 @@ export const EmployeesPage: React.FC = () => {
                 {/* Password */}
                 <div>
                   <label className="block font-semibold text-slate-800 text-xs mb-1.5">
-                    Password <span className="text-rose-500">*</span>
+                    Password {addForm.is_otp ? <span className="text-slate-400 font-normal">(Default: WorkForceIQ123!)</span> : <span className="text-rose-500">*</span>}
                   </label>
                   <input
                     type="password"
-                    required
-                    placeholder="••••••••"
+                    required={!addForm.is_otp}
+                    placeholder={addForm.is_otp ? 'WorkForceIQ123! (or custom)' : '••••••••'}
                     value={addForm.password}
                     onChange={e => setAddForm({ ...addForm, password: e.target.value })}
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800 placeholder-slate-400"
@@ -1353,123 +1586,42 @@ export const EmployeesPage: React.FC = () => {
       )}
 
       {/* =========================================================================
-          MODAL 5: FIRST LOGIN PASSWORD DECISION MODAL (Key Requirement)
+          MODAL 5: FIRST LOGIN PASSWORD DECISION MODAL (Key Requirement UI)
           ========================================================================= */}
       {firstLoginPromptUser && (
-        <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-2xs transition-opacity"
-            onClick={() => setFirstLoginPromptUser(null)}
-          />
-
-          <div className="flex min-h-full items-center justify-center p-4">
-            <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden p-6 transform transition-all text-xs">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600 shrink-0">
-                    <KeyRound className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900">
-                      Set Permanent Password (First Login)
-                    </h3>
-                    <p className="text-slate-500 text-xs">
-                      Forced OTP security prompt for @{firstLoginPromptUser.username}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setFirstLoginPromptUser(null)}
-                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg"
-                  aria-label="Close"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3.5 mb-4 text-xs text-blue-900 leading-relaxed">
-                You logged in using a temporary One-Time Password. Under corporate governance
-                policy, you must create a permanent password to continue.
-              </div>
-
-              <form onSubmit={handleCompleteFirstLogin} className="space-y-4">
-                <div>
-                  <label className="block font-semibold text-slate-800 text-xs mb-1.5">
-                    New Permanent Password
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      placeholder="Minimum 6 characters"
-                      value={firstLoginForm.newPassword}
-                      onChange={e =>
-                        setFirstLoginForm({ ...firstLoginForm, newPassword: e.target.value })
-                      }
-                      className="w-full pl-3 pr-10 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-800 text-xs mb-1.5">
-                    Confirm Password
-                  </label>
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    placeholder="Re-enter password"
-                    value={firstLoginForm.confirmPassword}
-                    onChange={e =>
-                      setFirstLoginForm({ ...firstLoginForm, confirmPassword: e.target.value })
-                    }
-                    className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <input
-                    type="checkbox"
-                    id="terms_check"
-                    required
-                    checked={firstLoginForm.acceptTerms}
-                    onChange={e =>
-                      setFirstLoginForm({ ...firstLoginForm, acceptTerms: e.target.checked })
-                    }
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
-                  />
-                  <label htmlFor="terms_check" className="text-slate-600 text-xs cursor-pointer">
-                    I acknowledge corporate asset governance &amp; audit rules.
-                  </label>
-                </div>
-
-                <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setFirstLoginPromptUser(null)}
-                    className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs cursor-pointer"
-                  >
-                    Save &amp; Activate Account
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
+        <FirstTimePasswordResetModal
+          targetUser={firstLoginPromptUser}
+          onClose={() => setFirstLoginPromptUser(null)}
+          onSuccess={() => {
+            const targetUsername = firstLoginPromptUser.username.toLowerCase().replace(/^@/, '');
+            setUsers(prev => {
+              const updated = prev.map(u => {
+                if (u.username.toLowerCase().replace(/^@/, '') === targetUsername) {
+                  return {
+                    ...u,
+                    is_otp: false,
+                    must_change_password: false,
+                    isOneTimePassword: false,
+                    mustChangePassword: false,
+                    last_active: 'Password Active',
+                  };
+                }
+                return u;
+              });
+              try {
+                localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(updated));
+              } catch {
+                // ignore
+              }
+              return updated;
+            });
+            setFirstLoginPromptUser(null);
+            setNotification({
+              type: 'success',
+              message: `Permanent password set for @${firstLoginPromptUser.username}. One-time password status resolved.`,
+            });
+          }}
+        />
       )}
 
       {/* =========================================================================
@@ -1517,8 +1669,8 @@ export const EmployeesPage: React.FC = () => {
                       className="py-3 flex items-center justify-between gap-4"
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 font-bold flex items-center justify-center text-xs shrink-0">
-                          {getInitials(sessionUser.name)}
+                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 font-bold flex items-center justify-center text-xs shrink-0 tracking-wider">
+                          {getUsernameAvatarInitials(sessionUser.username, sessionUser.name)}
                         </div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">

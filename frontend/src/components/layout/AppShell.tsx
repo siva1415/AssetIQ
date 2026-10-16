@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopNav } from './TopNav';
+import { useApp } from '../../context/AppContext';
+import { FirstLoginPasswordModal } from '../auth/FirstLoginPasswordModal';
 
 export const AppShell: React.FC = () => {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
+    <div className="min-h-screen bg-slate-50 flex relative">
       {/* Dark Navy Sidebar */}
       <Sidebar
         isOpen={mobileSidebarOpen}
@@ -24,6 +26,10 @@ export const AppShell: React.FC = () => {
           <Outlet />
         </main>
       </div>
+
+      {/* Mandatory First-Time Login OTP Reset Modal (Self-intercepts if mustChangePassword is true) */}
+      <FirstLoginPasswordModal />
     </div>
   );
 };
+

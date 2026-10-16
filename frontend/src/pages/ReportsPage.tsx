@@ -359,8 +359,8 @@ export const ReportsPage: React.FC = () => {
                 {/* 1. Master Hardware */}
                 <div
                   className={`bg-white rounded-2xl border p-5 shadow-2xs flex flex-col justify-between transition-all ${
-                    selectedCatalogCard === 'master'
-                      ? 'border-slate-900 ring-2 ring-slate-900'
+                    selectedCatalogCard === 'warranty'
+                      ? 'border-rose-600 ring-2 ring-rose-600'
                       : 'border-slate-200 hover:border-slate-300'
                   }`}
                 >

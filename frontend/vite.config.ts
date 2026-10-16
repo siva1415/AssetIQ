@@ -12,13 +12,23 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // Configured for local development at http://localhost:5173 (CLI --port 3000 takes precedence in AI Studio)
-      port: 5173,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      proxy: process.env.VITE_API_BASE_URL ? {
+        '/api': {
+          target: process.env.VITE_API_BASE_URL,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/health': {
+          target: process.env.VITE_API_BASE_URL,
+          changeOrigin: true,
+          secure: false,
+        },
+      } : undefined,
     },
   };
 });

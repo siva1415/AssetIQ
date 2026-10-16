@@ -27,7 +27,7 @@ export const LoginPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
 
@@ -39,15 +39,18 @@ export const LoginPage: React.FC = () => {
 
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const success = login(trimmedUser, password);
+    try {
+      const success = await login(trimmedUser, password);
       if (success) {
         navigate('/dashboard', { replace: true });
       } else {
         setError('Invalid username or password. Please verify your credentials and try again.');
         setIsSubmitting(false);
       }
-    }, 150);
+    } catch (err: any) {
+      setError(err?.message || 'Authentication error. Please verify your credentials.');
+      setIsSubmitting(false);
+    }
   };
 
   return (
