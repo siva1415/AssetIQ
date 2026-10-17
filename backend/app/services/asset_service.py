@@ -51,12 +51,13 @@ class AssetService:
         matched_emp: Optional[WorkdayEmployee],
         eol_date: Optional[any] = None,
         ref_source: Optional[str] = None,
+        skip_eol_lookup: bool = False,
     ) -> AssetResponse:
         """
         Assembles an AssetResponse with all field aliases and joined Workday & EOL metadata.
         """
         # Resolve EOL information
-        if eol_date is None and ref_source is None:
+        if eol_date is None and ref_source is None and not skip_eol_lookup:
             # Exact lookup fallback if query was executed without pre-joining EOL table
             eol_ref = EolRepository.get_eol_for_device(db, asset.manufacturer, asset.model)
             if eol_ref:
@@ -207,7 +208,8 @@ class AssetService:
 
         items: list[AssetResponse] = []
         for asset, matched_emp, eol_date, ref_source in results:
-            item = cls.build_asset_response(db, asset, matched_emp, eol_date, ref_source)
+            # The joined query already resolved the EOL reference; skip the per-row lookup (N+1).
+            item = cls.build_asset_response(db, asset, matched_emp, eol_date, ref_source, skip_eol_lookup=True)
             items.append(item)
 
         total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
@@ -219,6 +221,62 @@ class AssetService:
             total_pages=total_pages,
             page=page,
             page_size=page_size,
+        )
+
+    @classmethod
+    def list_all_assets(
+        cls,
+        db: Session,
+        source: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        devicetype: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        search: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        eol_status: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = "asc",
+    ) -> PaginatedResponse[AssetResponse]:
+        """
+        Return EVERY asset matching the filters in a single query (no pagination),
+        wrapped in the same PaginatedResponse envelope as list_assets.
+        """
+        normalized_assignment_type = cls.normalize_assignment_type_filter(assignment_type)
+
+        results, total_count = AssetRepository.list_assets_joined(
+            db=db,
+            skip=0,
+            limit=None,  # no LIMIT clause -> all rows
+            source=source,
+            asset_status=asset_status,
+            devicetype=devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=normalized_assignment_type,
+            search=search,
+            is_unassigned=is_unassigned,
+            eol_status=eol_status,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+
+        items: list[AssetResponse] = [
+            cls.build_asset_response(db, asset, matched_emp, eol_date, ref_source, skip_eol_lookup=True)
+            for asset, matched_emp, eol_date, ref_source in results
+        ]
+
+        count = len(items)
+        return PaginatedResponse(
+            items=items,
+            total=count,
+            total_items=count,
+            total_pages=1 if count > 0 else 0,
+            page=1,
+            page_size=max(count, 1),  # schema requires page_size >= 1
         )
 
     @classmethod
@@ -417,4 +475,3 @@ class AssetService:
             )
 
         return cls.get_asset_detail(db, asset.asset_id)
-

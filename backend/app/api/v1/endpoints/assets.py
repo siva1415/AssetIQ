@@ -187,6 +187,68 @@ def get_assets_operational_status(
     )
 
 
+@router.get(
+    "/all",
+    response_model=PaginatedResponse[AssetResponse],
+    summary="Retrieve ALL asset records (no pagination) for reports/exports",
+)
+@router.get(
+    "/all/",
+    response_model=PaginatedResponse[AssetResponse],
+    include_in_schema=False,
+)
+def list_all_assets(
+    source: Optional[str] = Query(None, description="Filter by discovery source (BIGFIX or JAMF)"),
+    asset_status: Optional[str] = Query(None, description="Filter by status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
+    devicetype: Optional[str] = Query(None, description="Filter by device type (Server or Desktop)"),
+    device_type: Optional[str] = Query(None, include_in_schema=False),
+    deviceType: Optional[str] = Query(None, include_in_schema=False),
+    DeviceType: Optional[str] = Query(None, include_in_schema=False),
+    eol_status: Optional[str] = Query(None, description="Filter by EOL status (ACTIVE, EOL SOON, EXPIRED, UNKNOWN)"),
+    eolStatus: Optional[str] = Query(None, include_in_schema=False),
+    manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
+    model: Optional[str] = Query(None, description="Filter by hardware model"),
+    assigned_username: Optional[str] = Query(None, description="Filter by assigned login username"),
+    assignment_type: Optional[str] = Query(None, description="Filter by assignment model ('Auto' or 'Manual')"),
+    assignmentType: Optional[str] = Query(None, include_in_schema=False),
+    is_unassigned: Optional[bool] = Query(None, description="Filter for unassigned assets (true/false)"),
+    search: Optional[str] = Query(None, description="Text search across asset number, serial, model, username"),
+    sort_by: Optional[str] = Query(None, description="Field to sort by"),
+    sort_order: Optional[str] = Query("asc", description="Sort direction ('asc' or 'desc')"),
+    sortBy: Optional[str] = Query(None, include_in_schema=False),
+    sortOrder: Optional[str] = Query(None, include_in_schema=False),
+    scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
+    db: Session = Depends(get_database),
+):
+    """
+    Returns every asset matching the optional filters in one response (no pagination).
+    Declared before '/{asset_id}' so 'all' is not parsed as an asset id.
+    """
+    resolved_source = source
+    if not resolved_source and scope:
+        clean_scope = scope.strip().lower()
+        if clean_scope in ["windows", "windows_assets", "bigfix"]:
+            resolved_source = "BIGFIX"
+        elif clean_scope in ["mac", "mac_assets", "jamf", "macos", "apple"]:
+            resolved_source = "JAMF"
+
+    return AssetService.list_all_assets(
+        db=db,
+        source=resolved_source,
+        asset_status=asset_status,
+        devicetype=devicetype or device_type or deviceType or DeviceType,
+        manufacturer=manufacturer,
+        model=model,
+        assigned_username=assigned_username,
+        assignment_type=assignment_type or assignmentType,
+        search=search,
+        is_unassigned=is_unassigned,
+        eol_status=eol_status or eolStatus,
+        sort_by=sort_by or sortBy,
+        sort_order=sort_order or sortOrder or "asc",
+    )
+
+
 @router.post(
     "/assign",
     response_model=AssetDetailResponse,
@@ -317,4 +379,3 @@ def update_or_patch_asset(
     return AssetService.assign_asset(
         db=db, asset_id=asset_id, payload=payload, is_assignment_action=False
     )
-

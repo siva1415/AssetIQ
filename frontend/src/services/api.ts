@@ -1,4 +1,4 @@
-  import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance } from 'axios';
   import {
     Asset,
     AssetSource,
@@ -1319,12 +1319,8 @@
       }
     }
 
-    // Assets list with query params
-    public async getAssets(params: AssetQueryParams): Promise<PaginatedResponse<Asset>> {
-      if (this.isMockMode) {
-        await this.simulateLatency();
-        return filterAndPaginateAssets(params);
-      }
+    /** Shared query-param cleanup for /api/assets and /api/assets/all. */
+    private buildAssetQueryParams(params: Partial<AssetQueryParams>): Record<string, any> {
       const queryParams: any = { ...params };
       if (params.devicetype && !queryParams.device_type) {
         queryParams.device_type = params.devicetype;
@@ -1385,11 +1381,22 @@
           delete queryParams[key];
         }
       });
+      return queryParams;
+    }
+
+    // Assets list with query params
+    public async getAssets(params: AssetQueryParams, options: { strict?: boolean } = {}): Promise<PaginatedResponse<Asset>> {
+      if (this.isMockMode) {
+        await this.simulateLatency();
+        return filterAndPaginateAssets(params);
+      }
+      const queryParams: any = this.buildAssetQueryParams(params);
 
       try {
         const client = createAxiosClient();
         const response = await client.get<any>('/api/assets', {
           params: queryParams,
+          timeout: 60000, // large pages (page_size up to 1000) can exceed the 10s default
         });
 
         let rawItems: any[] = [];
@@ -1449,9 +1456,38 @@
           summary,
         };
       } catch (err: any) {
+        if (options.strict) {
+          // Report/export callers must never silently receive mock data.
+          console.error('[api.getAssets] Live API request failed (strict mode, no mock fallback):', err?.message || err);
+          throw err;
+        }
         console.warn('[api.getAssets] Live API request failed, falling back to enterprise dataset:', err?.message || err);
         return filterAndPaginateAssets(params);
       }
+    }
+
+    /**
+     * Fetch every asset for report/export workflows from the dedicated
+     * GET /api/assets/all endpoint. No pagination and no fallback: if the
+     * request fails, the error is thrown to the caller.
+     */
+    public async getAllAssets(params: Omit<AssetQueryParams, 'page' | 'page_size'> = {} as Omit<AssetQueryParams, 'page' | 'page_size'>): Promise<Asset[]> {
+      if (this.isMockMode) {
+        await this.simulateLatency();
+        return filterAndPaginateAssets({ ...params, page: 1, page_size: 1000000 } as AssetQueryParams).items;
+      }
+
+      const queryParams = this.buildAssetQueryParams(params as any);
+      const client = createAxiosClient();
+      const response = await client.get<any>('/api/assets/all', { params: queryParams, timeout: 180000 });
+      const data = response.data;
+      const rawItems: any = Array.isArray(data)
+        ? data
+        : (data?.items ?? data?.data ?? data?.results ?? data?.assets);
+      if (!Array.isArray(rawItems)) {
+        throw new Error('[api.getAllAssets] /api/assets/all returned an unexpected response (no items array).');
+      }
+      return rawItems.map(normalizeAsset);
     }
 
     // Dedicated Fleet Summary KPI endpoint with fallback to complete asset dataset aggregation
@@ -1687,7 +1723,7 @@
     }
 
     // Employees list with safe parameter normalization to prevent FastAPI HTTP 422
-    public async getEmployees(params: EmployeeQueryParams): Promise<PaginatedResponse<Employee>> {
+    public async getEmployees(params: EmployeeQueryParams, options: { strict?: boolean } = {}): Promise<PaginatedResponse<Employee>> {
       if (this.isMockMode) {
         await this.simulateLatency();
         return filterAndPaginateEmployees(params);
@@ -1783,14 +1819,49 @@
               if (cleanParams.search) minParams.search = cleanParams.search;
               const minResp = await client.get<any>('/api/employees', { params: minParams });
               return parseResponse(minResp.data);
-            } catch {
+            } catch (finalErr: any) {
+              if (options.strict) throw finalErr;
               return filterAndPaginateEmployees(cleanParams);
             }
           }
         }
+        if (options.strict) {
+          console.error('[api.getEmployees] Live API request failed (strict mode, no mock fallback):', err?.message || err);
+          throw err;
+        }
         console.warn('[api.getEmployees] Live API request failed, falling back to enterprise dataset:', err?.message || err);
         return filterAndPaginateEmployees(cleanParams);
       }
+    }
+
+    /**
+     * Fetch every employee for report/export enrichment from the dedicated
+     * GET /api/employees/all endpoint. No pagination and no fallback: if the
+     * request fails, the error is thrown to the caller.
+     */
+    public async getAllEmployees(params: Omit<EmployeeQueryParams, 'page' | 'page_size'> = {} as Omit<EmployeeQueryParams, 'page' | 'page_size'>): Promise<Employee[]> {
+      if (this.isMockMode) {
+        await this.simulateLatency();
+        return filterAndPaginateEmployees({ ...params, page: 1, page_size: 1000000 } as EmployeeQueryParams).items;
+      }
+
+      const queryParams: Record<string, any> = {};
+      const p: any = params || {};
+      if (p.search && String(p.search).trim()) queryParams.search = String(p.search).trim();
+      if (p.department && String(p.department).trim()) queryParams.department = String(p.department).trim();
+      if (p.division && String(p.division).trim()) queryParams.division = String(p.division).trim();
+      if (p.employee_status && String(p.employee_status).trim()) queryParams.employee_status = String(p.employee_status).trim();
+
+      const client = createAxiosClient();
+      const response = await client.get<any>('/api/employees/all', { params: queryParams, timeout: 180000 });
+      const data = response.data;
+      const rawItems: any = Array.isArray(data)
+        ? data
+        : (data?.items ?? data?.data ?? data?.results ?? data?.employees);
+      if (!Array.isArray(rawItems)) {
+        throw new Error('[api.getAllEmployees] /api/employees/all returned an unexpected response (no items array).');
+      }
+      return rawItems.map(normalizeEmployee);
     }
 
     // Employee by ID

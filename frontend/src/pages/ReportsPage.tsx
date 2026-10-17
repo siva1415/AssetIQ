@@ -82,13 +82,15 @@ export const ReportsPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [assetsResp, empResp] = await Promise.all([
-        api.getAssets({ page: 1, page_size: 1000 }),
-        api.getEmployees({ page: 1, page_size: 1000 })
+      // Load all pages, not just the first 100/1000 records, so every report
+      // card and every Excel export is built from the complete dataset.
+      const [allAssets, allEmployees] = await Promise.all([
+        api.getAllAssets(),
+        api.getAllEmployees()
       ]);
 
-      setAssets(assetsResp.items || []);
-      setEmployees(empResp.items || []);
+      setAssets(allAssets);
+      setEmployees(allEmployees);
     } catch (err: any) {
       console.error('[ReportsPage] Failed to load live fleet data:', err);
       setError(err?.response?.data?.detail || err?.message || 'Failed to load fleet report data from backend API.');
@@ -103,17 +105,29 @@ export const ReportsPage: React.FC = () => {
     loadReportData();
   }, [dataRefreshKey]);
 
+  // Employee lookup index: built once per employee load so each lookup is O(1).
+  // (A linear .find() per asset is O(assets x employees) - far too slow for ~15k assets.)
+  // Same precedence as before: the first employee, in list order, matching any key wins.
+  const employeeIndex = useMemo(() => {
+    const index = new Map<string, Employee>();
+    const add = (key: unknown, emp: Employee) => {
+      if (key === undefined || key === null) return;
+      const k = String(key).toLowerCase().trim();
+      if (k && !index.has(k)) index.set(k, emp);
+    };
+    for (const e of employees) {
+      add(e.user_id, e);
+      add(e.full_name, e);
+      add(e.work_email, e);
+      add(e.employee_id, e);
+    }
+    return index;
+  }, [employees]);
+
   // Employee Lookup Helper
   const getEmployeeByUserId = (userId?: string | null): Employee | undefined => {
     if (!userId) return undefined;
-    const target = userId.toLowerCase().trim();
-    return employees.find(
-      e =>
-        (e.user_id && e.user_id.toLowerCase().trim() === target) ||
-        (e.full_name && e.full_name.toLowerCase().trim() === target) ||
-        (e.work_email && e.work_email.toLowerCase().trim() === target) ||
-        (e.employee_id && e.employee_id.toLowerCase().trim() === target)
-    );
+    return employeeIndex.get(userId.toLowerCase().trim());
   };
 
   // ---------------------------------------------------------------------------

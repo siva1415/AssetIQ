@@ -80,6 +80,77 @@ def list_employees(
     )
 
 
+def _read_field(obj, key, default=None):
+    """Read a field from either a dict or an object (service may return either)."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+@router.get(
+    "/employees/all",
+    response_model=PaginatedResponse[EmployeeResponse],
+    summary="Retrieve ALL Workday employee records (no pagination) for reports/exports",
+)
+@router.get(
+    "/employees/all/",
+    response_model=PaginatedResponse[EmployeeResponse],
+    include_in_schema=False,
+)
+def list_all_employees(
+    department: Optional[str] = Query(None, description="Department filter"),
+    division: Optional[str] = Query(None, description="Division filter"),
+    employee_status: Optional[str] = Query(None, description="Employment status (e.g. Active)"),
+    status: Optional[str] = Query(None, include_in_schema=False),
+    employeeStatus: Optional[str] = Query(None, include_in_schema=False),
+    search: Optional[str] = Query(None, description="Global text search in name, user_id, email, department"),
+    q: Optional[str] = Query(None, include_in_schema=False),
+    db: Session = Depends(get_database),
+):
+    """
+    Returns every employee row matching the optional filters in a single response.
+    Walks the paginated EmployeeService in chunks so the existing filtering and
+    response mapping are reused.
+    Must be declared before '/employees/{employee_id}' so 'all' is not parsed as an id.
+    """
+    eff_search = search or q
+    eff_status = employee_status or status or employeeStatus
+
+    chunk_size = 100  # stay within any page_size cap enforced by the service/deps
+    page = 1
+    all_items: list = []
+    total = 0
+    while True:
+        result = EmployeeService.list_employees(
+            db=db,
+            page=page,
+            page_size=chunk_size,
+            user_id=None,
+            name=None,
+            email=None,
+            department=department,
+            division=division,
+            employee_status=eff_status,
+            search=eff_search,
+        )
+        items = list(_read_field(result, "items", []) or [])
+        total = int(_read_field(result, "total", 0) or 0)
+        total_pages = int(_read_field(result, "total_pages", 1) or 1)
+        all_items.extend(items)
+        if not items or page >= total_pages or len(all_items) >= total:
+            break
+        page += 1
+
+    count = len(all_items)
+    return {
+        "items": all_items,
+        "total": count,
+        "page": 1,
+        "page_size": count,
+        "total_pages": 1,
+    }
+
+
 @router.get(
     "/employees/{employee_id}",
     response_model=EmployeeDetailResponse,
