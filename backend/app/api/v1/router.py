@@ -26,3 +26,17 @@ api_router.add_api_route("/assign", assets.assign_asset_payload, methods=["POST"
 api_router.add_api_route("/reassign", assets.assign_asset_payload, methods=["POST", "PUT"], include_in_schema=False)
 api_router.add_api_route("/assignment", assets.assign_asset_payload, methods=["POST", "PUT"], include_in_schema=False)
 api_router.add_api_route("/assignments", assets.assign_asset_payload, methods=["POST", "PUT"], include_in_schema=False)
+api_router.add_api_route("/bulk-assign", assets.bulk_assign_assets, methods=["POST", "PUT"], include_in_schema=False)
+api_router.add_api_route("/bulk-assignment", assets.bulk_assign_assets, methods=["POST", "PUT"], include_in_schema=False)
+
+# Top-level reports summary aliases
+api_router.add_api_route("/reports/summary", dashboard.get_reports_summary, methods=["GET"], include_in_schema=False)
+api_router.add_api_route("/reports/counts", dashboard.get_reports_summary, methods=["GET"], include_in_schema=False)
+api_router.add_api_route("/reports-summary", dashboard.get_reports_summary, methods=["GET"], include_in_schema=False)
+
+# Top-level hardware asset analysis aliases
+api_router.add_api_route("/hardware-analysis", dashboard.get_hardware_asset_analysis, methods=["GET"], include_in_schema=False)
+api_router.add_api_route("/hardware-asset-analysis", dashboard.get_hardware_asset_analysis, methods=["GET"], include_in_schema=False)
+api_router.add_api_route("/assets-by-os", dashboard.get_assets_by_operating_system, methods=["GET"], include_in_schema=False)
+api_router.add_api_route("/assets-by-device-type", dashboard.get_assets_by_device_type, methods=["GET"], include_in_schema=False)
+

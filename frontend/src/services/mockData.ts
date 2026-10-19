@@ -26,10 +26,12 @@ import {
   BulkAssignAssetsRequest,
   BulkAssignAssetsResponse,
   ASSET_STATUSES,
+  ASSET_STATUS_LABELS,
   toStandardAssetStatus,
   toStandardEOLStatus,
   formatEolDate,
 } from '../types';
+import * as XLSX from 'xlsx';
 
 export const MOCK_EMPLOYEES: Employee[] = [
   {
@@ -905,10 +907,24 @@ export function bulkAssignMockAssets(
     throw new Error(`Invalid managed_by value '${data.managed_by}'. Must be 'INDIVIDUAL' or 'GROUP'.`);
   }
 
+  let targetAssetIds: (string | number)[] = [];
+
+  if (data.select_all_matching) {
+    const filterParams: AssetQueryParams = {
+      page: 1,
+      page_size: 100000,
+      ...(data.filters || {}),
+    };
+    const matched = filterAndPaginateAssets(filterParams, MOCK_ASSETS);
+    targetAssetIds = matched.items.map(a => a.id);
+  } else {
+    targetAssetIds = data.asset_ids || [];
+  }
+
   const successful: (string | number)[] = [];
   const failed: (string | number)[] = [];
 
-  for (const assetId of data.asset_ids) {
+  for (const assetId of targetAssetIds) {
     const normAssetId = String(assetId).trim();
     const asset = MOCK_ASSETS.find(
       a => String(a.id) === normAssetId || a.asset_number === normAssetId
@@ -946,10 +962,17 @@ export function bulkAssignMockAssets(
     asset.asset_status = ASSET_STATUSES.ACTIVE;
     asset.assetStatus = ASSET_STATUSES.ACTIVE;
 
-    // Persist remarks
+    // Remarks behavior:
+    // If remarks contain text, submit entered value.
+    // If remarks are blank or whitespace or null, update remarks to SQL NULL / empty.
     if (data.remarks !== undefined) {
-      asset.notes = data.remarks.trim();
-      asset.remarks = data.remarks.trim();
+      if (data.remarks === null || data.remarks.trim() === '') {
+        asset.notes = null as any;
+        asset.remarks = null as any;
+      } else {
+        asset.notes = data.remarks.trim();
+        asset.remarks = data.remarks.trim();
+      }
     }
 
     successful.push(asset.id);
@@ -959,6 +982,8 @@ export function bulkAssignMockAssets(
     assigned_count: successful.length,
     successful_asset_ids: successful,
     failed_asset_ids: failed,
+    total_processed: targetAssetIds.length,
+    failed_count: failed.length,
     message: `Successfully assigned ${successful.length} asset${successful.length === 1 ? '' : 's'} to ${emp.full_name} (${emp.user_id}).`,
   };
 }
@@ -2013,4 +2038,202 @@ export function generateMockAssetsCsvExport(params: AssetQueryParams): {
     count: filtered.items.length,
   };
 }
+
+export function buildReportXlsxFromAssets(
+  reportId: string,
+  matchedAssets: Asset[]
+): { blob: Blob; filename: string; count: number } {
+  const titleMap: Record<string, string> = {
+    master: 'Master_Hardware',
+    warranty: 'Warranty_Compliance_Issues',
+    bigfix: 'BigFix_Assets',
+    jamf: 'Jamf_Assets',
+    instock: 'In_Stock_Inventory',
+    'need-validation': 'Need_Validation_Assets',
+  };
+  const titleName = titleMap[reportId] || 'Report';
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const filename = `AssetIQ_${titleName}_${todayStr}.xlsx`;
+
+  if (matchedAssets.length === 0) {
+    return {
+      blob: new Blob([''], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      filename,
+      count: 0,
+    };
+  }
+
+  const headers = [
+    'Asset',
+    'Source',
+    'DeviceType',
+    'Manufacturer',
+    'Model',
+    'SerialNumber',
+    'Operating System',
+    'MacAddress',
+    'Computer ID',
+    'Asset Status',
+    'EOL Expiry Date',
+    'EOL Status',
+    'EOL Days Remaining',
+    'Managed By',
+    'Assigned UserID',
+    'Assigned UserName',
+    'Department',
+    'Remarks',
+  ];
+
+  const rows = matchedAssets.map(a => {
+    const assetNum = a.asset_number || a.assetNumber || a.id || '';
+    const source = a.source || '';
+    const devType = (a.devicetype || a.device_type || a.deviceType || '').toString().trim() || 'N/A';
+    const manufacturer = a.manufacturer || 'N/A';
+    const model = a.model || '';
+    const serial = a.serial_number || a.serialNumber || '';
+    const os = a.os_name || a.osName || (a as any).osname || (source === 'JAMF' ? 'macOS Sonoma 14.5' : 'Windows 11 Enterprise 23H2');
+    const mac = a.mac_address || a.macAddress || (a as any).macaddress || 'N/A';
+    const compId = (a as any).computer_id ?? (a as any).computerId ?? a.id ?? '';
+    const status = ASSET_STATUS_LABELS[toStandardAssetStatus(a.asset_status)] || a.asset_status || 'Active';
+    const eolDate = a.eol_date ? formatEolDate(a.eol_date) : (a.eolDate ? formatEolDate(a.eolDate) : '—');
+    const eolStatus = a.eol_status || a.calculated_eol_status || 'UNKNOWN';
+    const daysRem = a.days_remaining !== null && a.days_remaining !== undefined
+      ? a.days_remaining
+      : (a.daysRemaining !== null && a.daysRemaining !== undefined ? a.daysRemaining : '');
+
+    let managedBy = 'INDIVIDUAL';
+    if (a.managed_by) {
+      const mb = a.managed_by.toUpperCase();
+      if (mb.includes('GROUP') || mb.includes('SERVER') || mb.includes('DATACENTER') || mb.includes('POOL') || devType === 'Server' || a.assignment_type === 'Unassigned') {
+        managedBy = 'GROUP';
+      }
+    } else if (devType === 'Server' || a.assignment_type === 'Unassigned') {
+      managedBy = 'GROUP';
+    }
+
+    const assignedUserId = a.assigned_username || (a.assignment_type === 'Unassigned' ? '' : '');
+    const assignedUserName = a.verified_employee_name || a.verifiedEmployeeName || (a.assignment_type === 'Unassigned' ? 'Unassigned' : a.assigned_username || 'Unassigned');
+    const dept = a.department || 'N/A';
+    const remarks = a.remarks || a.notes || '';
+
+    return {
+      'Asset': assetNum,
+      'Source': source,
+      'DeviceType': devType,
+      'Manufacturer': manufacturer,
+      'Model': model,
+      'SerialNumber': serial,
+      'Operating System': os,
+      'MacAddress': mac,
+      'Computer ID': compId,
+      'Asset Status': status,
+      'EOL Expiry Date': eolDate,
+      'EOL Status': eolStatus,
+      'EOL Days Remaining': daysRem,
+      'Managed By': managedBy,
+      'Assigned UserID': assignedUserId,
+      'Assigned UserName': assignedUserName,
+      'Department': dept,
+      'Remarks': remarks,
+    };
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows, { header: headers });
+  XLSX.utils.book_append_sheet(wb, ws, 'Asset Governance');
+  const xlsxBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([xlsxBuffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+
+  return {
+    blob,
+    filename,
+    count: matchedAssets.length,
+  };
+}
+
+export function generateMockReportXlsxExport(
+  reportId: 'master' | 'warranty' | 'bigfix' | 'jamf' | 'instock' | 'need-validation' | string
+): { blob: Blob; filename: string; count: number } {
+  let matchedAssets: Asset[] = [];
+
+  switch (reportId) {
+    case 'master':
+      matchedAssets = [...MOCK_ASSETS];
+      break;
+    case 'warranty':
+      matchedAssets = MOCK_ASSETS.filter(a => {
+        const eolStatus = (a.calculated_eol_status || a.eol_status || '').toUpperCase().replace(/_/g, ' ');
+        const days = a.days_remaining ?? a.daysRemaining ?? null;
+        if (eolStatus === 'EXPIRED' || (days !== null && days < 0)) return true;
+        if (eolStatus === 'EOL SOON' || (days !== null && days >= 0 && days <= 90)) return true;
+        return false;
+      });
+      break;
+    case 'bigfix':
+      matchedAssets = MOCK_ASSETS.filter(a => a.source === 'BIGFIX');
+      break;
+    case 'jamf':
+      matchedAssets = MOCK_ASSETS.filter(a => a.source === 'JAMF');
+      break;
+    case 'instock':
+      matchedAssets = MOCK_ASSETS.filter(a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.IN_STOCK);
+      break;
+    case 'need-validation':
+      matchedAssets = MOCK_ASSETS.filter(
+        a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.REVIEW || a.workday_status === 'Not Found in Workday' || (a.workday_status as any) === 'Unmatched'
+      );
+      break;
+    default:
+      matchedAssets = [...MOCK_ASSETS];
+  }
+
+  return buildReportXlsxFromAssets(reportId, matchedAssets);
+}
+
+export function calculateMockReportStats(): {
+  masterCount: number;
+  expiredCount: number;
+  expiringCount: number;
+  totalWarrantyIssues: number;
+  bigFixCount: number;
+  jamfCount: number;
+  inStockCount: number;
+  needValidationCount: number;
+} {
+  const masterCount = MOCK_ASSETS.length;
+  const bigFixCount = MOCK_ASSETS.filter(a => a.source === 'BIGFIX').length;
+  const jamfCount = MOCK_ASSETS.filter(a => a.source === 'JAMF').length;
+  const inStockCount = MOCK_ASSETS.filter(
+    a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.IN_STOCK
+  ).length;
+  const needValidationCount = MOCK_ASSETS.filter(
+    a => toStandardAssetStatus(a.asset_status) === ASSET_STATUSES.REVIEW || a.workday_status === 'Not Found in Workday' || (a.workday_status as any) === 'Unmatched'
+  ).length;
+
+  let expiredCount = 0;
+  let expiringCount = 0;
+  for (const a of MOCK_ASSETS) {
+    const eolStatus = (a.calculated_eol_status || a.eol_status || '').toUpperCase().replace(/_/g, ' ');
+    const days = a.days_remaining ?? a.daysRemaining ?? null;
+    if (eolStatus === 'EXPIRED' || (days !== null && days < 0)) {
+      expiredCount++;
+    } else if (eolStatus === 'EOL SOON' || (days !== null && days >= 0 && days <= 90)) {
+      expiringCount++;
+    }
+  }
+
+  return {
+    masterCount,
+    expiredCount,
+    expiringCount,
+    totalWarrantyIssues: expiredCount + expiringCount,
+    bigFixCount,
+    jamfCount,
+    inStockCount,
+    needValidationCount,
+  };
+}
+
 

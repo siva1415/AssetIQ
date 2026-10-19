@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import io
 from typing import Optional
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from app.core.logging import logger
 from app.models.asset import Asset
@@ -42,6 +42,27 @@ ASSET_CSV_HEADERS = [
     "Assigned UserID",
     "Assigned UserName",
     "Department",
+]
+
+REPORT_XLSX_HEADERS = [
+    "Asset",
+    "Source",
+    "DeviceType",
+    "Manufacturer",
+    "Model",
+    "SerialNumber",
+    "Operating System",
+    "MacAddress",
+    "Computer ID",
+    "Asset Status",
+    "EOL Expiry Date",
+    "EOL Status",
+    "EOL Days Remaining",
+    "Managed By",
+    "Assigned UserID",
+    "Assigned UserName",
+    "Department",
+    "Remarks",
 ]
 
 
@@ -199,6 +220,7 @@ class AssetService:
         db: Session,
         page: int = 1,
         page_size: int = 25,
+        report: Optional[str] = None,
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
@@ -219,6 +241,7 @@ class AssetService:
             db=db,
             skip=skip,
             limit=page_size,
+            report=report,
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
@@ -455,36 +478,46 @@ class AssetService:
         payload: BulkAssetAssignmentRequest,
     ) -> BulkAssetAssignmentResponse:
         """
-        Bulk assign multiple assets to one active Workday employee.
-        Enforces:
-        - Non-empty, unique positive integer asset IDs.
-        - Existing and currently active Workday employee (UPPER(TRIM(employee_status)) == 'ACTIVE').
-        - Valid managed_by enum ('INDIVIDUAL' or 'GROUP').
-        - Preserving existing asset remarks when new remarks is omitted, null, or blank.
-        - Updating asset_status to 'ACTIVE', assignment_type to 'MANUAL', and updated_at.
-        - Transaction savepoints per asset to safely report per-asset outcomes on partial failures.
-        """
-        # 1. Validate asset_ids
-        if not payload.asset_ids or len(payload.asset_ids) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="At least one asset ID must be provided in asset_ids",
-            )
+        Bulk assign hardware assets to one active Workday employee.
+        Supports:
+        1. Individually selected asset IDs (asset_ids: [1, 2, ...]).
+        2. Select-all matching assets across all pagination pages based on search and filters.
 
-        # Validate elements are positive integers
-        for aid in payload.asset_ids:
-            if not isinstance(aid, int) or aid <= 0:
+        Enforces:
+        - Workday employee validation: must exist and have employee_status == 'ACTIVE'.
+        - managed_by validation: must be 'INDIVIDUAL' or 'GROUP' (defaults to 'INDIVIDUAL' if omitted).
+        - Mandatory remarks behavior:
+            - If admin enters non-empty remarks, update assets.remarks to that value.
+            - If admin leaves remarks blank (empty, whitespace, null, or omitted), update assets.remarks to SQL NULL.
+            - Do not retain previous remarks when the request has blank remarks.
+        - Updating assignment_type to 'MANUAL', asset_status to 'ACTIVE', and updated_at.
+        - High-performance chunked updates safe for 2,000+ assets.
+        - Accurate matched, requested, success, and failure counts with actionable per-asset results.
+        """
+        is_select_all = bool(payload.select_all)
+
+        # 1. Selection validation
+        if not is_select_all:
+            if not payload.asset_ids or len(payload.asset_ids) == 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid asset ID '{aid}'. Asset IDs must be positive integers.",
+                    detail="At least one asset ID must be provided in asset_ids or select_all must be true",
                 )
 
-        # Validate uniqueness of requested asset IDs
-        if len(payload.asset_ids) != len(set(payload.asset_ids)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Duplicate asset IDs are not allowed in asset_ids. Each asset ID must be unique.",
-            )
+            # Validate elements are positive integers
+            for aid in payload.asset_ids:
+                if not isinstance(aid, int) or aid <= 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid asset ID '{aid}'. Asset IDs must be positive integers.",
+                    )
+
+            # Validate uniqueness of requested asset IDs
+            if len(payload.asset_ids) != len(set(payload.asset_ids)):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Duplicate asset IDs are not allowed in asset_ids. Each asset ID must be unique.",
+                )
 
         # 2. Validate assigned_username
         user_val = (
@@ -549,7 +582,9 @@ class AssetService:
                     detail=f"Invalid managed_by '{raw_managed}'. Allowed values are 'INDIVIDUAL' or 'GROUP'.",
                 )
 
-        # 4. Remarks: if nonblank, trim and update; if omitted, null, or blank, preserve existing remarks
+        # 4. Mandatory Remarks Behavior:
+        # Non-empty string -> update to trimmed value;
+        # Blank / whitespace / None / omitted -> update to SQL NULL (do not retain previous remarks).
         raw_remarks = (
             payload.remarks
             if payload.remarks is not None
@@ -561,23 +596,56 @@ class AssetService:
         )
         clean_remarks = str(raw_remarks).strip() if (raw_remarks is not None and str(raw_remarks).strip()) else None
 
-        # 5. Set-based retrieval of existing assets
-        stmt = select(Asset).where(Asset.asset_id.in_(payload.asset_ids))
-        existing_assets = {a.asset_id: a for a in db.execute(stmt).scalars().all()}
-
-        results: list[BulkAssetAssignmentItemResult] = []
-        success_count = 0
-        failure_count = 0
-
-        # Process each asset ID using transaction savepoints
         now_time = datetime.now(timezone.utc)
-        for aid in payload.asset_ids:
-            savepoint = db.begin_nested()
-            try:
-                asset = existing_assets.get(aid)
-                if not asset:
-                    savepoint.rollback()
-                    failure_count += 1
+        chunk_size = 1000
+
+        # 5. Resolve assets to update and execute
+        if not is_select_all:
+            # 5A. ID-based selection
+            stmt = select(Asset.asset_id, Asset.asset_number).where(Asset.asset_id.in_(payload.asset_ids))
+            existing_rows = db.execute(stmt).fetchall()
+            existing_map = {int(r[0]): (str(r[1]) if r[1] is not None else None) for r in existing_rows}
+
+            valid_ids = [aid for aid in payload.asset_ids if aid in existing_map]
+            missing_ids = [aid for aid in payload.asset_ids if aid not in existing_map]
+
+            if valid_ids:
+                try:
+                    for i in range(0, len(valid_ids), chunk_size):
+                        chunk = valid_ids[i:i + chunk_size]
+                        db.execute(
+                            update(Asset)
+                            .where(Asset.asset_id.in_(chunk))
+                            .values(
+                                assigned_username=target_user_id,
+                                managed_by=clean_managed,
+                                assignment_type="MANUAL",
+                                asset_status="ACTIVE",
+                                remarks=clean_remarks,
+                                updated_at=now_time,
+                            )
+                        )
+                    db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    logger.error(f"Failed to commit bulk asset assignment batch: {exc}", exc_info=True)
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Database transaction error during bulk asset assignment",
+                    )
+
+            results: list[BulkAssetAssignmentItemResult] = []
+            for aid in payload.asset_ids:
+                if aid in existing_map:
+                    results.append(
+                        BulkAssetAssignmentItemResult(
+                            asset_id=aid,
+                            asset_number=existing_map[aid],
+                            status="SUCCESS",
+                            reason=None,
+                        )
+                    )
+                else:
                     results.append(
                         BulkAssetAssignmentItemResult(
                             asset_id=aid,
@@ -586,52 +654,107 @@ class AssetService:
                             reason=f"Asset with ID {aid} was not found",
                         )
                     )
-                    continue
 
-                asset.assigned_username = target_user_id
-                asset.managed_by = clean_managed
-                asset.assignment_type = "MANUAL"
-                asset.asset_status = "ACTIVE"
-                if clean_remarks is not None:
-                    asset.remarks = clean_remarks
-                # If clean_remarks is None, preserve existing asset.remarks
-                asset.updated_at = now_time
+            requested_count = len(payload.asset_ids)
+            matched_count = len(valid_ids)
+            success_count = len(valid_ids)
+            failure_count = len(missing_ids)
 
-                db.flush()
-                savepoint.commit()
-                success_count += 1
-                results.append(
-                    BulkAssetAssignmentItemResult(
-                        asset_id=asset.asset_id,
-                        asset_number=asset.asset_number,
-                        status="SUCCESS",
-                        reason=None,
-                    )
-                )
-            except Exception as exc:
-                savepoint.rollback()
-                failure_count += 1
-                logger.warning(f"Error assigning asset {aid} during bulk assignment: {exc}")
-                results.append(
-                    BulkAssetAssignmentItemResult(
-                        asset_id=aid,
-                        asset_number=getattr(existing_assets.get(aid), "asset_number", None),
-                        status="FAILED",
-                        reason="Database error during asset assignment",
-                    )
-                )
+        else:
+            # 5B. Select-all matching assets across all pages based on search and filters
+            REPORT_CARD_SCOPES = {
+                "master_hardware", "master", "masterhardware", "master_hardware_report",
+                "warranty_compliance_issues", "warranty_compliance", "warranty", "warrantycompliance", "warrantycomplianceissues", "compliance_issues", "compliance",
+                "bigfix_assets", "bigfixassets",
+                "jamf_assets", "jamfassets",
+                "in_stock_inventory", "in_stock", "instock", "instockinventory", "in_stock_assets",
+                "need_validation_assets", "need_validation", "needvalidation", "needvalidationassets",
+                "reports", "report", "reports_page",
+            }
 
-        try:
-            db.commit()
-        except Exception as exc:
-            db.rollback()
-            logger.error(f"Failed to commit bulk asset assignment batch: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Database transaction error during bulk asset assignment",
+            clean_scope = (payload.scope or "").strip().lower()
+            resolved_source = payload.source
+            if not resolved_source and clean_scope:
+                if clean_scope in ["windows", "windows_assets", "bigfix"]:
+                    resolved_source = "BIGFIX"
+                elif clean_scope in ["mac", "mac_assets", "jamf", "macos", "apple"]:
+                    resolved_source = "JAMF"
+
+            effective_report = payload.report
+            if not effective_report and clean_scope in REPORT_CARD_SCOPES:
+                effective_report = clean_scope
+
+            matched_rows = AssetRepository.get_matching_asset_ids_and_numbers(
+                db=db,
+                report=effective_report,
+                source=resolved_source,
+                asset_status=payload.asset_status,
+                devicetype=payload.devicetype,
+                manufacturer=payload.manufacturer,
+                model=payload.model,
+                assigned_username=payload.filter_assigned_username,
+                assignment_type=payload.assignment_type,
+                search=payload.search,
+                is_unassigned=payload.is_unassigned,
+                eol_status=payload.eol_status,
             )
 
-        requested_count = len(payload.asset_ids)
+            matched_ids = [r[0] for r in matched_rows]
+            matched_map = {r[0]: r[1] for r in matched_rows}
+            matched_count = len(matched_ids)
+
+            if matched_count == 0:
+                return BulkAssetAssignmentResponse(
+                    message="No assets matched the submitted filter criteria. 0 assets were assigned.",
+                    requested_count=0,
+                    matched_count=0,
+                    success_count=0,
+                    failure_count=0,
+                    target_username=target_user_id,
+                    managed_by=clean_managed,
+                    assignment_type="MANUAL",
+                    asset_status="ACTIVE",
+                    results=[],
+                )
+
+            try:
+                for i in range(0, len(matched_ids), chunk_size):
+                    chunk = matched_ids[i:i + chunk_size]
+                    db.execute(
+                        update(Asset)
+                        .where(Asset.asset_id.in_(chunk))
+                        .values(
+                            assigned_username=target_user_id,
+                            managed_by=clean_managed,
+                            assignment_type="MANUAL",
+                            asset_status="ACTIVE",
+                            remarks=clean_remarks,
+                            updated_at=now_time,
+                        )
+                    )
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                logger.error(f"Failed to commit select-all bulk asset assignment: {exc}", exc_info=True)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Database transaction error during bulk asset assignment",
+                )
+
+            results = [
+                BulkAssetAssignmentItemResult(
+                    asset_id=aid,
+                    asset_number=matched_map.get(aid),
+                    status="SUCCESS",
+                    reason=None,
+                )
+                for aid in matched_ids
+            ]
+            requested_count = matched_count
+            success_count = matched_count
+            failure_count = 0
+
+        # 6. Response message formatting
         if failure_count == 0:
             message = f"Bulk assignment completed successfully: {success_count} asset(s) assigned"
         elif success_count == 0:
@@ -642,8 +765,13 @@ class AssetService:
         return BulkAssetAssignmentResponse(
             message=message,
             requested_count=requested_count,
+            matched_count=matched_count,
             success_count=success_count,
             failure_count=failure_count,
+            target_username=target_user_id,
+            managed_by=clean_managed,
+            assignment_type="MANUAL",
+            asset_status="ACTIVE",
             results=results,
         )
 
@@ -651,6 +779,7 @@ class AssetService:
     def generate_assets_csv_stream(
         cls,
         db: Session,
+        report: Optional[str] = None,
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
@@ -663,6 +792,7 @@ class AssetService:
         eol_status: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: Optional[str] = "asc",
+        include_remarks: bool = False,
     ):
         """
         Stream CSV data for all assets matching dynamic search and multi-dimensional filters.
@@ -674,8 +804,10 @@ class AssetService:
         output = io.StringIO()
         writer = csv.writer(output, lineterminator="\r\n")
 
+        headers = REPORT_XLSX_HEADERS if (report or include_remarks) else ASSET_CSV_HEADERS
+
         # 1. Emit Header Row
-        writer.writerow(ASSET_CSV_HEADERS)
+        writer.writerow(headers)
         yield output.getvalue().encode("utf-8")
         output.seek(0)
         output.truncate(0)
@@ -683,6 +815,7 @@ class AssetService:
         # 2. Iterate database rows using yield_per
         results = AssetRepository.iter_assets_joined(
             db=db,
+            report=report,
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
@@ -740,6 +873,8 @@ class AssetService:
                 assigned_user_name,
                 department,
             ]
+            if report or include_remarks:
+                csv_row.append(asset.remarks or "")
 
             writer.writerow(csv_row)
             count += 1
@@ -754,5 +889,120 @@ class AssetService:
             yield output.getvalue().encode("utf-8")
             output.seek(0)
             output.truncate(0)
+
+    @classmethod
+    def generate_assets_xlsx_stream(
+        cls,
+        db: Session,
+        report: Optional[str] = None,
+        source: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        devicetype: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        search: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        eol_status: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = "asc",
+    ):
+        """
+        Stream genuine .xlsx workbook containing all matching assets using
+        openpyxl with write_only=True for constant memory efficiency with 50,000+ records.
+        """
+        import os
+        import tempfile
+        from openpyxl import Workbook
+
+        normalized_assignment_type = cls.normalize_assignment_type_filter(assignment_type)
+
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet(title="Asset Inventory")
+
+        # 1. Emit 18 required report headers in exact order
+        ws.append(REPORT_XLSX_HEADERS)
+
+        # 2. Iterate database rows using yield_per for constant-memory retrieval
+        results = AssetRepository.iter_assets_joined(
+            db=db,
+            report=report,
+            source=source,
+            asset_status=asset_status,
+            devicetype=devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=normalized_assignment_type,
+            search=search,
+            is_unassigned=is_unassigned,
+            eol_status=eol_status,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+
+        for row in results:
+            asset, emp, eol_date, ref_source = row
+
+            eol_stat, days_rem = EolService.calculate_eol(eol_date)
+            eol_expiry_str = eol_date.strftime("%Y-%m-%d") if eol_date else ""
+            days_rem_val = str(days_rem) if days_rem is not None else ""
+
+            assigned_user_id = (
+                asset.assigned_username.strip()
+                if (asset.assigned_username and asset.assigned_username.strip())
+                else ""
+            )
+            assigned_user_name = emp.full_name if (emp and emp.full_name) else ""
+            department = emp.department if (emp and emp.department) else ""
+
+            computer_id = (
+                str(getattr(asset, "computer_id", None))
+                if getattr(asset, "computer_id", None) is not None
+                else ""
+            )
+
+            remarks = asset.remarks or ""
+
+            xlsx_row = [
+                asset.asset_number or "",
+                asset.source or "",
+                asset.devicetype or "",
+                asset.manufacturer or "",
+                asset.model or "",
+                asset.serial_number or "",
+                asset.os_name or "",
+                asset.macaddress or "",
+                computer_id,
+                asset.asset_status or "",
+                eol_expiry_str,
+                eol_stat,
+                days_rem_val,
+                asset.managed_by or "",
+                assigned_user_id,
+                assigned_user_name,
+                department,
+                remarks,
+            ]
+            ws.append(xlsx_row)
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        tmp_path = tmp.name
+        tmp.close()
+
+        wb.save(tmp_path)
+        wb.close()
+
+        try:
+            with open(tmp_path, "rb") as f:
+                while chunk := f.read(65536):
+                    yield chunk
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
 
 

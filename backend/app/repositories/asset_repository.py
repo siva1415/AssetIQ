@@ -60,6 +60,7 @@ class AssetRepository:
         cls,
         stmt: Select,
         eol_sub=None,
+        report: Optional[str] = None,
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
@@ -71,6 +72,45 @@ class AssetRepository:
         is_unassigned: Optional[bool] = None,
         eol_status: Optional[str] = None,
     ) -> Select:
+        # 1. Report Card Scope Resolution (Six Reports Cards)
+        if report:
+            clean_rep = report.strip().lower().replace("-", "_").replace(" ", "_")
+            if clean_rep in (
+                "warranty_compliance_issues",
+                "warranty_compliance",
+                "warranty",
+                "warrantycompliance",
+                "warrantycomplianceissues",
+                "compliance_issues",
+                "compliance",
+            ):
+                if eol_sub is not None:
+                    today = date.today()
+                    warning_cutoff = today + timedelta(days=settings.EOL_WARNING_DAYS)
+                    # Non-compliant warranty/lifecycle: expired or nearing EOL threshold
+                    stmt = stmt.where(
+                        eol_sub.c.eol_date.is_not(None),
+                        eol_sub.c.eol_date <= warning_cutoff,
+                    )
+            elif clean_rep in ("bigfix_assets", "bigfix", "bigfixassets", "windows", "windows_assets"):
+                stmt = stmt.where(func.upper(Asset.source) == "BIGFIX")
+            elif clean_rep in ("jamf_assets", "jamf", "jamfassets", "mac", "mac_assets", "macos", "apple"):
+                stmt = stmt.where(func.upper(Asset.source) == "JAMF")
+            elif clean_rep in ("in_stock_inventory", "in_stock", "instock", "instockinventory", "in_stock_assets"):
+                stmt = stmt.where(
+                    Asset.asset_status.is_not(None),
+                    func.lower(func.trim(Asset.asset_status)).in_(["instock", "in stock", "in_stock"]),
+                )
+            elif clean_rep in ("need_validation_assets", "need_validation", "needvalidation", "needvalidationassets", "review", "review_assets"):
+                stmt = stmt.where(
+                    Asset.asset_status.is_not(None),
+                    func.lower(func.trim(Asset.asset_status)).in_(
+                        ["review", "need validation", "needvalidation", "need_validation"]
+                    ),
+                )
+            elif clean_rep in ("master_hardware", "master", "masterhardware", "master_hardware_report", "all", "all_assets"):
+                pass  # Master Hardware represents all assets in fleet
+
         # Parameterized source filter (support BIGFIX/Windows and JAMF/Mac)
         if source:
             src_upper = source.strip().upper()
@@ -171,6 +211,7 @@ class AssetRepository:
     @classmethod
     def _build_joined_asset_query(
         cls,
+        report: Optional[str] = None,
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
@@ -210,6 +251,7 @@ class AssetRepository:
         stmt = cls._build_filter_criteria(
             stmt=stmt,
             eol_sub=eol_sub,
+            report=report,
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
@@ -271,6 +313,7 @@ class AssetRepository:
         db: Session,
         skip: int = 0,
         limit: int = 25,
+        report: Optional[str] = None,
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
@@ -290,6 +333,7 @@ class AssetRepository:
         Returns a tuple of (items, total_count).
         """
         stmt = cls._build_joined_asset_query(
+            report=report,
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
@@ -318,6 +362,7 @@ class AssetRepository:
     def iter_assets_joined(
         cls,
         db: Session,
+        report: Optional[str] = None,
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
@@ -336,6 +381,7 @@ class AssetRepository:
         Uses yield_per for memory efficiency with large datasets.
         """
         stmt = cls._build_joined_asset_query(
+            report=report,
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
@@ -350,6 +396,110 @@ class AssetRepository:
             sort_order=sort_order,
         )
         return db.execute(stmt).yield_per(1000)
+
+    @classmethod
+    def count_assets(
+        cls,
+        db: Session,
+        report: Optional[str] = None,
+        source: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        devicetype: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        search: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        eol_status: Optional[str] = None,
+    ) -> int:
+        """
+        Calculates exact total matching assets for any report or filter criteria
+        using database-backed count without pagination or row limit truncation.
+        Uses unique Asset.asset_id to avoid duplicate counting.
+        """
+        eol_sub = cls._get_eol_subquery()
+        stmt = (
+            select(func.count(Asset.asset_id))
+            .select_from(Asset)
+            .outerjoin(
+                WorkdayEmployee,
+                func.lower(func.trim(Asset.assigned_username)) == func.lower(func.trim(WorkdayEmployee.user_id)),
+            )
+            .outerjoin(
+                eol_sub,
+                EolRepository.get_eol_join_condition(eol_sub),
+            )
+        )
+        stmt = cls._build_filter_criteria(
+            stmt=stmt,
+            eol_sub=eol_sub,
+            report=report,
+            source=source,
+            asset_status=asset_status,
+            devicetype=devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=assignment_type,
+            search=search,
+            is_unassigned=is_unassigned,
+            eol_status=eol_status,
+        )
+        return int(db.execute(stmt).scalar() or 0)
+
+    @classmethod
+    def get_matching_asset_ids_and_numbers(
+        cls,
+        db: Session,
+        report: Optional[str] = None,
+        source: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        devicetype: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        search: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        eol_status: Optional[str] = None,
+    ) -> List[Tuple[int, Optional[str]]]:
+        """
+        Retrieves (asset_id, asset_number) for all assets matching filter criteria across all pages.
+        Uses distinct to guarantee deduplication and orders by asset_id asc.
+        """
+        eol_sub = cls._get_eol_subquery()
+        stmt = (
+            select(Asset.asset_id, Asset.asset_number)
+            .distinct()
+            .select_from(Asset)
+            .outerjoin(
+                WorkdayEmployee,
+                func.lower(func.trim(Asset.assigned_username)) == func.lower(func.trim(WorkdayEmployee.user_id)),
+            )
+            .outerjoin(
+                eol_sub,
+                EolRepository.get_eol_join_condition(eol_sub),
+            )
+        )
+        stmt = cls._build_filter_criteria(
+            stmt=stmt,
+            eol_sub=eol_sub,
+            report=report,
+            source=source,
+            asset_status=asset_status,
+            devicetype=devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=assignment_type,
+            search=search,
+            is_unassigned=is_unassigned,
+            eol_status=eol_status,
+        )
+        stmt = stmt.order_by(Asset.asset_id.asc())
+        rows = db.execute(stmt).fetchall()
+        return [(int(r[0]), str(r[1]) if r[1] is not None else None) for r in rows]
 
     @staticmethod
     def get_by_id(db: Session, asset_id: int) -> Optional[Asset]:

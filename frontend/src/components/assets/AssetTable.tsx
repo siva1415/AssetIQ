@@ -36,6 +36,7 @@ import {
   toStandardAssetStatus,
   formatEolDate,
   formatEolDaysLeft,
+  BulkAssignAssetFilters,
 } from '../../types';
 import { api } from '../../services/api';
 import { useApp } from '../../context/AppContext';
@@ -153,6 +154,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   // Bulk asset selection state
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string | number>>(new Set());
   const [selectedAssetsMap, setSelectedAssetsMap] = useState<Map<string | number, Asset>>(new Map());
+  const [isAllMatchingSelected, setIsAllMatchingSelected] = useState<boolean>(false);
   const [isBulkAssignModalOpen, setIsBulkAssignModalOpen] = useState<boolean>(false);
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
 
@@ -169,9 +171,10 @@ export const AssetTable: React.FC<AssetTableProps> = ({
 
   // Is some (but not all) on current page selected (for indeterminate checkbox state)
   const isSomeCurrentPageSelected = useMemo(() => {
+    if (isAllMatchingSelected) return false;
     if (currentPageAssetIds.length === 0) return false;
     return currentPageAssetIds.some(id => selectedAssetIds.has(id)) && !isAllCurrentPageSelected;
-  }, [currentPageAssetIds, selectedAssetIds, isAllCurrentPageSelected]);
+  }, [currentPageAssetIds, selectedAssetIds, isAllCurrentPageSelected, isAllMatchingSelected]);
 
   // Set indeterminate state on header checkbox input DOM element
   useEffect(() => {
@@ -182,35 +185,64 @@ export const AssetTable: React.FC<AssetTableProps> = ({
 
   // Toggle select all on current page
   const handleToggleSelectAllCurrentPage = () => {
-    setSelectedAssetIds(prev => {
-      const next = new Set(prev);
-      if (isAllCurrentPageSelected) {
-        // Unchecking clears current page only
-        currentPageAssetIds.forEach(id => next.delete(id));
-      } else {
-        // Select all on current page
-        currentPageAssetIds.forEach(id => next.add(id));
-      }
-      return next;
-    });
+    if (isAllMatchingSelected) {
+      // Unchecking when all matching selected clears everything
+      setIsAllMatchingSelected(false);
+      setSelectedAssetIds(new Set());
+      setSelectedAssetsMap(new Map());
+      return;
+    }
 
-    setSelectedAssetsMap(prev => {
-      const next = new Map(prev);
-      if (isAllCurrentPageSelected) {
+    if (isAllCurrentPageSelected) {
+      // Unchecking clears current page only
+      setSelectedAssetIds(prev => {
+        const next = new Set(prev);
         currentPageAssetIds.forEach(id => next.delete(id));
-      } else {
+        return next;
+      });
+      setSelectedAssetsMap(prev => {
+        const next = new Map(prev);
+        currentPageAssetIds.forEach(id => next.delete(id));
+        return next;
+      });
+    } else {
+      // Select all on current page
+      setSelectedAssetIds(prev => {
+        const next = new Set(prev);
+        currentPageAssetIds.forEach(id => next.add(id));
+        return next;
+      });
+      setSelectedAssetsMap(prev => {
+        const next = new Map(prev);
         assets.forEach(a => {
           if (a.id) next.set(a.id, a);
         });
-      }
-      return next;
-    });
+        return next;
+      });
+    }
   };
 
   // Toggle single asset selection
   const handleToggleSelectAsset = (asset: Asset) => {
     const id = asset.id;
     if (id === undefined || id === null || id === '') return;
+
+    if (isAllMatchingSelected) {
+      // User is unchecking an individual asset from all-matching mode:
+      // Transition to individual current page selection minus this asset
+      setIsAllMatchingSelected(false);
+      const nextIds = new Set<string | number>();
+      const nextMap = new Map<string | number, Asset>();
+      assets.forEach(a => {
+        if (a.id && a.id !== id) {
+          nextIds.add(a.id);
+          nextMap.set(a.id, a);
+        }
+      });
+      setSelectedAssetIds(nextIds);
+      setSelectedAssetsMap(nextMap);
+      return;
+    }
 
     setSelectedAssetIds(prev => {
       const next = new Set(prev);
@@ -234,6 +266,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   };
 
   const handleClearSelection = () => {
+    setIsAllMatchingSelected(false);
     setSelectedAssetIds(new Set());
     setSelectedAssetsMap(new Map());
   };
@@ -443,6 +476,24 @@ export const AssetTable: React.FC<AssetTableProps> = ({
     dataRefreshKey,
   ]);
 
+  // Reset bulk selection whenever search criteria or filters change
+  // Satisfies requirement: "When search criteria or filters change, clear the previous all-matching selection
+  // or explicitly require the admin to confirm the new selection. Never silently assign an unintended set of assets."
+  useEffect(() => {
+    setIsAllMatchingSelected(false);
+    setSelectedAssetIds(new Set());
+    setSelectedAssetsMap(new Map());
+  }, [
+    search,
+    source,
+    deviceType,
+    assetStatus,
+    manufacturer,
+    model,
+    assignmentType,
+    eolStatus,
+  ]);
+
   const handleSort = (field: string) => {
     if (sortBy === field) {
       setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
@@ -464,6 +515,9 @@ export const AssetTable: React.FC<AssetTableProps> = ({
     setAssignmentType(getCleanAssignmentFilter(initialAssignmentFilter));
     setEolStatus(initialEolFilter || '');
     setPage(1);
+    setIsAllMatchingSelected(false);
+    setSelectedAssetIds(new Set());
+    setSelectedAssetsMap(new Map());
   };
 
   const hasActiveFilters =
@@ -475,6 +529,77 @@ export const AssetTable: React.FC<AssetTableProps> = ({
     Boolean(model) ||
     Boolean(assignmentType !== getCleanAssignmentFilter(initialAssignmentFilter)) ||
     Boolean(eolStatus.trim() !== (initialEolFilter || '').trim());
+
+  // Formatted summary of active filters for display in bulk assign modal
+  const filterSummaryText = useMemo(() => {
+    const parts: string[] = [];
+    if (search.trim()) parts.push(`Search: "${search.trim()}"`);
+    if (source) parts.push(`Source: ${source}`);
+    if (deviceType.trim()) parts.push(`Device: ${deviceType.trim()}`);
+    if (assetStatus && assetStatus !== initialStandardStatus) parts.push(`Status: ${assetStatus}`);
+    if (manufacturer) parts.push(`Manufacturer: ${manufacturer}`);
+    if (model) parts.push(`Model: ${model}`);
+    if (assignmentType) parts.push(`Assignment: ${assignmentType}`);
+    if (eolStatus.trim()) parts.push(`EOL: ${eolStatus.trim()}`);
+    return parts.length > 0 ? parts.join(' | ') : 'All Fleet Assets';
+  }, [
+    search,
+    source,
+    deviceType,
+    assetStatus,
+    initialStandardStatus,
+    manufacturer,
+    model,
+    assignmentType,
+    eolStatus,
+  ]);
+
+  // Normalized filter criteria payload passed to bulkAssignAssets API
+  const activeFilters = useMemo<BulkAssignAssetFilters>(() => {
+    const trimmedDeviceType = deviceType.trim();
+    const rawEol = eolStatus.trim();
+    let trimmedEolStatus: string | undefined = undefined;
+    if (rawEol) {
+      const normEol = rawEol.toUpperCase().replace(/_/g, ' ');
+      if (normEol === 'EOL SOON' || normEol === 'NEARING EOL') {
+        trimmedEolStatus = 'EOL SOON';
+      } else if (normEol === 'ACTIVE') {
+        trimmedEolStatus = 'ACTIVE';
+      } else if (normEol === 'EXPIRED') {
+        trimmedEolStatus = 'EXPIRED';
+      } else if (normEol === 'UNKNOWN') {
+        trimmedEolStatus = 'UNKNOWN';
+      } else {
+        trimmedEolStatus = rawEol;
+      }
+    }
+
+    const cleanAssignmentType =
+      assignmentType === 'Auto' || assignmentType === 'Manual'
+        ? assignmentType
+        : undefined;
+
+    return {
+      search: search.trim() || undefined,
+      source: source || undefined,
+      devicetype: trimmedDeviceType || undefined,
+      device_type: trimmedDeviceType || undefined,
+      asset_status: assetStatus ? toStandardAssetStatus(assetStatus) : undefined,
+      manufacturer: manufacturer || undefined,
+      model: model || undefined,
+      assignment_type: cleanAssignmentType,
+      eol_status: trimmedEolStatus || undefined,
+    };
+  }, [
+    search,
+    source,
+    deviceType,
+    assetStatus,
+    manufacturer,
+    model,
+    assignmentType,
+    eolStatus,
+  ]);
 
   // Format Managed By as GROUP or INDIVIDUAL
   const getManagedByDisplay = (asset: Asset): 'GROUP' | 'INDIVIDUAL' => {
@@ -919,15 +1044,40 @@ export const AssetTable: React.FC<AssetTableProps> = ({
       </div>
 
       {/* Bulk Selection Action Bar */}
-      {enableBulkAssignment && selectedAssetIds.size > 0 && (
+      {enableBulkAssignment && (selectedAssetIds.size > 0 || isAllMatchingSelected) && (
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs shadow-2xs animate-in fade-in">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center flex-wrap gap-2">
             <span className="inline-flex items-center justify-center min-w-[20px] px-1.5 py-0.5 rounded-full font-bold bg-blue-600 text-white text-[11px] tabular-nums">
-              {selectedAssetIds.size}
+              {isAllMatchingSelected ? totalCount.toLocaleString() : selectedAssetIds.size.toLocaleString()}
             </span>
-            <span className="font-semibold text-slate-900">
-              {selectedAssetIds.size === 1 ? '1 asset selected' : `${selectedAssetIds.size} assets selected`}
-            </span>
+
+            {isAllMatchingSelected ? (
+              <span className="font-semibold text-slate-900">
+                All {totalCount.toLocaleString()} matching assets selected across all pages
+              </span>
+            ) : (
+              <span className="font-semibold text-slate-900">
+                {selectedAssetIds.size === 1
+                  ? '1 asset selected'
+                  : `${selectedAssetIds.size.toLocaleString()} assets selected`}
+                {totalCount > 0 && ` (of ${totalCount.toLocaleString()} total matching)`}
+              </span>
+            )}
+
+            {/* When current page or subset is selected and totalCount > currentPageAssetIds.length, offer option to select all matching assets */}
+            {!isAllMatchingSelected && totalCount > currentPageAssetIds.length && (
+              <>
+                <span className="text-slate-400">·</span>
+                <button
+                  type="button"
+                  onClick={() => setIsAllMatchingSelected(true)}
+                  className="text-blue-700 hover:text-blue-900 font-bold hover:underline cursor-pointer inline-flex items-center gap-1"
+                >
+                  Select all matching assets ({totalCount.toLocaleString()})
+                </button>
+              </>
+            )}
+
             <span className="text-slate-400">·</span>
             <button
               type="button"
@@ -945,7 +1095,11 @@ export const AssetTable: React.FC<AssetTableProps> = ({
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold shadow-xs transition-colors cursor-pointer"
             >
               <UserRoundPlus className="w-4 h-4 stroke-[2.25]" />
-              <span>Bulk Assign Selected ({selectedAssetIds.size})</span>
+              <span>
+                {isAllMatchingSelected
+                  ? `Bulk Assign All Matching (${totalCount.toLocaleString()})`
+                  : `Bulk Assign Selected (${selectedAssetIds.size.toLocaleString()})`}
+              </span>
             </button>
           </div>
         </div>
@@ -975,10 +1129,10 @@ export const AssetTable: React.FC<AssetTableProps> = ({
                       <input
                         type="checkbox"
                         ref={headerCheckboxRef}
-                        checked={isAllCurrentPageSelected}
+                        checked={isAllMatchingSelected || (currentPageAssetIds.length > 0 && isAllCurrentPageSelected)}
                         onChange={handleToggleSelectAllCurrentPage}
                         className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                        aria-label="Select all assets on current page"
+                        aria-label={isAllMatchingSelected ? 'Deselect all matching assets' : 'Select all assets on current page'}
                       />
                     </th>
                   )}
@@ -1092,7 +1246,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
               <tbody className="divide-y divide-slate-100">
                 {assets.map(asset => {
                   const managedByDisplay = getManagedByDisplay(asset);
-                  const isRowSelected = selectedAssetIds.has(asset.id);
+                  const isRowSelected = isAllMatchingSelected || selectedAssetIds.has(asset.id);
 
                   return (
                     <tr
@@ -1407,14 +1561,42 @@ export const AssetTable: React.FC<AssetTableProps> = ({
         <BulkAssignAssetModal
           selectedAssetIds={Array.from(selectedAssetIds)}
           selectedAssets={Array.from(selectedAssetsMap.values())}
+          isAllMatchingSelected={isAllMatchingSelected}
+          matchingCount={totalCount}
+          activeFilters={activeFilters}
+          filterSummaryText={filterSummaryText}
           onClose={() => setIsBulkAssignModalOpen(false)}
-          onSuccess={msg => {
+          onSuccess={result => {
             setIsBulkAssignModalOpen(false);
-            handleClearSelection();
+
+            if (result.isAllSuccess) {
+              handleClearSelection();
+              // As requested: "Clear the sected searches and filter, after Done button to close the dialog."
+              handleClearFilters();
+            } else {
+              // Preserve failed selections when practical so the admin can retry them safely
+              setIsAllMatchingSelected(false);
+              if (result.failedAssetIds && result.failedAssetIds.length > 0) {
+                setSelectedAssetIds(new Set(result.failedAssetIds));
+                setSelectedAssetsMap(prev => {
+                  const next = new Map<string | number, Asset>();
+                  result.failedAssetIds.forEach(id => {
+                    if (prev.has(id)) next.set(id, prev.get(id)!);
+                  });
+                  return next;
+                });
+              }
+            }
+
+            // After completion, refresh the Asset Ownership table and relevant KPI counts
             triggerDataRefresh();
             fetchAssets();
             loadKpiMetrics();
-            setNotification({ type: 'success', message: msg });
+
+            setNotification({
+              type: result.failedCount > 0 ? (result.assignedCount > 0 ? 'info' : 'error') : 'success',
+              message: result.message,
+            });
           }}
         />
       )}

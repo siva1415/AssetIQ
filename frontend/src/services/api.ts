@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import * as XLSX from 'xlsx';
 import {
   Asset,
   AssetSource,
@@ -19,6 +20,7 @@ import {
   DeviceEOLReferenceUpdate,
   DashboardSummary,
   DashboardRedesignOverview,
+  HardwareAnalysisResponse,
   AssetsBySourceItem,
   OwnershipSummaryItem,
   EOLSummaryItem,
@@ -66,7 +68,21 @@ import {
   reassignMockAsset,
   bulkAssignMockAssets,
   generateMockAssetsCsvExport,
+  generateMockReportXlsxExport,
+  buildReportXlsxFromAssets,
+  calculateMockReportStats,
 } from './mockData';
+
+export interface ReportCardStats {
+  masterCount: number;
+  expiredCount: number;
+  expiringCount: number;
+  totalWarrantyIssues: number;
+  bigFixCount: number;
+  jamfCount: number;
+  inStockCount: number;
+  needValidationCount: number;
+}
 
 // Storage keys
 const MOCK_MODE_STORAGE_KEY = 'asset_iq_mock_mode';
@@ -810,6 +826,8 @@ class ApiService {
     const statusCounts: Record<string, number> = { ACTIVE: 0, REVIEW: 0, 'IN STOCK': 0, RETIRED: 0 };
     const deptCounts: Record<string, number> = {};
     const modelCounts: Record<string, { model: string; eol_status: string; days_remaining: number | null; count: number }> = {};
+    const osCounts: Record<string, number> = {};
+    const dtCounts: Record<string, number> = {};
     const owners = new Set<string>();
     for (const asset of MOCK_ASSETS) {
       const source = String(asset.source || '').toUpperCase();
@@ -838,9 +856,35 @@ class ApiService {
       const modelName = `${asset.manufacturer || 'Unknown'} ${asset.model || 'Unknown'}`.trim();
       const model = modelCounts[modelName] || (modelCounts[modelName] = { model: modelName, eol_status: eolKey, days_remaining: asset.days_remaining ?? null, count: 0 });
       model.count += 1;
+
+      // Operating system normalization
+      const rawOs = String(asset.os_name || asset.osName || '').trim();
+      if (rawOs && rawOs !== '—' && rawOs !== '-' && rawOs.toLowerCase() !== 'unknown') {
+        let osCategory = rawOs;
+        const lower = rawOs.toLowerCase();
+        if (lower.startsWith('windows') || lower.includes('win')) osCategory = 'Windows';
+        else if (lower.includes('macos') || lower.includes('mac os') || lower.includes('os x')) osCategory = 'macOS';
+        else if (lower.includes('linux') || lower.includes('ubuntu') || lower.includes('red hat')) osCategory = 'Linux';
+        else if (lower.includes('vmware') || lower.includes('esxi')) osCategory = 'VMware ESXi';
+        osCounts[osCategory] = (osCounts[osCategory] || 0) + 1;
+      }
+
+      // Device type normalization
+      const rawDt = String(asset.devicetype || asset.device_type || asset.deviceType || '').trim();
+      if (rawDt && rawDt !== '—' && rawDt !== '-' && rawDt.toLowerCase() !== 'unknown') {
+        const dtCategory = rawDt.charAt(0).toUpperCase() + rawDt.slice(1);
+        dtCounts[dtCategory] = (dtCounts[dtCategory] || 0) + 1;
+      }
     }
     sourceSummary.forEach(item => { item.active_share = item.total ? Math.round(item.eol_active / item.total * 100) : 0; });
     const urgency: Record<string, number> = { EXPIRED: 0, 'EOL SOON': 1, UNKNOWN: 2, ACTIVE: 3 };
+    const by_operating_system = Object.entries(osCounts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+    const by_device_type = Object.entries(dtCounts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+
     return {
       kpis: { total_assets: MOCK_ASSETS.length, active_assets: statusCounts.ACTIVE, review: statusCounts.REVIEW, in_stock: statusCounts['IN STOCK'], employee_count: owners.size },
       assets_by_source: sourceSummary.map(({ source, total }) => ({ source, count: total })),
@@ -848,7 +892,41 @@ class ApiService {
       eol_exposure: Object.values(modelCounts).filter(item => item.eol_status !== 'ACTIVE').sort((a, b) => (urgency[a.eol_status] ?? 3) - (urgency[b.eol_status] ?? 3) || (a.days_remaining ?? 1e9) - (b.days_remaining ?? 1e9)).slice(0, 7),
       assets_by_department: Object.entries(deptCounts).map(([department, count]) => ({ department, count })).sort((a, b) => b.count - a.count),
       source_summary: sourceSummary,
+      by_operating_system,
+      by_device_type,
+      hardware_analysis: {
+        by_operating_system,
+        by_device_type,
+      },
     };
+  }
+
+  /**
+   * Hardware Asset Analysis endpoint returning byOs and byDevice maps.
+   * GET /api/dashboard/hardware-analysis
+   */
+  public async getHardwareAnalysis(): Promise<HardwareAnalysisResponse> {
+    if (!this.isMockMode) {
+      const client = createAxiosClient();
+      const response = await client.get<HardwareAnalysisResponse>('/api/dashboard/hardware-analysis');
+      return response.data;
+    }
+
+    await this.simulateLatency();
+    const byOs: Record<string, number> = {};
+    const byDevice: Record<string, number> = {};
+    for (const asset of MOCK_ASSETS) {
+      const os = String(asset.os_name || asset.osName || '').trim();
+      if (os && os !== '—' && os !== '-' && os.toLowerCase() !== 'unknown') {
+        byOs[os] = (byOs[os] || 0) + 1;
+      }
+      const dt = String(asset.devicetype || asset.device_type || asset.deviceType || '').trim();
+      if (dt && dt !== '—' && dt !== '-' && dt.toLowerCase() !== 'unknown') {
+        const titleCase = dt.charAt(0).toUpperCase() + dt.slice(1);
+        byDevice[titleCase] = (byDevice[titleCase] || 0) + 1;
+      }
+    }
+    return { byOs, byDevice };
   }
 
   // Assets by source
@@ -1576,6 +1654,315 @@ class ApiService {
     throw lastError || new Error('Backend CSV export endpoint returned an error or was not reachable');
   }
 
+  // Export genuine XLSX report for a specific card from GET /api/assets/export
+  public async exportReportXlsx(
+    reportId: 'master' | 'warranty' | 'bigfix' | 'jamf' | 'instock' | 'need-validation' | string,
+    extraParams?: Record<string, any>
+  ): Promise<{ blob: Blob; filename?: string; count?: number }> {
+    const reportFilterParams: Record<string, any> = {
+      format: 'xlsx',
+      report: reportId,
+      ...extraParams,
+    };
+
+    if (reportId === 'bigfix') {
+      reportFilterParams.source = 'BIGFIX';
+    } else if (reportId === 'jamf') {
+      reportFilterParams.source = 'JAMF';
+    } else if (reportId === 'instock') {
+      reportFilterParams.asset_status = 'IN STOCK';
+    } else if (reportId === 'need-validation') {
+      reportFilterParams.asset_status = 'REVIEW';
+    } else if (reportId === 'warranty') {
+      reportFilterParams.warranty_issues = true;
+      reportFilterParams.eol_status = 'EOL SOON,EXPIRED';
+    }
+
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return generateMockReportXlsxExport(reportId);
+    }
+
+    const client = createAxiosClient();
+    const exportRoutes = [
+      '/api/assets/export',
+      '/api/assets/export.xlsx',
+      '/api/assets/export.csv',
+    ];
+
+    let lastError: any = null;
+    for (const route of exportRoutes) {
+      try {
+        const response = await client.get(route, {
+          params: reportFilterParams,
+          responseType: 'blob',
+          headers: {
+            Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/octet-stream, text/csv, application/json, */*',
+          },
+        });
+
+        const data = response.data;
+        if (data instanceof Blob && data.type.includes('application/json')) {
+          const text = await data.text();
+          let json: any = {};
+          try {
+            json = JSON.parse(text);
+          } catch (_) {}
+          if (json?.detail || json?.error || json?.message) {
+            throw new Error(json.detail || json.error || json.message);
+          }
+          if (json?.url || json?.download_url) {
+            const fileResp = await axios.get(json.url || json.download_url, { responseType: 'blob' });
+            return {
+              blob: fileResp.data,
+              filename: json.filename,
+              count: json.count || json.total,
+            };
+          }
+        }
+
+        let filename: string | undefined = undefined;
+        const disposition = response.headers['content-disposition'] || response.headers['Content-Disposition'];
+        if (disposition) {
+          const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+          if (utf8Match && utf8Match[1]) {
+            filename = decodeURIComponent(utf8Match[1].trim());
+          } else {
+            const basicMatch = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/i);
+            if (basicMatch && basicMatch[1]) {
+              filename = basicMatch[1].replace(/['"]/g, '').trim();
+            }
+          }
+        }
+
+        if (data instanceof Blob) {
+          const buffer = await data.slice(0, 4).arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          const isZipXlsx = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+          if (isZipXlsx) {
+            return {
+              blob: data,
+              filename,
+            };
+          }
+
+          // If backend returned CSV text instead of binary XLSX, convert to genuine XLSX with the 18 columns!
+          const text = await data.text();
+          if (text.includes('\n') || text.includes(',')) {
+            const wb = XLSX.read(text, { type: 'string' });
+            const xlsxBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+            return {
+              blob: new Blob([xlsxBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+              filename: filename ? filename.replace(/\.csv$/i, '.xlsx') : undefined,
+            };
+          }
+        }
+
+        return {
+          blob: data instanceof Blob ? data : new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+          filename,
+        };
+      } catch (err: any) {
+        lastError = err;
+        if (err?.response?.status !== 404 && err?.status !== 404) {
+          throw err;
+        }
+      }
+    }
+
+    // Fallback: If dedicated export route returned 404, fetch all matching assets via paginated /api/assets
+    try {
+      const allAssets = await this.fetchAllMatchingAssetsForReport(reportId);
+      if (!allAssets || allAssets.length === 0) {
+        return {
+          blob: new Blob([''], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+          filename: undefined,
+          count: 0,
+        };
+      }
+      return buildReportXlsxFromAssets(reportId, allAssets);
+    } catch (fallbackErr) {
+      throw lastError || fallbackErr || new Error('Backend export endpoint returned an error or was not reachable');
+    }
+  }
+
+  // Helper to fetch all matching assets for a report definition across all pagination pages
+  public async fetchAllMatchingAssetsForReport(reportId: string): Promise<Asset[]> {
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return generateMockReportXlsxExport(reportId).count > 0 ? [...MOCK_ASSETS] : [];
+    }
+
+    const client = createAxiosClient();
+    const queryParams: Record<string, any> = {};
+
+    if (reportId === 'bigfix') {
+      queryParams.source = 'BIGFIX';
+    } else if (reportId === 'jamf') {
+      queryParams.source = 'JAMF';
+    } else if (reportId === 'instock') {
+      queryParams.asset_status = 'IN STOCK';
+    } else if (reportId === 'need-validation') {
+      queryParams.asset_status = 'REVIEW';
+    } else if (reportId === 'warranty') {
+      queryParams.eol_status = 'EOL SOON,EXPIRED';
+    }
+
+    // Try page_size=1000 first, fallback to page_size=100 if rejected
+    let pageSize = 1000;
+    let initialResp: any = null;
+    try {
+      initialResp = await client.get('/api/assets', { params: { ...queryParams, page: 1, page_size: pageSize } });
+    } catch (err: any) {
+      if (err?.response?.status === 422 || err?.response?.status === 400) {
+        pageSize = 100;
+        initialResp = await client.get('/api/assets', { params: { ...queryParams, page: 1, page_size: pageSize } });
+      } else {
+        throw err;
+      }
+    }
+
+    const rawData = initialResp.data;
+    let allItems: Asset[] = [];
+    let total = 0;
+    let totalPages = 1;
+
+    if (Array.isArray(rawData)) {
+      allItems = rawData.map(normalizeAsset);
+      total = allItems.length;
+    } else if (rawData && typeof rawData === 'object') {
+      const items = rawData.items ?? rawData.data ?? rawData.results ?? rawData.assets ?? [];
+      allItems = items.map(normalizeAsset);
+      total = Number(rawData.total ?? rawData.count ?? rawData.total_count ?? items.length) || items.length;
+      totalPages = Number(rawData.total_pages ?? rawData.totalPages) || Math.max(1, Math.ceil(total / pageSize));
+    }
+
+    // Fetch remaining pages in batches of 5
+    if (totalPages > 1) {
+      for (let p = 2; p <= totalPages; p += 5) {
+        const batchPromises = [];
+        for (let batchPage = p; batchPage < p + 5 && batchPage <= totalPages; batchPage++) {
+          batchPromises.push(
+            client.get<any>('/api/assets', { params: { ...queryParams, page: batchPage, page_size: pageSize } })
+          );
+        }
+        const batchResponses = await Promise.all(batchPromises);
+        for (const resp of batchResponses) {
+          if (resp?.data) {
+            const pageRaw = resp.data;
+            const pageItems = Array.isArray(pageRaw) ? pageRaw : (pageRaw.items ?? pageRaw.data ?? pageRaw.results ?? []);
+            allItems = allItems.concat(pageItems.map(normalizeAsset));
+          }
+        }
+      }
+    }
+
+    // Client-side filter warranty if warranty report and backend didn't support comma eol_status
+    if (reportId === 'warranty') {
+      allItems = allItems.filter(a => {
+        const eolStatus = (a.calculated_eol_status || a.eol_status || '').toUpperCase().replace(/_/g, ' ');
+        const days = a.days_remaining ?? a.daysRemaining ?? null;
+        if (eolStatus === 'EXPIRED' || (days !== null && days < 0)) return true;
+        if (eolStatus === 'EOL SOON' || (days !== null && days >= 0 && days <= 90)) return true;
+        return false;
+      });
+    }
+
+    return allItems;
+  }
+
+  // Get live accurate card counts for all six report cards without truncating
+  public async getReportCardCounts(): Promise<ReportCardStats> {
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return calculateMockReportStats();
+    }
+
+    // 1. Try dedicated dashboard summary if available
+    try {
+      const overview = await this.getDashboardRedesignOverview();
+      if (overview?.kpis && overview?.assets_by_source && overview?.eol_distribution) {
+        const bigFix = overview.assets_by_source.find(s => s.source.toUpperCase() === 'BIGFIX')?.count ?? 0;
+        const jamf = overview.assets_by_source.find(s => s.source.toUpperCase() === 'JAMF')?.count ?? 0;
+        const expired = overview.eol_distribution.find(e => e.status.toUpperCase() === 'EXPIRED')?.count ?? 0;
+        const expiring = overview.eol_distribution.find(e => e.status.toUpperCase() === 'EOL SOON' || e.status.toUpperCase() === 'NEARING EOL')?.count ?? 0;
+
+        return {
+          masterCount: overview.kpis.total_assets,
+          expiredCount: expired,
+          expiringCount: expiring,
+          totalWarrantyIssues: expired + expiring,
+          bigFixCount: bigFix,
+          jamfCount: jamf,
+          inStockCount: overview.kpis.in_stock,
+          needValidationCount: overview.kpis.review,
+        };
+      }
+    } catch (_) {
+      // Continue to direct queries
+    }
+
+    // 2. Query exact total counts from backend GET /api/assets using page_size=1
+    try {
+      const client = createAxiosClient();
+      const [
+        masterResp,
+        bigFixResp,
+        jamfResp,
+        inStockResp,
+        needValResp,
+        expiredResp,
+        expiringResp,
+      ] = await Promise.all([
+        client.get<any>('/api/assets', { params: { page: 1, page_size: 1 } }).catch(() => null),
+        client.get<any>('/api/assets', { params: { page: 1, page_size: 1, source: 'BIGFIX' } }).catch(() => null),
+        client.get<any>('/api/assets', { params: { page: 1, page_size: 1, source: 'JAMF' } }).catch(() => null),
+        client.get<any>('/api/assets', { params: { page: 1, page_size: 1, asset_status: 'IN STOCK' } }).catch(() => null),
+        client.get<any>('/api/assets', { params: { page: 1, page_size: 1, asset_status: 'REVIEW' } }).catch(() => null),
+        client.get<any>('/api/assets', { params: { page: 1, page_size: 1, eol_status: 'EXPIRED' } }).catch(() => null),
+        client.get<any>('/api/assets', { params: { page: 1, page_size: 1, eol_status: 'EOL SOON' } }).catch(() => null),
+      ]);
+
+      const getTotal = (resp: any): number => {
+        if (!resp?.data) return 0;
+        const d = resp.data;
+        if (typeof d.total === 'number') return d.total;
+        if (typeof d.count === 'number') return d.count;
+        if (typeof d.total_count === 'number') return d.total_count;
+        if (typeof d.total_records === 'number') return d.total_records;
+        if (Array.isArray(d)) return d.length;
+        if (Array.isArray(d.items)) return d.items.length;
+        return 0;
+      };
+
+      const masterCount = getTotal(masterResp);
+      const bigFixCount = getTotal(bigFixResp);
+      const jamfCount = getTotal(jamfResp);
+      const inStockCount = getTotal(inStockResp);
+      const needValidationCount = getTotal(needValResp);
+      const expiredCount = getTotal(expiredResp);
+      const expiringCount = getTotal(expiringResp);
+
+      if (masterCount > 0) {
+        return {
+          masterCount,
+          expiredCount,
+          expiringCount,
+          totalWarrantyIssues: expiredCount + expiringCount,
+          bigFixCount,
+          jamfCount,
+          inStockCount,
+          needValidationCount,
+        };
+      }
+    } catch (_) {
+      // Continue to fallback
+    }
+
+    // 3. Fallback to mock dataset calculation
+    return calculateMockReportStats();
+  }
+
   // Dedicated Fleet Summary KPI endpoint with fallback to complete asset dataset aggregation
   public async getFleetKpiSummary(params?: { source?: string; search?: string }): Promise<FleetKpiMetrics> {
     if (this.isMockMode) {
@@ -1822,7 +2209,6 @@ class ApiService {
       : ASSET_STATUSES.ACTIVE;
 
     const payload: Record<string, any> = {
-      asset_ids: data.asset_ids,
       user_id: data.user_id,
       assigned_username: data.assigned_username || data.user_id,
       managed_by: data.managed_by,
@@ -1830,9 +2216,31 @@ class ApiService {
       asset_status: assetStatus,
     };
 
-    if (data.remarks !== undefined && data.remarks !== null && data.remarks !== '') {
-      payload.remarks = data.remarks;
-      payload.notes = data.remarks;
+    if (data.select_all_matching) {
+      payload.select_all_matching = true;
+      payload.all_matching = true;
+      payload.select_all = true;
+      if (data.filters) {
+        payload.filters = data.filters;
+        Object.assign(payload, data.filters);
+      }
+      payload.asset_ids = data.asset_ids || [];
+    } else {
+      payload.asset_ids = data.asset_ids || [];
+    }
+
+    // Remarks behavior:
+    // If remarks contain text, submit entered value.
+    // If remarks are blank or contain only whitespace, submit null so the backend
+    // updates assets.remarks to SQL NULL for every successfully assigned asset.
+    // Do not omit remarks in a way that causes old remarks to remain.
+    const remarksTrimmed = (data.remarks ?? '').trim();
+    if (remarksTrimmed !== '') {
+      payload.remarks = remarksTrimmed;
+      payload.notes = remarksTrimmed;
+    } else {
+      payload.remarks = null;
+      payload.notes = null;
     }
 
     // Attempt standard bulk assignment routes
@@ -1848,13 +2256,30 @@ class ApiService {
       try {
         const response = await client.post<any>(route, payload);
         const resData = response.data?.data ?? response.data ?? {};
+        const fallbackTargetCount = data.select_all_matching ? (resData.total ?? 0) : (data.asset_ids?.length ?? 0);
+        const assignedCount =
+          resData.assigned_count ??
+          resData.count ??
+          resData.successful_count ??
+          (Array.isArray(resData.successful_asset_ids) ? resData.successful_asset_ids.length : fallbackTargetCount);
+        const successfulIds =
+          resData.successful_asset_ids ??
+          resData.asset_ids ??
+          (data.select_all_matching ? [] : (data.asset_ids || []));
+        const failedIds = resData.failed_asset_ids ?? [];
+        const failedCount = resData.failed_count ?? failedIds.length;
+        const totalProcessed = resData.total_processed ?? resData.total ?? (assignedCount + failedCount);
+
         return {
-          assigned_count: resData.assigned_count ?? resData.count ?? data.asset_ids.length,
-          successful_asset_ids: resData.successful_asset_ids ?? resData.asset_ids ?? data.asset_ids,
-          failed_asset_ids: resData.failed_asset_ids ?? [],
+          assigned_count: assignedCount,
+          successful_asset_ids: successfulIds,
+          failed_asset_ids: failedIds,
+          total_processed: totalProcessed,
+          failed_count: failedCount,
+          failures: resData.failures ?? [],
           message:
             resData.message ??
-            `Successfully assigned ${data.asset_ids.length} assets to ${data.user_id}.`,
+            `Successfully assigned ${assignedCount} assets to ${data.user_id}.`,
         };
       } catch (err: any) {
         const status = err?.status || err?.response?.status;
@@ -1865,39 +2290,45 @@ class ApiService {
     }
 
     // Fallback: If backend does not expose a dedicated bulk endpoint, run individual reassignments
-    const results = await Promise.allSettled(
-      data.asset_ids.map(assetId =>
-        this.reassignAsset(assetId, {
-          user_id: data.user_id,
-          assigned_username: data.assigned_username || data.user_id,
-          managed_by: data.managed_by,
-          remarks: data.remarks,
-          assignment_type: 'MANUAL',
-          asset_status: assetStatus,
-        })
-      )
-    );
+    if (!data.select_all_matching && data.asset_ids && data.asset_ids.length > 0) {
+      const results = await Promise.allSettled(
+        data.asset_ids.map(assetId =>
+          this.reassignAsset(assetId, {
+            user_id: data.user_id,
+            assigned_username: data.assigned_username || data.user_id,
+            managed_by: data.managed_by,
+            remarks: remarksTrimmed !== '' ? remarksTrimmed : (null as any),
+            assignment_type: 'MANUAL',
+            asset_status: assetStatus,
+          })
+        )
+      );
 
-    const successful: (string | number)[] = [];
-    const failed: (string | number)[] = [];
-    results.forEach((res, index) => {
-      if (res.status === 'fulfilled') {
-        successful.push(data.asset_ids[index]);
-      } else {
-        failed.push(data.asset_ids[index]);
+      const successful: (string | number)[] = [];
+      const failed: (string | number)[] = [];
+      results.forEach((res, index) => {
+        if (res.status === 'fulfilled') {
+          successful.push(data.asset_ids![index]);
+        } else {
+          failed.push(data.asset_ids![index]);
+        }
+      });
+
+      if (successful.length === 0 && failed.length > 0) {
+        throw new Error(`Failed to assign assets: All ${failed.length} requests failed.`);
       }
-    });
 
-    if (successful.length === 0 && failed.length > 0) {
-      throw new Error(`Failed to assign assets: All ${failed.length} requests failed.`);
+      return {
+        assigned_count: successful.length,
+        successful_asset_ids: successful,
+        failed_asset_ids: failed,
+        total_processed: data.asset_ids.length,
+        failed_count: failed.length,
+        message: `Successfully assigned ${successful.length} of ${data.asset_ids.length} assets to ${data.user_id}.`,
+      };
     }
 
-    return {
-      assigned_count: successful.length,
-      successful_asset_ids: successful,
-      failed_asset_ids: failed,
-      message: `Successfully assigned ${successful.length} of ${data.asset_ids.length} assets to ${data.user_id}.`,
-    };
+    throw new Error('Bulk assignment endpoint is not available on the server.');
   }
 
   // Bulk assign alias

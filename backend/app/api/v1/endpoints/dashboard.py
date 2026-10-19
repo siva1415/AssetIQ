@@ -12,6 +12,9 @@ from app.schemas.dashboard import (
     DepartmentSummaryItem,
     OperationalStatusResponse,
     OperationalStatusItem,
+    HardwareAssetAnalysisResponse,
+    OperatingSystemItem,
+    DeviceTypeItem,
 )
 from app.schemas.eol import EolSummaryResponse
 from app.services.dashboard_service import DashboardService
@@ -248,6 +251,194 @@ def get_operational_status(
         is_unassigned=is_unassigned,
         search=search,
     )
+
+
+@router.get(
+    "/reports-summary",
+    summary="Accurate Database Counts for All Six Reports Page Cards",
+)
+@router.get(
+    "/reports-summary/",
+    include_in_schema=False,
+)
+@router.get(
+    "/reports/summary",
+    include_in_schema=False,
+)
+def get_reports_summary(db: Session = Depends(get_database)):
+    """
+    Returns verified, accurate counts from PostgreSQL for all six Reports Page cards:
+    - master_hardware
+    - warranty_compliance_issues
+    - bigfix_assets
+    - jamf_assets
+    - in_stock_inventory
+    - need_validation_assets
+    """
+    return DashboardService.get_reports_summary(db=db)
+
+
+@router.get(
+    "/hardware-analysis",
+    response_model=HardwareAssetAnalysisResponse,
+    summary="Dashboard Hardware Asset Analysis (Operating Systems and Device Types)",
+)
+@router.get(
+    "/hardware-analysis/",
+    response_model=HardwareAssetAnalysisResponse,
+    include_in_schema=False,
+)
+@router.get(
+    "/hardware-asset-analysis",
+    response_model=HardwareAssetAnalysisResponse,
+    include_in_schema=False,
+)
+@router.get(
+    "/hardware-asset-analysis/",
+    response_model=HardwareAssetAnalysisResponse,
+    include_in_schema=False,
+)
+@router.get(
+    "/hardware",
+    response_model=HardwareAssetAnalysisResponse,
+    include_in_schema=False,
+)
+def get_hardware_asset_analysis(
+    source: Optional[str] = Query(None, description="Optional discovery source filter (BIGFIX or JAMF)"),
+    scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
+    asset_status: Optional[str] = Query(None, description="Filter by status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
+    devicetype: Optional[str] = Query(None, description="Filter by device type (Server or Desktop)"),
+    manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
+    model: Optional[str] = Query(None, description="Filter by hardware model"),
+    assigned_username: Optional[str] = Query(None, description="Filter by assigned login username"),
+    assignment_type: Optional[str] = Query(None, description="Filter by assignment model (AUTO or MANUAL)"),
+    is_unassigned: Optional[bool] = Query(None, description="Filter for unassigned assets (true/false)"),
+    search: Optional[str] = Query(None, description="Text search keyword across asset identifiers"),
+    db: Session = Depends(get_database),
+):
+    """
+    Live, database-backed aggregated data for the Hardware Asset Analysis card:
+    - Assets by Operating System (doughnut chart)
+    - Assets by Device Type (doughnut chart)
+    Calculated via direct PostgreSQL GROUP BY queries excluding NULL, empty, or whitespace-only records.
+    """
+    return DashboardService.get_hardware_asset_analysis(
+        db=db,
+        source=source,
+        scope=scope,
+        asset_status=asset_status,
+        devicetype=devicetype,
+        manufacturer=manufacturer,
+        model=model,
+        assigned_username=assigned_username,
+        assignment_type=assignment_type,
+        is_unassigned=is_unassigned,
+        search=search,
+    )
+
+
+@router.get(
+    "/assets-by-os",
+    response_model=List[OperatingSystemItem],
+    summary="Assets Breakdown by Operating System",
+)
+@router.get(
+    "/assets-by-os/",
+    response_model=List[OperatingSystemItem],
+    include_in_schema=False,
+)
+@router.get(
+    "/assets-by-operating-system",
+    response_model=List[OperatingSystemItem],
+    include_in_schema=False,
+)
+@router.get(
+    "/os-summary",
+    response_model=List[OperatingSystemItem],
+    include_in_schema=False,
+)
+def get_assets_by_operating_system(
+    source: Optional[str] = Query(None, description="Optional discovery source filter (BIGFIX or JAMF)"),
+    scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
+    asset_status: Optional[str] = Query(None, description="Filter by status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
+    devicetype: Optional[str] = Query(None, description="Filter by device type (Server or Desktop)"),
+    manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
+    model: Optional[str] = Query(None, description="Filter by hardware model"),
+    assigned_username: Optional[str] = Query(None, description="Filter by assigned login username"),
+    assignment_type: Optional[str] = Query(None, description="Filter by assignment model (AUTO or MANUAL)"),
+    is_unassigned: Optional[bool] = Query(None, description="Filter for unassigned assets (true/false)"),
+    search: Optional[str] = Query(None, description="Text search keyword across asset identifiers"),
+    db: Session = Depends(get_database),
+):
+    """
+    Direct array endpoint for the Assets by Operating System doughnut chart.
+    """
+    analysis = DashboardService.get_hardware_asset_analysis(
+        db=db,
+        source=source,
+        scope=scope,
+        asset_status=asset_status,
+        devicetype=devicetype,
+        manufacturer=manufacturer,
+        model=model,
+        assigned_username=assigned_username,
+        assignment_type=assignment_type,
+        is_unassigned=is_unassigned,
+        search=search,
+    )
+    return analysis.operating_systems
+
+
+@router.get(
+    "/assets-by-device-type",
+    response_model=List[DeviceTypeItem],
+    summary="Assets Breakdown by Device Type",
+)
+@router.get(
+    "/assets-by-device-type/",
+    response_model=List[DeviceTypeItem],
+    include_in_schema=False,
+)
+@router.get(
+    "/assets-by-devicetype",
+    response_model=List[DeviceTypeItem],
+    include_in_schema=False,
+)
+@router.get(
+    "/device-type-summary",
+    response_model=List[DeviceTypeItem],
+    include_in_schema=False,
+)
+def get_assets_by_device_type(
+    source: Optional[str] = Query(None, description="Optional discovery source filter (BIGFIX or JAMF)"),
+    scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
+    asset_status: Optional[str] = Query(None, description="Filter by status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
+    devicetype: Optional[str] = Query(None, description="Filter by device type (Server or Desktop)"),
+    manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
+    model: Optional[str] = Query(None, description="Filter by hardware model"),
+    assigned_username: Optional[str] = Query(None, description="Filter by assigned login username"),
+    assignment_type: Optional[str] = Query(None, description="Filter by assignment model (AUTO or MANUAL)"),
+    is_unassigned: Optional[bool] = Query(None, description="Filter for unassigned assets (true/false)"),
+    search: Optional[str] = Query(None, description="Text search keyword across asset identifiers"),
+    db: Session = Depends(get_database),
+):
+    """
+    Direct array endpoint for the Assets by Device Type doughnut chart.
+    """
+    analysis = DashboardService.get_hardware_asset_analysis(
+        db=db,
+        source=source,
+        scope=scope,
+        asset_status=asset_status,
+        devicetype=devicetype,
+        manufacturer=manufacturer,
+        model=model,
+        assigned_username=assigned_username,
+        assignment_type=assignment_type,
+        is_unassigned=is_unassigned,
+        search=search,
+    )
+    return analysis.device_types
 
 
 @router.get(

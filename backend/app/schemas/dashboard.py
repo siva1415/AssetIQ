@@ -64,6 +64,29 @@ class DashboardSummaryResponse(BaseModel):
     employeeCount: int = Field(0, ge=0)
     totalEmployees: int = Field(0, ge=0)
 
+    # Six Reports Page Card Counts
+    master_hardware: int = Field(0, ge=0)
+    masterHardware: int = Field(0, ge=0)
+    master_hardware_count: int = Field(0, ge=0)
+    masterHardwareCount: int = Field(0, ge=0)
+
+    warranty_compliance_issues: int = Field(0, ge=0)
+    warrantyComplianceIssues: int = Field(0, ge=0)
+    warranty_compliance: int = Field(0, ge=0)
+    warrantyCompliance: int = Field(0, ge=0)
+    warranty_compliance_count: int = Field(0, ge=0)
+    warrantyComplianceCount: int = Field(0, ge=0)
+    expired_count: int = Field(0, ge=0)
+    expired_assets: int = Field(0, ge=0)
+
+    in_stock_inventory: int = Field(0, ge=0)
+    inStockInventory: int = Field(0, ge=0)
+    in_stock_inventory_count: int = Field(0, ge=0)
+
+    reports_summary: Optional[Dict[str, int]] = None
+    reportsSummary: Optional[Dict[str, int]] = None
+    report_counts: Optional[Dict[str, int]] = None
+
     model_config = ConfigDict(populate_by_name=True)
 
     @model_validator(mode="before")
@@ -179,6 +202,55 @@ class DashboardSummaryResponse(BaseModel):
             data["employee_count"] = emp
             data["employeeCount"] = emp
             data["totalEmployees"] = emp
+
+            # Reports Page 6 Cards
+            tot_assets = data.get("total_assets", 0)
+            data["master_hardware"] = tot_assets
+            data["masterHardware"] = tot_assets
+            data["master_hardware_count"] = tot_assets
+            data["masterHardwareCount"] = tot_assets
+
+            warr = data.get(
+                "warranty_compliance_issues",
+                data.get(
+                    "warrantyComplianceIssues",
+                    data.get(
+                        "warranty_compliance_count",
+                        data.get(
+                            "warrantyComplianceCount",
+                            data.get("warranty_compliance", data.get("warrantyCompliance", 0)),
+                        ),
+                    ),
+                ),
+            ) or 0
+            data["warranty_compliance_issues"] = warr
+            data["warrantyComplianceIssues"] = warr
+            data["warranty_compliance"] = warr
+            data["warrantyCompliance"] = warr
+            data["warranty_compliance_count"] = warr
+            data["warrantyComplianceCount"] = warr
+
+            ins = data.get("in_stock_assets", data.get("inStock", 0)) or 0
+            data["in_stock_inventory"] = ins
+            data["inStockInventory"] = ins
+            data["in_stock_inventory_count"] = ins
+
+            nv = data.get("need_validation_assets", data.get("needValidation", 0)) or 0
+            data["need_validation_assets"] = nv
+            data["needValidationAssets"] = nv
+            data["need_validation_count"] = nv
+
+            reports_dict = {
+                "master_hardware": tot_assets,
+                "warranty_compliance_issues": warr,
+                "bigfix_assets": bf,
+                "jamf_assets": jf,
+                "in_stock_inventory": ins,
+                "need_validation_assets": nv,
+            }
+            data["reports_summary"] = reports_dict
+            data["reportsSummary"] = reports_dict
+            data["report_counts"] = reports_dict
 
         return data
 
@@ -557,3 +629,139 @@ class OperationalStatusResponse(BaseModel):
                 {"status": "InStock", "count": ins},
             ]
         return data
+
+
+class OperatingSystemItem(BaseModel):
+    name: str = Field(..., description="Operating system name")
+    count: int = Field(0, ge=0, description="Number of assets running this OS")
+    percentage: Optional[float] = Field(None, description="Percentage of assets with valid OS")
+
+    # Aliases
+    label: Optional[str] = None
+    os_name: Optional[str] = None
+    operating_system: Optional[str] = None
+    share: Optional[float] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            name = data.get("name") or data.get("os_name") or data.get("operating_system") or data.get("label") or ""
+            data["name"] = name
+            data["label"] = name
+            data["os_name"] = name
+            data["operating_system"] = name
+            if "percentage" in data and data["percentage"] is not None and "share" not in data:
+                data["share"] = data["percentage"]
+            elif "share" in data and data["share"] is not None and "percentage" not in data:
+                data["percentage"] = data["share"]
+        return data
+
+
+class DeviceTypeItem(BaseModel):
+    name: str = Field(..., description="Device type (e.g. Desktop, Server)")
+    count: int = Field(0, ge=0, description="Number of assets of this device type")
+    percentage: Optional[float] = Field(None, description="Percentage of assets with valid device type")
+
+    # Aliases
+    label: Optional[str] = None
+    devicetype: Optional[str] = None
+    device_type: Optional[str] = None
+    share: Optional[float] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            name = data.get("name") or data.get("devicetype") or data.get("device_type") or data.get("label") or ""
+            data["name"] = name
+            data["label"] = name
+            data["devicetype"] = name
+            data["device_type"] = name
+            if "percentage" in data and data["percentage"] is not None and "share" not in data:
+                data["share"] = data["percentage"]
+            elif "share" in data and data["share"] is not None and "percentage" not in data:
+                data["percentage"] = data["share"]
+        return data
+
+
+class HardwareAssetAnalysisResponse(BaseModel):
+    """
+    Live aggregated hardware asset analysis for dashboard doughnut charts:
+    1. Assets by Operating System
+    2. Assets by Device Type
+    """
+    operating_systems: List[OperatingSystemItem] = Field(default_factory=list, description="Assets grouped by Operating System")
+    device_types: List[DeviceTypeItem] = Field(default_factory=list, description="Assets grouped by Device Type")
+
+    total_assets: int = Field(0, ge=0, description="Total assets in evaluation scope")
+    total_os_assets: int = Field(0, ge=0, description="Total assets with a non-empty OS")
+    total_device_assets: int = Field(0, ge=0, description="Total assets with a non-empty device type")
+
+    # CamelCase aliases
+    operatingSystems: Optional[List[OperatingSystemItem]] = None
+    deviceTypes: Optional[List[DeviceTypeItem]] = None
+    by_operating_system: Optional[List[OperatingSystemItem]] = None
+    byOperatingSystem: Optional[List[OperatingSystemItem]] = None
+    by_device_type: Optional[List[DeviceTypeItem]] = None
+    byDeviceType: Optional[List[DeviceTypeItem]] = None
+    totalAssets: Optional[int] = None
+    totalOsAssets: Optional[int] = None
+    totalDeviceAssets: Optional[int] = None
+
+    # Map/Dict representations for charts that accept label -> count dictionaries
+    by_os: Optional[Dict[str, int]] = None
+    byOs: Optional[Dict[str, int]] = None
+    by_device: Optional[Dict[str, int]] = None
+    byDevice: Optional[Dict[str, int]] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            os_items = data.get("operating_systems", data.get("operatingSystems", data.get("by_operating_system", data.get("byOperatingSystem", [])))) or []
+            data["operating_systems"] = os_items
+            data["operatingSystems"] = os_items
+            data["by_operating_system"] = os_items
+            data["byOperatingSystem"] = os_items
+
+            dev_items = data.get("device_types", data.get("deviceTypes", data.get("by_device_type", data.get("byDeviceType", [])))) or []
+            data["device_types"] = dev_items
+            data["deviceTypes"] = dev_items
+            data["by_device_type"] = dev_items
+            data["byDeviceType"] = dev_items
+
+            tot = data.get("total_assets", data.get("totalAssets", 0)) or 0
+            data["total_assets"] = tot
+            data["totalAssets"] = tot
+
+            tot_os = data.get("total_os_assets", data.get("totalOsAssets", sum(it.get("count", 0) if isinstance(it, dict) else getattr(it, "count", 0) for it in os_items))) or 0
+            data["total_os_assets"] = tot_os
+            data["totalOsAssets"] = tot_os
+
+            tot_dev = data.get("total_device_assets", data.get("totalDeviceAssets", sum(it.get("count", 0) if isinstance(it, dict) else getattr(it, "count", 0) for it in dev_items))) or 0
+            data["total_device_assets"] = tot_dev
+            data["totalDeviceAssets"] = tot_dev
+
+            os_map = {
+                (it.get("name") if isinstance(it, dict) else getattr(it, "name", "")): (it.get("count") if isinstance(it, dict) else getattr(it, "count", 0))
+                for it in os_items
+            }
+            data["by_os"] = os_map
+            data["byOs"] = os_map
+
+            dev_map = {
+                (it.get("name") if isinstance(it, dict) else getattr(it, "name", "")): (it.get("count") if isinstance(it, dict) else getattr(it, "count", 0))
+                for it in dev_items
+            }
+            data["by_device"] = dev_map
+            data["byDevice"] = dev_map
+
+        return data
+

@@ -292,10 +292,24 @@ class BulkAssetAssignmentResponse(BaseModel):
     failure_count: int
     results: list[BulkAssetAssignmentItemResult]
 
+    # Additional metadata fields for select-all & outcome display
+    matched_count: Optional[int] = None
+    assigned_count: Optional[int] = None
+    target_username: Optional[str] = None
+    managed_by: Optional[str] = None
+    assignment_type: Optional[str] = None
+    asset_status: Optional[str] = None
+
     # camelCase aliases
     requestedCount: Optional[int] = None
     successCount: Optional[int] = None
     failureCount: Optional[int] = None
+    matchedCount: Optional[int] = None
+    assignedCount: Optional[int] = None
+    targetUsername: Optional[str] = None
+    managedBy: Optional[str] = None
+    assignmentType: Optional[str] = None
+    assetStatus: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -314,17 +328,68 @@ class BulkAssetAssignmentResponse(BaseModel):
             fail_c = data.get("failure_count", data.get("failureCount", 0))
             data["failure_count"] = fail_c
             data["failureCount"] = fail_c
+
+            match_c = data.get("matched_count", data.get("matchedCount", req_c))
+            data["matched_count"] = match_c
+            data["matchedCount"] = match_c
+
+            ass_c = data.get("assigned_count", data.get("assignedCount", succ_c))
+            data["assigned_count"] = ass_c
+            data["assignedCount"] = ass_c
+
+            t_user = data.get("target_username", data.get("targetUsername"))
+            if t_user is not None:
+                data["target_username"] = t_user
+                data["targetUsername"] = t_user
+
+            mby = data.get("managed_by", data.get("managedBy"))
+            if mby is not None:
+                data["managed_by"] = mby
+                data["managedBy"] = mby
+
+            atype = data.get("assignment_type", data.get("assignmentType"))
+            if atype is not None:
+                data["assignment_type"] = atype
+                data["assignmentType"] = atype
+
+            astat = data.get("asset_status", data.get("assetStatus"))
+            if astat is not None:
+                data["asset_status"] = astat
+                data["assetStatus"] = astat
         return data
 
 
 class BulkAssetAssignmentRequest(BaseModel):
     """
     Request payload for bulk assigning multiple assets to one active Workday employee.
+    Supports either individual asset IDs or select-all across all pages with search & filters.
     """
-    asset_ids: list[int]
+    asset_ids: Optional[list[int]] = None
     assigned_username: str
     managed_by: Optional[str] = "INDIVIDUAL"
     remarks: Optional[str] = None
+
+    # Select-all matching assets mode
+    select_all: Optional[bool] = False
+
+    # Filters dictionary (if sent as nested object from frontend)
+    filters: Optional[dict[str, Any]] = None
+
+    # Direct search & filter fields (if sent at top level)
+    search: Optional[str] = None
+    source: Optional[str] = None
+    asset_status: Optional[str] = None
+    devicetype: Optional[str] = None
+    device_type: Optional[str] = None
+    deviceType: Optional[str] = None
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    filter_assigned_username: Optional[str] = None
+    assignment_type: Optional[str] = None
+    is_unassigned: Optional[bool] = None
+    eol_status: Optional[str] = None
+    scope: Optional[str] = None
+    report: Optional[str] = None
 
     # Aliases
     assetIds: Optional[list[int]] = None
@@ -339,16 +404,51 @@ class BulkAssetAssignmentRequest(BaseModel):
     notes: Optional[str] = None
     comment: Optional[str] = None
 
+    # Select-all aliases
+    selectAll: Optional[bool] = None
+    select_all_matching: Optional[bool] = None
+    selectAllMatching: Optional[bool] = None
+    all_matching: Optional[bool] = None
+    allMatching: Optional[bool] = None
+    match_all: Optional[bool] = None
+    matchAll: Optional[bool] = None
+
+    # Filter aliases
+    status: Optional[str] = None
+    assetStatus: Optional[str] = None
+    assignmentType: Optional[str] = None
+    isUnassigned: Optional[bool] = None
+    eolStatus: Optional[str] = None
+    report_name: Optional[str] = None
+    reportName: Optional[str] = None
+    card: Optional[str] = None
+
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     @model_validator(mode="before")
     @classmethod
     def sync_bulk_request_aliases(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            # 1. Select-all aliases
+            sel_all = (
+                data.get("select_all")
+                or data.get("selectAll")
+                or data.get("select_all_matching")
+                or data.get("selectAllMatching")
+                or data.get("all_matching")
+                or data.get("allMatching")
+                or data.get("match_all")
+                or data.get("matchAll")
+            )
+            if sel_all is not None:
+                data["select_all"] = bool(sel_all)
+
+            # 2. Asset IDs
             aids = data.get("asset_ids", data.get("assetIds"))
             if aids is not None:
                 data["asset_ids"] = aids
 
+            # 3. Assigned Username
             uname = (
                 data.get("assigned_username")
                 or data.get("assignedUsername")
@@ -359,6 +459,7 @@ class BulkAssetAssignmentRequest(BaseModel):
             if uname is not None:
                 data["assigned_username"] = uname
 
+            # 4. Managed By
             mby = (
                 data.get("managed_by")
                 if "managed_by" in data
@@ -375,6 +476,7 @@ class BulkAssetAssignmentRequest(BaseModel):
             if mby is not None:
                 data["managed_by"] = mby
 
+            # 5. Remarks
             rem = (
                 data.get("remarks")
                 if "remarks" in data
@@ -386,6 +488,29 @@ class BulkAssetAssignmentRequest(BaseModel):
             )
             if rem is not None:
                 data["remarks"] = rem
+
+            # 6. Extract nested filters if passed as a dictionary
+            raw_filters = data.get("filters")
+            if isinstance(raw_filters, dict):
+                for k, v in raw_filters.items():
+                    if k not in data or data[k] is None:
+                        data[k] = v
+                    if k in ("assigned_username", "assignedUsername", "user", "filter_user"):
+                        data["filter_assigned_username"] = v
+
+            # 7. Normalize filter aliases
+            if not data.get("devicetype") and (data.get("device_type") or data.get("deviceType")):
+                data["devicetype"] = data.get("device_type") or data.get("deviceType")
+            if not data.get("asset_status") and (data.get("status") or data.get("assetStatus")):
+                data["asset_status"] = data.get("status") or data.get("assetStatus")
+            if not data.get("assignment_type") and data.get("assignmentType"):
+                data["assignment_type"] = data.get("assignmentType")
+            if data.get("is_unassigned") is None and data.get("isUnassigned") is not None:
+                data["is_unassigned"] = data.get("isUnassigned")
+            if not data.get("eol_status") and data.get("eolStatus"):
+                data["eol_status"] = data.get("eolStatus")
+            if not data.get("report") and (data.get("report_name") or data.get("reportName") or data.get("card")):
+                data["report"] = data.get("report_name") or data.get("reportName") or data.get("card")
         return data
 
 

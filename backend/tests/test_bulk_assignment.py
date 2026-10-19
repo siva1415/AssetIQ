@@ -52,10 +52,11 @@ def test_bulk_assign_success(client: TestClient):
     assert get_4["remarks"] == "Bulk assigned for incident response team"
 
 
-def test_bulk_assign_preserves_existing_remarks_when_omitted(client: TestClient):
+def test_bulk_assign_clears_remarks_when_blank_or_omitted(client: TestClient):
     """
-    Verify that existing remarks on assets are preserved when remarks is omitted
-    in the bulk assignment request.
+    Verify mandatory remarks behavior:
+    When remarks is omitted, empty string, or whitespace, update assets.remarks to SQL NULL.
+    Do not retain previous remarks when the bulk assignment request has blank remarks.
     """
     # Asset 1 initially has remarks="Primary developer laptop"
     # Asset 2 initially has remarks="Needs security check"
@@ -63,20 +64,31 @@ def test_bulk_assign_preserves_existing_remarks_when_omitted(client: TestClient)
         "asset_ids": [1, 2],
         "assigned_username": "sarahconnor",
         "managed_by": "INDIVIDUAL",
-        # remarks omitted
+        # remarks omitted -> should become SQL NULL
     }
     response = client.post("/api/assets/bulk-assign", json=payload)
     assert response.status_code == 200, response.text
     assert response.json()["success_count"] == 2
 
-    # Verify remarks were preserved
+    # Verify remarks were replaced by None (SQL NULL)
     asset_1 = client.get("/api/assets/1").json()
     assert asset_1["assigned_username"] == "sarahconnor"
-    assert asset_1["remarks"] == "Primary developer laptop"
+    assert asset_1["remarks"] is None
 
     asset_2 = client.get("/api/assets/2").json()
     assert asset_2["assigned_username"] == "sarahconnor"
-    assert asset_2["remarks"] == "Needs security check"
+    assert asset_2["remarks"] is None
+
+    # Now verify explicit blank / whitespace string also persists as SQL NULL
+    payload_blank = {
+        "asset_ids": [1],
+        "assigned_username": "johndoe",
+        "managed_by": "INDIVIDUAL",
+        "remarks": "    ",
+    }
+    res_blank = client.post("/api/assets/bulk-assign", json=payload_blank)
+    assert res_blank.status_code == 200
+    assert client.get("/api/assets/1").json()["remarks"] is None
 
 
 def test_bulk_assign_partial_failure_with_savepoints(client: TestClient):

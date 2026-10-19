@@ -31,7 +31,9 @@ import {
   Trash2,
   Plus,
   RefreshCw,
-  Info
+  Info,
+  Calendar,
+  Edit3
 } from 'lucide-react';
 
 // --- Sample Database Fixtures Mirroring Postgres Schema ---
@@ -270,6 +272,17 @@ export default function App() {
   const [selectedAssetDetail, setSelectedAssetDetail] = useState<any | null>(null);
   const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
 
+  // Inline EOL Editor State
+  const [editingEolAsset, setEditingEolAsset] = useState<{
+    manufacturer: string;
+    model: string;
+    eol_date: string;
+    reference_source?: string;
+  } | null>(null);
+  const [inlineEolDate, setInlineEolDate] = useState('');
+  const [inlineEolSource, setInlineEolSource] = useState('');
+  const [eolToast, setEolToast] = useState<string | null>(null);
+
   const today = useMemo(() => new Date("2026-10-11"), []);
   const WARNING_DAYS = 90;
 
@@ -493,6 +506,68 @@ export default function App() {
 
   const handleDeleteEolReference = (id: number) => {
     setEolReferences(eolReferences.filter(r => r.eol_id !== id));
+  };
+
+  const handleSaveInlineEol = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!editingEolAsset) return;
+    const targetMfr = editingEolAsset.manufacturer.trim();
+    const targetModel = editingEolAsset.model.trim();
+    const targetDate = inlineEolDate.trim() || null;
+    const targetSource = inlineEolSource.trim() || undefined;
+
+    // Optional call to live backend API (swallow errors if preview environment has no backend running)
+    try {
+      await fetch('/api/eol-reference', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': 'johndoe',
+        },
+        body: JSON.stringify({
+          manufacturer: targetMfr,
+          model: targetModel,
+          eol_date: targetDate,
+          ...(targetSource ? { reference_source: targetSource } : {}),
+        }),
+      });
+    } catch {
+      // Offline preview fallback
+    }
+
+    // Client state create-or-update logic
+    setEolReferences((prev) => {
+      const idx = prev.findIndex(
+        (r) =>
+          r.manufacturer.trim().toLowerCase() === targetMfr.toLowerCase() &&
+          r.model.trim().toLowerCase() === targetModel.toLowerCase()
+      );
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = {
+          ...copy[idx],
+          eol_date: targetDate,
+          // Preserves reference_source if not overridden
+          reference_source: targetSource || copy[idx].reference_source,
+        };
+        return copy;
+      } else {
+        return [
+          ...prev,
+          {
+            eol_id: Date.now(),
+            manufacturer: targetMfr,
+            model: targetModel,
+            eol_date: targetDate,
+            reference_source: targetSource || 'Manual Administrator Entry',
+          },
+        ];
+      }
+    });
+
+    setEolToast(`Updated EOL date for ${targetMfr} ${targetModel}`);
+    setTimeout(() => setEolToast(null), 3500);
+    setEditingEolAsset(null);
   };
 
   const copyToClipboard = (text: string, id: string) => {

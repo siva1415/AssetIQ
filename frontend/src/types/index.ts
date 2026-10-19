@@ -293,6 +293,24 @@ export interface DepartmentDistributionItem {
   percentage: number;
 }
 
+export interface DashboardHardwareAnalysisItem {
+  name: string;
+  count: number;
+  percentage?: number;
+}
+
+export interface DashboardHardwareAnalysis {
+  by_operating_system: DashboardHardwareAnalysisItem[];
+  by_device_type: DashboardHardwareAnalysisItem[];
+}
+
+export interface HardwareAnalysisResponse {
+  byOs?: Record<string, number | null | undefined>;
+  byDevice?: Record<string, number | null | undefined>;
+  by_os?: Record<string, number | null | undefined>;
+  by_device?: Record<string, number | null | undefined>;
+}
+
 export interface DashboardRedesignOverview {
   kpis: { total_assets: number; active_assets: number; review: number; in_stock: number; employee_count: number };
   assets_by_source: { source: string; count: number }[];
@@ -304,6 +322,9 @@ export interface DashboardRedesignOverview {
     auto: number; manual: number; unassigned: number; eol_active: number; eol_soon: number;
     eol_expired: number; eol_unknown: number; active_share: number;
   }[];
+  hardware_analysis?: DashboardHardwareAnalysis;
+  by_operating_system?: DashboardHardwareAnalysisItem[];
+  by_device_type?: DashboardHardwareAnalysisItem[];
 }
 
 export interface FilterOptions {
@@ -470,20 +491,47 @@ export interface ReassignAssetResponse {
   message: string;
 }
 
+export interface BulkAssignAssetFilters {
+  search?: string;
+  source?: string;
+  devicetype?: string;
+  device_type?: string;
+  asset_status?: string;
+  manufacturer?: string;
+  model?: string;
+  assignment_type?: string;
+  eol_status?: string;
+}
+
 export interface BulkAssignAssetsRequest {
-  asset_ids: (string | number)[];
+  asset_ids?: (string | number)[];
   user_id: string;
   managed_by: 'INDIVIDUAL' | 'GROUP' | string;
-  remarks?: string;
+  remarks?: string | null;
   assigned_username?: string;
   assignment_type?: 'MANUAL' | 'AUTOMATIC' | string;
   asset_status?: StandardAssetStatus | string;
+  select_all_matching?: boolean;
+  all_matching?: boolean;
+  filters?: BulkAssignAssetFilters;
+  search?: string;
+  source?: string;
+  devicetype?: string;
+  device_type?: string;
+  asset_status_filter?: string;
+  manufacturer?: string;
+  model?: string;
+  assignment_type_filter?: string;
+  eol_status?: string;
 }
 
 export interface BulkAssignAssetsResponse {
   assigned_count: number;
   successful_asset_ids: (string | number)[];
   failed_asset_ids: (string | number)[];
+  total_processed?: number;
+  failed_count?: number;
+  failures?: { asset_id: string | number; reason?: string }[];
   message: string;
 }
 
