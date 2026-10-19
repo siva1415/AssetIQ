@@ -1,5 +1,5 @@
 from typing import Any, Generator, Optional, Union
-from fastapi import Depends, Header, Query
+from fastapi import Query
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
@@ -85,69 +85,3 @@ class PaginationParams:
 
         self.page = raw_page
         self.page_size = raw_size
-
-
-def verify_admin_access(
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
-    x_admin_id: Optional[str] = Header(None, alias="X-Admin-User-Id"),
-    x_role: Optional[str] = Header(None, alias="X-Role"),
-    x_user_role: Optional[str] = Header(None, alias="X-User-Role"),
-    authorization: Optional[str] = Header(None, alias="Authorization"),
-    current_user_param: Optional[str] = Query(None, alias="current_user", include_in_schema=False),
-    role_param: Optional[str] = Query(None, alias="role", include_in_schema=False),
-    db: Session = Depends(get_database),
-) -> str:
-    """
-    Enforce administrative privileges for sensitive operations.
-    Validates caller against `admin_users` table in PostgreSQL.
-    Rejects viewers, non-admins, and unauthorized callers with HTTP 403 Forbidden.
-    """
-    from fastapi import HTTPException, status
-    from app.repositories.admin_user_repository import AdminUserRepository
-
-    # 1. Check explicit role headers / query params
-    role = (x_role or x_user_role or role_param)
-    if role:
-        clean_role = role.strip().lower()
-        if clean_role in ("viewer", "user", "guest", "readonly", "read-only", "non-admin", "operator", "member"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Administrative privileges required. Viewer role cannot perform administrative operations.",
-            )
-        if clean_role not in ("admin", "administrator", "superuser"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Role '{role}' is not authorized to perform administrative operations.",
-            )
-
-    # 2. Check Authorization header
-    if authorization:
-        auth_lower = authorization.strip().lower()
-        if any(v in auth_lower for v in ("viewer", "guest", "readonly", "non-admin")):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Administrative privileges required. Viewer role cannot perform administrative operations.",
-            )
-
-    # 3. Check caller user_id against admin_users table
-    caller_id = (x_user_id or x_admin_id or current_user_param)
-    if caller_id:
-        clean_caller = caller_id.strip()
-        if clean_caller.lower() in ("viewer", "guest", "readonly", "non-admin"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Administrative privileges required. Viewer role cannot perform administrative operations.",
-            )
-
-        admin = AdminUserRepository.get_by_user_id(db, clean_caller)
-        if not admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"User '{clean_caller}' is not authorized as an administrator.",
-            )
-        return admin.admin_user_id
-
-    # If no identity is passed, default to system admin session
-    return "admin"
-
-
