@@ -162,17 +162,15 @@ class AssetRepository:
                     and_(Asset.assigned_username.is_not(None), func.lower(Asset.assigned_username).like(search_pattern)),
                     and_(Asset.model.is_not(None), func.lower(Asset.model).like(search_pattern)),
                     and_(Asset.manufacturer.is_not(None), func.lower(Asset.manufacturer).like(search_pattern)),
+                    and_(WorkdayEmployee.full_name.is_not(None), func.lower(WorkdayEmployee.full_name).like(search_pattern)),
                 )
             )
 
         return stmt
 
     @classmethod
-    def list_assets_joined(
+    def _build_joined_asset_query(
         cls,
-        db: Session,
-        skip: int = 0,
-        limit: int = 25,
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
@@ -185,11 +183,10 @@ class AssetRepository:
         eol_status: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: Optional[str] = "asc",
-    ) -> Tuple[List[Tuple[Asset, Optional[WorkdayEmployee], Optional[date], Optional[str]]], int]:
+    ) -> Select:
         """
-        Query assets with pagination and dynamic parameterized filtering,
-        joining workday_employees and device_eol_reference in a single query.
-        Returns a tuple of (items, total_count).
+        Builds the canonical outer-joined query linking Asset with WorkdayEmployee and DeviceEolReference,
+        applying all filter criteria and deterministic ordering.
         """
         eol_sub = cls._get_eol_subquery()
 
@@ -224,10 +221,6 @@ class AssetRepository:
             is_unassigned=is_unassigned,
             eol_status=eol_status,
         )
-
-        # Count total matching rows from subquery
-        count_stmt = select(func.count()).select_from(stmt.subquery())
-        total_count = db.execute(count_stmt).scalar() or 0
 
         # Resolve sort ordering
         order_col = Asset.asset_id
@@ -270,11 +263,93 @@ class AssetRepository:
             primary_order = order_col.asc().nulls_last() if hasattr(order_col, "nulls_last") else order_col.asc()
             secondary_order = Asset.asset_id.asc()
 
+        return stmt.order_by(primary_order, secondary_order)
+
+    @classmethod
+    def list_assets_joined(
+        cls,
+        db: Session,
+        skip: int = 0,
+        limit: int = 25,
+        source: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        devicetype: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        search: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        eol_status: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = "asc",
+    ) -> Tuple[List[Tuple[Asset, Optional[WorkdayEmployee], Optional[date], Optional[str]]], int]:
+        """
+        Query assets with pagination and dynamic parameterized filtering,
+        joining workday_employees and device_eol_reference in a single query.
+        Returns a tuple of (items, total_count).
+        """
+        stmt = cls._build_joined_asset_query(
+            source=source,
+            asset_status=asset_status,
+            devicetype=devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=assignment_type,
+            search=search,
+            is_unassigned=is_unassigned,
+            eol_status=eol_status,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+
+        # Count total matching rows from subquery
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total_count = db.execute(count_stmt).scalar() or 0
+
         # Execute paginated query with deterministic secondary sort
-        paginated_stmt = stmt.order_by(primary_order, secondary_order).offset(skip).limit(limit)
+        paginated_stmt = stmt.offset(skip).limit(limit)
         results = db.execute(paginated_stmt).all()
 
         return [(row[0], row[1], row[2], row[3]) for row in results], total_count
+
+    @classmethod
+    def iter_assets_joined(
+        cls,
+        db: Session,
+        source: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        devicetype: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        search: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        eol_status: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = "asc",
+    ):
+        """
+        Streaming execution of joined assets query without pagination limits.
+        Uses yield_per for memory efficiency with large datasets.
+        """
+        stmt = cls._build_joined_asset_query(
+            source=source,
+            asset_status=asset_status,
+            devicetype=devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=assignment_type,
+            search=search,
+            is_unassigned=is_unassigned,
+            eol_status=eol_status,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        return db.execute(stmt).yield_per(1000)
 
     @staticmethod
     def get_by_id(db: Session, asset_id: int) -> Optional[Asset]:

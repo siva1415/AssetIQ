@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -16,8 +17,9 @@ import {
   ShieldCheck,
   ChevronDown,
   ChevronRight,
-  User,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -125,8 +127,14 @@ const getInitials = (name?: string): string => {
   return clean.slice(0, Math.min(2, clean.length)).toUpperCase();
 };
 
+interface FlyoutState {
+  group: Extract<MenuItem, { type: 'group' }>;
+  top: number;
+  left: number;
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
-  const { currentUser, logout } = useApp();
+  const { currentUser, logout, sidebarCollapsed, toggleSidebarCollapse } = useApp();
   const location = useLocation();
   const navigate = useNavigate();
   const currentPath = location.pathname;
@@ -137,13 +145,59 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
     navigate('/login', { replace: true });
   };
 
-  // Track expanded state for expandable groups
+  // Track expanded state for expandable groups in expanded mode
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     'hardware-inventory': true,
     'ownership-identity': true,
   });
 
-  // Automatically expand parent group when current route belongs to it
+  // Flyout popover state for collapsed mode
+  const [activeFlyout, setActiveFlyout] = useState<FlyoutState | null>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
+  const groupButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  // Close flyout on path change
+  useEffect(() => {
+    setActiveFlyout(null);
+  }, [currentPath]);
+
+  // Close flyout when sidebar expands
+  useEffect(() => {
+    if (!sidebarCollapsed) {
+      setActiveFlyout(null);
+    }
+  }, [sidebarCollapsed]);
+
+  // Handle outside click and Escape key to close flyout
+  useEffect(() => {
+    if (!activeFlyout) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveFlyout(null);
+      }
+    };
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        flyoutRef.current &&
+        !flyoutRef.current.contains(target) &&
+        !Object.values(groupButtonRefs.current).some(btn => btn?.contains(target))
+      ) {
+        setActiveFlyout(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [activeFlyout]);
+
+  // Automatically expand parent group in expanded mode when current route belongs to it
   useEffect(() => {
     NAV_ITEMS.forEach(item => {
       if (item.type === 'group') {
@@ -191,6 +245,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
     return group.children.some(child => isLinkActive(child.path));
   };
 
+  // Handle clicking parent group in collapsed mode
+  const handleGroupIconClick = (group: Extract<MenuItem, { type: 'group' }>, e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (activeFlyout?.group.id === group.id) {
+      setActiveFlyout(null);
+      return;
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const approxHeight = 44 + group.children.length * 40;
+    const maxTop = window.innerHeight - approxHeight - 16;
+    const clampedTop = Math.max(16, Math.min(rect.top, maxTop));
+    const left = rect.right + 10;
+
+    setActiveFlyout({
+      group,
+      top: clampedTop,
+      left,
+    });
+  };
+
   return (
     <>
       {/* Mobile Backdrop */}
@@ -204,34 +279,99 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
 
       {/* Main Dark Navy Sidebar Container */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-50 flex flex-col w-64 bg-[#0B132B] text-slate-200 border-r border-[#1C2541] transition-transform duration-200 ease-in-out lg:translate-x-0 ${
+        className={`fixed top-0 bottom-0 left-0 z-50 flex flex-col bg-[#0B132B] text-slate-200 border-r border-[#1C2541] transition-all duration-300 ease-in-out lg:translate-x-0 overflow-x-hidden ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        } ${sidebarCollapsed ? 'lg:w-[68px] w-64' : 'w-64'}`}
       >
         {/* AssetIQ Logo & Brand Header */}
-        <div className="flex flex-col px-5 py-5 border-b border-[#1C2541] bg-[#080E21] shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-sm shrink-0">
+        {sidebarCollapsed ? (
+          /* Collapsed Header */
+          <div className="flex flex-col items-center justify-center py-3.5 px-2 border-b border-[#1C2541] bg-[#080E21] shrink-0 gap-2">
+            <div
+              className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-sm shrink-0"
+              title="AssetIQ - Intelligence & Governance"
+            >
               <ShieldCheck className="w-5 h-5 text-white" />
             </div>
-            <div className="flex flex-col min-w-0">
-              <span className="text-lg font-bold tracking-tight text-white leading-none">
-                AssetIQ
-              </span>
-              <span className="text-[11px] font-normal text-slate-400 mt-1 truncate">
-                Intelligence &amp; Governance
-              </span>
-            </div>
+            <button
+              type="button"
+              onClick={toggleSidebarCollapse}
+              className="hidden lg:flex p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1C2541] transition-colors cursor-pointer"
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+            >
+              <PanelLeftOpen className="w-4 h-4 text-blue-400" />
+            </button>
           </div>
-        </div>
+        ) : (
+          /* Expanded Header */
+          <div className="flex items-center justify-between px-4 py-4 border-b border-[#1C2541] bg-[#080E21] shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-sm shrink-0">
+                <ShieldCheck className="w-5 h-5 text-white" />
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-base font-bold tracking-tight text-white leading-none">
+                  AssetIQ
+                </span>
+                <span className="text-[11px] font-normal text-slate-400 mt-1 truncate">
+                  Intelligence &amp; Governance
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={toggleSidebarCollapse}
+              className="hidden lg:flex p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1C2541] transition-colors cursor-pointer shrink-0"
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+            >
+              <PanelLeftClose className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* Navigation Menu List */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1.5" aria-label="Main Navigation">
+        <nav
+          className={`flex-1 overflow-y-auto ${
+            sidebarCollapsed ? 'px-2 py-3 space-y-2' : 'px-3 py-4 space-y-1.5'
+          }`}
+          aria-label="Main Navigation"
+        >
           {NAV_ITEMS.map(item => {
             if (item.type === 'link') {
               const Icon = item.icon;
               const active = isLinkActive(item.path);
 
+              if (sidebarCollapsed) {
+                // Collapsed link icon button
+                return (
+                  <div key={item.id} className="flex justify-center">
+                    <NavLink
+                      to={item.path}
+                      onClick={() => {
+                        setActiveFlyout(null);
+                        if (onCloseMobile) onCloseMobile();
+                      }}
+                      title={item.label}
+                      aria-label={item.label}
+                      className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
+                        active
+                          ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                          : 'text-slate-400 hover:text-white hover:bg-[#1C2541]'
+                      }`}
+                    >
+                      <Icon
+                        className={`w-5 h-5 shrink-0 ${
+                          active ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'
+                        }`}
+                      />
+                    </NavLink>
+                  </div>
+                );
+              }
+
+              // Expanded link item
               return (
                 <NavLink
                   key={item.id}
@@ -255,14 +395,55 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
               );
             }
 
-            // Group: Hardware Inventory / Ownership & Identity
+            // Group: Hardware Inventory / Ownership Management
             const GroupIcon = item.icon;
             const isExpanded = Boolean(expandedGroups[item.id]);
             const groupActive = isGroupActive(item);
+            const isFlyoutOpen = activeFlyout?.group.id === item.id;
 
+            if (sidebarCollapsed) {
+              // Collapsed group icon button
+              return (
+                <div key={item.id} className="flex justify-center">
+                  <button
+                    ref={el => {
+                      groupButtonRefs.current[item.id] = el;
+                    }}
+                    type="button"
+                    onClick={e => handleGroupIconClick(item, e)}
+                    title={`${item.label} (Click to open submenu)`}
+                    aria-label={item.label}
+                    aria-haspopup="true"
+                    aria-expanded={isFlyoutOpen}
+                    className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors relative cursor-pointer ${
+                      isFlyoutOpen
+                        ? 'bg-blue-600 text-white ring-2 ring-blue-400 shadow-xs'
+                        : groupActive
+                        ? 'bg-blue-600/25 text-blue-400 ring-1 ring-blue-500/50'
+                        : 'text-slate-400 hover:text-white hover:bg-[#1C2541]'
+                    }`}
+                  >
+                    <GroupIcon
+                      className={`w-5 h-5 shrink-0 ${
+                        isFlyoutOpen
+                          ? 'text-white'
+                          : groupActive
+                          ? 'text-blue-400'
+                          : 'text-slate-400'
+                      }`}
+                    />
+                    {/* Active indicator dot if a child route is active */}
+                    {groupActive && !isFlyoutOpen && (
+                      <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-blue-500 ring-2 ring-[#0B132B]" />
+                    )}
+                  </button>
+                </div>
+              );
+            }
+
+            // Expanded group item
             return (
               <div key={item.id} className="space-y-1">
-                {/* Single Parent Menu Item Button */}
                 <button
                   type="button"
                   onClick={() => toggleGroup(item.id)}
@@ -326,38 +507,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
         </nav>
 
         {/* Logged-in User Profile Section */}
-        <div className="p-3 border-t border-[#1C2541] bg-[#080E21] shrink-0">
-          <div className="p-2.5 rounded-lg bg-[#1C2541]/50 border border-slate-700/40 flex items-center gap-3">
-            {/* Avatar / Profile Icon */}
+        {sidebarCollapsed ? (
+          /* Collapsed User Profile */
+          <div className="p-2.5 border-t border-[#1C2541] bg-[#080E21] shrink-0 flex flex-col items-center gap-2">
             {currentUser.avatarUrl ? (
               <img
                 src={currentUser.avatarUrl}
                 alt="Admin User"
                 className="w-8 h-8 rounded-full object-cover shrink-0 ring-1 ring-blue-400/40"
+                title="Admin User (Admin)"
               />
             ) : (
               <div
                 className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-xs border border-blue-400/30 select-none"
+                title="Admin User (Admin)"
                 aria-hidden="true"
               >
                 {getInitials('Admin User')}
               </div>
             )}
-
-            {/* User Name & Privilege */}
-            <div className="flex flex-col min-w-0 flex-1">
-              <span
-                className="text-xs font-semibold text-white truncate leading-tight"
-                title="Admin User"
-              >
-                Admin User
-              </span>
-              <span className="text-[10px] font-medium text-slate-400 truncate leading-tight mt-0.5">
-                Admin
-              </span>
-            </div>
-
-            {/* Logout Action Icon */}
             <button
               type="button"
               onClick={handleLogout}
@@ -368,8 +536,121 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
               <LogOut className="w-4 h-4" />
             </button>
           </div>
-        </div>
+        ) : (
+          /* Expanded User Profile */
+          <div className="p-3 border-t border-[#1C2541] bg-[#080E21] shrink-0">
+            <div className="p-2.5 rounded-lg bg-[#1C2541]/50 border border-slate-700/40 flex items-center gap-3">
+              {currentUser.avatarUrl ? (
+                <img
+                  src={currentUser.avatarUrl}
+                  alt="Admin User"
+                  className="w-8 h-8 rounded-full object-cover shrink-0 ring-1 ring-blue-400/40"
+                />
+              ) : (
+                <div
+                  className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-xs border border-blue-400/30 select-none"
+                  aria-hidden="true"
+                >
+                  {getInitials('Admin User')}
+                </div>
+              )}
+
+              <div className="flex flex-col min-w-0 flex-1">
+                <span
+                  className="text-xs font-semibold text-white truncate leading-tight"
+                  title="Admin User"
+                >
+                  Admin User
+                </span>
+                <span className="text-[10px] font-medium text-slate-400 truncate leading-tight mt-0.5">
+                  Admin
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="p-1.5 rounded-md text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-rose-500/40"
+                title="Logout"
+                aria-label="Logout"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </aside>
+
+      {/* Submenu Popover / Flyout for Collapsed Mode (rendered via Portal to avoid clipping) */}
+      {sidebarCollapsed &&
+        activeFlyout &&
+        createPortal(
+          <div
+            ref={flyoutRef}
+            style={{
+              position: 'fixed',
+              top: `${activeFlyout.top}px`,
+              left: `${activeFlyout.left}px`,
+              zIndex: 100,
+            }}
+            className="w-60 bg-[#0B132B] text-slate-200 border border-[#1C2541] rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            role="menu"
+            aria-orientation="vertical"
+            aria-label={`${activeFlyout.group.label} submenu`}
+          >
+            {/* Flyout Header */}
+            <div className="px-3.5 py-2.5 border-b border-[#1C2541] bg-[#080E21] flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <activeFlyout.group.icon className="w-4 h-4 text-blue-400 shrink-0" />
+                <span className="text-xs font-bold text-white tracking-wide truncate">
+                  {activeFlyout.group.label}
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400 px-1.5 py-0.5 rounded bg-[#1C2541] shrink-0">
+                {activeFlyout.group.children.length}
+              </span>
+            </div>
+
+            {/* Flyout Submenu Children */}
+            <div className="p-1.5 space-y-1">
+              {activeFlyout.group.children.map(child => {
+                const ChildIcon = child.icon;
+                const childActive = isLinkActive(child.path);
+
+                return (
+                  <button
+                    key={child.id}
+                    type="button"
+                    onClick={() => {
+                      navigate(child.path);
+                      setActiveFlyout(null);
+                      if (onCloseMobile) onCloseMobile();
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer text-left ${
+                      childActive
+                        ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                        : 'text-slate-300 hover:text-white hover:bg-[#1C2541]'
+                    }`}
+                    role="menuitem"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <ChildIcon
+                        className={`w-4 h-4 shrink-0 ${
+                          childActive ? 'text-white' : 'text-slate-400'
+                        }`}
+                      />
+                      <span className="truncate">{child.label}</span>
+                    </div>
+                    {childActive && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 ml-2" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>,
+          document.body
+        )}
     </>
   );
 };

@@ -8,6 +8,7 @@ export const MacAssetsPage: React.FC = () => {
         initialSourceFilter="JAMF"
         hideSourceFilter={true}
         showKPICards={true}
+        exportFilenamePrefix="AssetIQ_Mac_Assets"
       />
     </div>
   );

@@ -11,7 +11,6 @@ class EolReferenceResponse(BaseModel):
     eol_date: Optional[date] = None
     eolDate: Optional[date] = None
     reference_source: Optional[str] = None
-    referenceSource: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -23,8 +22,6 @@ class EolReferenceResponse(BaseModel):
             self.eolId = self.eol_id
         if self.eolDate is None:
             self.eolDate = self.eol_date
-        if self.referenceSource is None:
-            self.referenceSource = self.reference_source
         return self
 
 
@@ -34,7 +31,8 @@ class EolReferenceCreate(BaseModel):
     eol_date: Optional[date] = None
     eolDate: Optional[date] = None
     reference_source: Optional[str] = None
-    referenceSource: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
 
     @model_validator(mode="before")
     @classmethod
@@ -43,7 +41,9 @@ class EolReferenceCreate(BaseModel):
             if "eol_date" not in data and "eolDate" in data:
                 data["eol_date"] = data["eolDate"]
             if "reference_source" not in data and "referenceSource" in data:
-                data["reference_source"] = data["referenceSource"]
+                data["reference_source"] = data.get("referenceSource")
+            if "referenceSource" in data:
+                data.pop("referenceSource", None)
         return data
 
 
@@ -53,7 +53,8 @@ class EolReferenceUpdate(BaseModel):
     eol_date: Optional[date] = None
     eolDate: Optional[date] = None
     reference_source: Optional[str] = None
-    referenceSource: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
 
     @model_validator(mode="before")
     @classmethod
@@ -62,5 +63,7 @@ class EolReferenceUpdate(BaseModel):
             if "eol_date" not in data and "eolDate" in data:
                 data["eol_date"] = data["eolDate"]
             if "reference_source" not in data and "referenceSource" in data:
-                data["reference_source"] = data["referenceSource"]
+                data["reference_source"] = data.get("referenceSource")
+            if "referenceSource" in data:
+                data.pop("referenceSource", None)
         return data

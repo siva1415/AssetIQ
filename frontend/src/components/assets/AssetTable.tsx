@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Search,
   Filter,
@@ -15,17 +15,24 @@ import {
   HardDrive,
   CheckCircle2,
   AlertTriangle,
+  Info,
   Package,
   Clock,
   Server as ServerIcon,
+  CalendarPlus,
+  Download,
+  Loader2,
 } from 'lucide-react';
 import {
   Asset,
   Employee,
   AssetQueryParams,
+  AssetExportParams,
   FilterOptions,
   FleetKpiMetrics,
   ASSET_STATUSES,
+  EOL_STATUSES,
+  StandardEOLStatus,
   toStandardAssetStatus,
   formatEolDate,
   formatEolDaysLeft,
@@ -41,6 +48,8 @@ import { EmptyState } from '../common/EmptyState';
 import { ErrorState } from '../common/ErrorState';
 import { AssetDetailDrawer } from './AssetDetailDrawer';
 import { AssignAssetModal } from './AssignAssetModal';
+import { BulkAssignAssetModal } from './BulkAssignAssetModal';
+import { EditEolModal } from './EditEolModal';
 import { KPICard } from '../dashboard/KPICard';
 
 interface AssetTableProps {
@@ -53,6 +62,8 @@ interface AssetTableProps {
   subtitle?: string;
   showKPICards?: boolean;
   allowAssignment?: boolean;
+  allowBulkAssignment?: boolean;
+  exportFilenamePrefix?: string;
 }
 
 export const AssetTable: React.FC<AssetTableProps> = ({
@@ -65,9 +76,13 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   subtitle,
   showKPICards = true,
   allowAssignment = false,
+  allowBulkAssignment,
+  exportFilenamePrefix,
 }) => {
+  const enableBulkAssignment = allowBulkAssignment !== undefined ? allowBulkAssignment : allowAssignment;
   const { dataRefreshKey, triggerDataRefresh } = useApp();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // Query state
   const [search, setSearch] = useState('');
@@ -115,7 +130,8 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   // Notification state
-  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
 
   // Fleet Summary KPI state (aligned with backend contract fields)
   const [kpiMetrics, setKpiMetrics] = useState<FleetKpiMetrics | null>(null);
@@ -130,6 +146,97 @@ export const AssetTable: React.FC<AssetTableProps> = ({
 
   // Assign user modal state
   const [assignAsset, setAssignAsset] = useState<Asset | null>(null);
+
+  // EOL inline edit modal state
+  const [eolModalAsset, setEolModalAsset] = useState<Asset | null>(null);
+
+  // Bulk asset selection state
+  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string | number>>(new Set());
+  const [selectedAssetsMap, setSelectedAssetsMap] = useState<Map<string | number, Asset>>(new Map());
+  const [isBulkAssignModalOpen, setIsBulkAssignModalOpen] = useState<boolean>(false);
+  const headerCheckboxRef = useRef<HTMLInputElement>(null);
+
+  // Current page asset IDs for selection
+  const currentPageAssetIds = useMemo(() => {
+    return assets.map(a => a.id).filter(id => id !== undefined && id !== null && id !== '');
+  }, [assets]);
+
+  // Is all on current page selected
+  const isAllCurrentPageSelected = useMemo(() => {
+    if (currentPageAssetIds.length === 0) return false;
+    return currentPageAssetIds.every(id => selectedAssetIds.has(id));
+  }, [currentPageAssetIds, selectedAssetIds]);
+
+  // Is some (but not all) on current page selected (for indeterminate checkbox state)
+  const isSomeCurrentPageSelected = useMemo(() => {
+    if (currentPageAssetIds.length === 0) return false;
+    return currentPageAssetIds.some(id => selectedAssetIds.has(id)) && !isAllCurrentPageSelected;
+  }, [currentPageAssetIds, selectedAssetIds, isAllCurrentPageSelected]);
+
+  // Set indeterminate state on header checkbox input DOM element
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = isSomeCurrentPageSelected;
+    }
+  }, [isSomeCurrentPageSelected]);
+
+  // Toggle select all on current page
+  const handleToggleSelectAllCurrentPage = () => {
+    setSelectedAssetIds(prev => {
+      const next = new Set(prev);
+      if (isAllCurrentPageSelected) {
+        // Unchecking clears current page only
+        currentPageAssetIds.forEach(id => next.delete(id));
+      } else {
+        // Select all on current page
+        currentPageAssetIds.forEach(id => next.add(id));
+      }
+      return next;
+    });
+
+    setSelectedAssetsMap(prev => {
+      const next = new Map(prev);
+      if (isAllCurrentPageSelected) {
+        currentPageAssetIds.forEach(id => next.delete(id));
+      } else {
+        assets.forEach(a => {
+          if (a.id) next.set(a.id, a);
+        });
+      }
+      return next;
+    });
+  };
+
+  // Toggle single asset selection
+  const handleToggleSelectAsset = (asset: Asset) => {
+    const id = asset.id;
+    if (id === undefined || id === null || id === '') return;
+
+    setSelectedAssetIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+
+    setSelectedAssetsMap(prev => {
+      const next = new Map(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.set(id, asset);
+      }
+      return next;
+    });
+  };
+
+  const handleClearSelection = () => {
+    setSelectedAssetIds(new Set());
+    setSelectedAssetsMap(new Map());
+  };
 
   // Auto-dismiss notification after 6 seconds
   useEffect(() => {
@@ -390,6 +497,130 @@ export const AssetTable: React.FC<AssetTableProps> = ({
     return asset.devicetype === 'Server' ? 'GROUP' : 'INDIVIDUAL';
   };
 
+  // Export standardized CSV report from backend export endpoint
+  const handleExportCsv = async () => {
+    if (isExporting) return;
+
+    if (totalCount === 0 && !loading) {
+      setNotification({
+        type: 'info',
+        message: 'No records available to export',
+      });
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      const trimmedDeviceType = deviceType.trim();
+      const rawEol = eolStatus.trim();
+      let trimmedEolStatus: string | undefined = undefined;
+      if (rawEol) {
+        const normEol = rawEol.toUpperCase().replace(/_/g, ' ');
+        if (normEol === 'EOL SOON' || normEol === 'NEARING EOL') {
+          trimmedEolStatus = 'EOL SOON';
+        } else if (normEol === 'ACTIVE') {
+          trimmedEolStatus = 'ACTIVE';
+        } else if (normEol === 'EXPIRED') {
+          trimmedEolStatus = 'EXPIRED';
+        } else if (normEol === 'UNKNOWN') {
+          trimmedEolStatus = 'UNKNOWN';
+        } else {
+          trimmedEolStatus = rawEol;
+        }
+      }
+
+      const cleanAssignmentType =
+        assignmentType === 'Auto' || assignmentType === 'Manual'
+          ? assignmentType
+          : undefined;
+
+      const exportParams: AssetExportParams = {
+        search: search.trim() || undefined,
+        source: source || undefined,
+        devicetype: trimmedDeviceType || undefined,
+        device_type: trimmedDeviceType || undefined,
+        asset_status: assetStatus ? toStandardAssetStatus(assetStatus) : undefined,
+        manufacturer: manufacturer || undefined,
+        model: model || undefined,
+        assignment_type: cleanAssignmentType,
+        eol_status: trimmedEolStatus || undefined,
+        sort_by: sortBy === 'device_type' ? 'devicetype' : sortBy,
+        sort_order: sortOrder,
+      };
+
+      const result = await api.exportAssetsCsv(exportParams);
+
+      if (!result.blob || result.blob.size === 0 || result.count === 0) {
+        setNotification({
+          type: 'info',
+          message: 'No records available to export',
+        });
+        return;
+      }
+
+      // Check if text is only headers (empty dataset)
+      if (result.blob.size < 600) {
+        const textSample = await result.blob.slice(0, 1024).text();
+        const lines = textSample.split(/\r?\n/).filter(line => line.trim().length > 0);
+        if (lines.length <= 1) {
+          setNotification({
+            type: 'info',
+            message: 'No records available to export',
+          });
+          return;
+        }
+      }
+
+      // Determine export filename (use backend supplied filename if available, else date-stamped name)
+      let targetFilename = result.filename;
+      if (!targetFilename) {
+        let filePrefix = exportFilenamePrefix;
+        if (!filePrefix) {
+          if (initialSourceFilter === 'BIGFIX' || (hideSourceFilter && source === 'BIGFIX')) {
+            filePrefix = 'AssetIQ_Windows_Assets';
+          } else if (initialSourceFilter === 'JAMF' || (hideSourceFilter && source === 'JAMF')) {
+            filePrefix = 'AssetIQ_Mac_Assets';
+          } else if (allowAssignment || location.pathname.includes('/ownership')) {
+            filePrefix = 'AssetIQ_Asset_Ownership';
+          } else {
+            filePrefix = 'AssetIQ_All_Assets';
+          }
+        }
+        const todayStr = new Date().toISOString().split('T')[0];
+        targetFilename = `${filePrefix}_${todayStr}.csv`;
+      }
+
+      // Trigger browser download using the blob returned by backend export endpoint
+      const url = URL.createObjectURL(result.blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', targetFilename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setNotification({
+        type: 'success',
+        message: `Successfully downloaded ${targetFilename}.`,
+      });
+    } catch (err: any) {
+      console.error('[AssetTable] CSV export failed:', err);
+      const errMsg =
+        err?.response?.data?.detail ||
+        err?.detail ||
+        err?.message ||
+        'Failed to export standardized CSV report. Please try again.';
+      setNotification({
+        type: 'error',
+        message: errMsg,
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const renderDeviceIcon = (type?: string | null) => {
     return <DeviceTypeIcon type={type} />;
   };
@@ -412,12 +643,16 @@ export const AssetTable: React.FC<AssetTableProps> = ({
           className={`flex items-center justify-between p-3.5 rounded-lg border text-xs shadow-2xs ${
             notification.type === 'success'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : notification.type === 'info'
+              ? 'bg-blue-50 border-blue-200 text-blue-800'
               : 'bg-rose-50 border-rose-200 text-rose-800'
           }`}
         >
           <div className="flex items-center gap-2">
             {notification.type === 'success' ? (
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : notification.type === 'info' ? (
+              <Info className="w-4 h-4 text-blue-600 shrink-0" />
             ) : (
               <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
             )}
@@ -425,7 +660,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
           </div>
           <button
             onClick={() => setNotification(null)}
-            className="text-slate-400 hover:text-slate-600 p-1"
+            className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
             aria-label="Dismiss notification"
           >
             <X className="w-3.5 h-3.5" />
@@ -653,6 +888,22 @@ export const AssetTable: React.FC<AssetTableProps> = ({
             ))}
           </select>
 
+          {/* Export CSV Button */}
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={isExporting}
+            className="h-9 w-9 inline-flex items-center justify-center bg-white border border-slate-300 hover:border-slate-400 hover:bg-slate-50 text-slate-700 hover:text-slate-900 rounded-md shadow-2xs transition-all shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20"
+            title={isExporting ? 'Exporting CSV...' : 'Export CSV'}
+            aria-label="Export CSV"
+          >
+            {isExporting ? (
+              <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+            ) : (
+              <Download className="w-4 h-4 text-slate-600" />
+            )}
+          </button>
+
           {/* Clear filters button */}
           {hasActiveFilters && (
             <button
@@ -666,6 +917,39 @@ export const AssetTable: React.FC<AssetTableProps> = ({
           )}
         </div>
       </div>
+
+      {/* Bulk Selection Action Bar */}
+      {enableBulkAssignment && selectedAssetIds.size > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs shadow-2xs animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center justify-center min-w-[20px] px-1.5 py-0.5 rounded-full font-bold bg-blue-600 text-white text-[11px] tabular-nums">
+              {selectedAssetIds.size}
+            </span>
+            <span className="font-semibold text-slate-900">
+              {selectedAssetIds.size === 1 ? '1 asset selected' : `${selectedAssetIds.size} assets selected`}
+            </span>
+            <span className="text-slate-400">·</span>
+            <button
+              type="button"
+              onClick={handleClearSelection}
+              className="text-blue-700 hover:text-blue-900 font-medium hover:underline cursor-pointer"
+            >
+              Clear selection
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsBulkAssignModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold shadow-xs transition-colors cursor-pointer"
+            >
+              <UserRoundPlus className="w-4 h-4 stroke-[2.25]" />
+              <span>Bulk Assign Selected ({selectedAssetIds.size})</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Table or State */}
       {error ? (
@@ -685,6 +969,20 @@ export const AssetTable: React.FC<AssetTableProps> = ({
             <table className="w-full text-left text-xs border-collapse table-fixed min-w-[700px]">
               <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 select-none">
                 <tr>
+                  {/* Selection Checkbox Header */}
+                  {enableBulkAssignment && (
+                    <th className="w-[38px] py-2.5 px-2 text-center whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        ref={headerCheckboxRef}
+                        checked={isAllCurrentPageSelected}
+                        onChange={handleToggleSelectAllCurrentPage}
+                        className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        aria-label="Select all assets on current page"
+                      />
+                    </th>
+                  )}
+
                   {/* 1. Asset */}
                   <th
                     onClick={() => handleSort('asset_number')}
@@ -794,24 +1092,45 @@ export const AssetTable: React.FC<AssetTableProps> = ({
               <tbody className="divide-y divide-slate-100">
                 {assets.map(asset => {
                   const managedByDisplay = getManagedByDisplay(asset);
+                  const isRowSelected = selectedAssetIds.has(asset.id);
 
                   return (
                     <tr
                       key={asset.id}
                       onClick={() => setSelectedAsset(asset)}
-                      className="hover:bg-blue-50/40 cursor-pointer transition-colors"
+                      className={`cursor-pointer transition-colors ${
+                        isRowSelected
+                          ? 'bg-blue-50/70 hover:bg-blue-50'
+                          : 'hover:bg-blue-50/40'
+                      }`}
                     >
-                      {/* 1. Asset */}
-                      <td className="py-2.5 px-2 whitespace-nowrap align-middle overflow-hidden">
-                        <span
-                          className="font-mono font-bold text-slate-900 text-xs block whitespace-nowrap [text-overflow:clip] overflow-hidden"
-                          style={{
-                            whiteSpace: 'nowrap',
-                            textOverflow: 'clip',
-                          }}
-                          title={asset.asset_number}
+                      {/* Selection Checkbox Cell */}
+                      {enableBulkAssignment && (
+                        <td
+                          className="py-2.5 px-2 text-center whitespace-nowrap align-middle"
+                          onClick={e => e.stopPropagation()}
                         >
-                          {asset.asset_number}
+                          <input
+                            type="checkbox"
+                            checked={isRowSelected}
+                            onChange={() => handleToggleSelectAsset(asset)}
+                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                            aria-label={`Select asset ${asset.asset_number}`}
+                          />
+                        </td>
+                      )}
+
+                      {/* 1. Asset */}
+                      <td className="py-2.5 px-2 whitespace-nowrap align-middle">
+                        <span
+                          className="font-mono font-bold text-slate-900 text-xs block whitespace-nowrap uppercase"
+                          style={{
+                            textTransform: 'uppercase',
+                            whiteSpace: 'nowrap',
+                          }}
+                          title={asset.asset_number || asset.assetNumber}
+                        >
+                          {asset.asset_number || asset.assetNumber}
                         </span>
                       </td>
 
@@ -838,8 +1157,31 @@ export const AssetTable: React.FC<AssetTableProps> = ({
 
                       {/* 4. Model */}
                       <td className="py-2.5 px-2 align-middle overflow-hidden">
-                        <div className="font-medium text-slate-900 truncate text-xs" title={`${asset.manufacturer} ${asset.model}`}>
-                          {asset.model}
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-medium text-slate-900 truncate text-xs" title={`${asset.manufacturer} ${asset.model}`}>
+                            {asset.model}
+                          </span>
+                          {(() => {
+                            const rawEolStatus = asset.eol_status ?? asset.eolStatus;
+                            const isEolUnknown =
+                              typeof rawEolStatus === 'string' &&
+                              rawEolStatus.trim().toUpperCase() === 'UNKNOWN';
+                            if (!isEolUnknown) return null;
+                            return (
+                              <button
+                                type="button"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  setEolModalAsset(asset);
+                                }}
+                                className="inline-flex items-center justify-center p-0.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer shrink-0"
+                                title="Add EOL Date"
+                                aria-label="Add EOL Date"
+                              >
+                                <CalendarPlus className="w-3.5 h-3.5" />
+                              </button>
+                            );
+                          })()}
                         </div>
                         <div className="text-[10px] text-slate-500 truncate mt-0.5" title={asset.manufacturer}>
                           {asset.manufacturer}
@@ -1052,6 +1394,73 @@ export const AssetTable: React.FC<AssetTableProps> = ({
           onClose={() => setAssignAsset(null)}
           onSuccess={msg => {
             setAssignAsset(null);
+            triggerDataRefresh();
+            fetchAssets();
+            loadKpiMetrics();
+            setNotification({ type: 'success', message: msg });
+          }}
+        />
+      )}
+
+      {/* Bulk Assign Asset Modal */}
+      {isBulkAssignModalOpen && (
+        <BulkAssignAssetModal
+          selectedAssetIds={Array.from(selectedAssetIds)}
+          selectedAssets={Array.from(selectedAssetsMap.values())}
+          onClose={() => setIsBulkAssignModalOpen(false)}
+          onSuccess={msg => {
+            setIsBulkAssignModalOpen(false);
+            handleClearSelection();
+            triggerDataRefresh();
+            fetchAssets();
+            loadKpiMetrics();
+            setNotification({ type: 'success', message: msg });
+          }}
+        />
+      )}
+
+      {/* Edit / Add EOL Date Modal */}
+      {eolModalAsset && (
+        <EditEolModal
+          asset={eolModalAsset}
+          onClose={() => setEolModalAsset(null)}
+          onSuccess={(updatedEolDate, msg) => {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const targetDate = new Date(updatedEolDate);
+            targetDate.setHours(0, 0, 0, 0);
+            const diffDays = Math.ceil((targetDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+            let calculatedStatus: StandardEOLStatus = EOL_STATUSES.ACTIVE;
+            if (diffDays < 0) {
+              calculatedStatus = EOL_STATUSES.EXPIRED;
+            } else if (diffDays <= 90) {
+              calculatedStatus = EOL_STATUSES.EOL_SOON;
+            }
+
+            setAssets(prev =>
+              prev.map(a => {
+                const matchesAsset = a.id === eolModalAsset.id;
+                const matchesModel =
+                  Boolean(a.manufacturer && eolModalAsset.manufacturer &&
+                    a.manufacturer.toLowerCase().trim() === eolModalAsset.manufacturer.toLowerCase().trim()) &&
+                  Boolean(a.model && eolModalAsset.model &&
+                    a.model.toLowerCase().trim() === eolModalAsset.model.toLowerCase().trim());
+                if (matchesAsset || matchesModel) {
+                  return {
+                    ...a,
+                    eol_date: updatedEolDate,
+                    eolDate: updatedEolDate,
+                    eol_status: calculatedStatus,
+                    eolStatus: calculatedStatus,
+                    days_remaining: diffDays,
+                    daysRemaining: diffDays,
+                  };
+                }
+                return a;
+              })
+            );
+
+            setEolModalAsset(null);
             triggerDataRefresh();
             fetchAssets();
             loadKpiMetrics();

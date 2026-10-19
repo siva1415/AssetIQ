@@ -39,7 +39,9 @@ export const AdminUsersPage: React.FC = () => {
   const [availableLoading, setAvailableLoading] = useState<boolean>(false);
   const [userSearch, setUserSearch] = useState<string>('');
   const [modalPage, setModalPage] = useState<number>(1);
-  const modalPageSize = 8;
+  const modalPageSize = 10;
+  const [modalTotal, setModalTotal] = useState<number>(0);
+  const [modalTotalPages, setModalTotalPages] = useState<number>(1);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
   const [submittingBulk, setSubmittingBulk] = useState<boolean>(false);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -79,16 +81,31 @@ export const AdminUsersPage: React.FC = () => {
     loadAdminUsers();
   }, [dataRefreshKey]);
 
-  // Load available Workday users when modal is opened or user searches
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Load available Workday users with server-side pagination & search
   const searchReqIdRef = useRef<number>(0);
-  const loadAvailableUsers = async (searchQuery?: string) => {
+  const loadAvailableUsers = async (pageNumber: number = 1, searchQuery: string = '') => {
     const reqId = ++searchReqIdRef.current;
     setAvailableLoading(true);
     setModalError(null);
     try {
-      const data = await api.getAvailableWorkdayUsers(searchQuery);
+      const res = await api.getAvailableWorkdayUsers({
+        page: pageNumber,
+        page_size: modalPageSize,
+        search: searchQuery.trim() || undefined,
+      });
       if (reqId !== searchReqIdRef.current) return;
-      setAvailableUsers(data);
+      setAvailableUsers(res.items);
+      setModalTotal(res.total);
+      setModalPage(res.page);
+      setModalTotalPages(res.total_pages);
     } catch (err: any) {
       if (reqId !== searchReqIdRef.current) return;
       const status = err?.status || err?.response?.status;
@@ -110,23 +127,42 @@ export const AdminUsersPage: React.FC = () => {
   const handleOpenAddModal = () => {
     setUserSearch('');
     setModalPage(1);
+    setModalTotal(0);
+    setModalTotalPages(1);
     setSelectedUserIds(new Set());
     setModalError(null);
     setIsAddModalOpen(true);
-    loadAvailableUsers('');
+    loadAvailableUsers(1, '');
   };
 
-  // Debounce search in modal
+  // Debounce search in modal (300ms)
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const handleUserSearchChange = (value: string) => {
     setUserSearch(value);
-    setModalPage(1); // Reset pagination when search term changes
+    setModalPage(1); // Reset to page 1 when search query changes
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
     searchTimeoutRef.current = setTimeout(() => {
-      loadAvailableUsers(value);
-    }, 250);
+      loadAvailableUsers(1, value);
+    }, 300);
+  };
+
+  // Next and Previous page handlers
+  const handlePrevPage = () => {
+    if (modalPage > 1 && !availableLoading) {
+      const prev = modalPage - 1;
+      setModalPage(prev);
+      loadAvailableUsers(prev, userSearch);
+    }
+  };
+
+  const handleNextPage = () => {
+    if (modalPage < modalTotalPages && !availableLoading) {
+      const next = modalPage + 1;
+      setModalPage(next);
+      loadAvailableUsers(next, userSearch);
+    }
   };
 
   // Filter registered admin users by search query
@@ -142,64 +178,19 @@ export const AdminUsersPage: React.FC = () => {
     );
   }, [adminUsers, search]);
 
-  // Selectable users in the modal:
-  // Excludes users with is_admin: true, users already registered as administrators, and non-active employees
-  const selectableAvailableUsers = useMemo(() => {
-    const adminIdSet = new Set(adminUsers.map(a => a.admin_user_id.toLowerCase()));
-    let list = availableUsers.filter(u => {
-      if (u.is_admin) return false;
-      if (adminIdSet.has(u.user_id.toLowerCase())) return false;
-      if (u.employee_status && u.employee_status.toLowerCase() !== 'active') return false;
-      return true;
-    });
+  // Dynamic start and end indices for pagination summary
+  const startIndex = modalTotal > 0 ? (modalPage - 1) * modalPageSize + 1 : 0;
+  const endIndex = modalTotal > 0 ? Math.min(modalPage * modalPageSize, modalTotal) : 0;
 
-    // If a search query is active and the list contains non-matching records (i.e. server returned all records without filtering)
-    if (userSearch.trim()) {
-      const q = userSearch.trim().toLowerCase();
-      const hasUnmatched = list.some(
-        u =>
-          !u.user_id.toLowerCase().includes(q) &&
-          !(u.full_name && u.full_name.toLowerCase().includes(q)) &&
-          !(u.email_work && u.email_work.toLowerCase().includes(q)) &&
-          !(u.department && u.department.toLowerCase().includes(q))
-      );
-      if (hasUnmatched) {
-        list = list.filter(
-          u =>
-            u.user_id.toLowerCase().includes(q) ||
-            (u.full_name && u.full_name.toLowerCase().includes(q)) ||
-            (u.email_work && u.email_work.toLowerCase().includes(q)) ||
-            (u.department && u.department.toLowerCase().includes(q))
-        );
-      }
+  // Helper for user avatar initials
+  const getInitials = (name: string): string => {
+    if (!name || name === '—') return 'U';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
     }
-    return list;
-  }, [availableUsers, adminUsers, userSearch]);
-
-  // Total pages for modal table
-  const totalModalPages = useMemo(() => {
-    return Math.max(1, Math.ceil(selectableAvailableUsers.length / modalPageSize));
-  }, [selectableAvailableUsers.length, modalPageSize]);
-
-  // Paginated users on current modal page
-  const paginatedAvailableUsers = useMemo(() => {
-    const start = (modalPage - 1) * modalPageSize;
-    return selectableAvailableUsers.slice(start, start + modalPageSize);
-  }, [selectableAvailableUsers, modalPage, modalPageSize]);
-
-  // Check if all users on CURRENT PAGE are selected
-  const allCurrentPageSelected = useMemo(() => {
-    if (paginatedAvailableUsers.length === 0) return false;
-    return paginatedAvailableUsers.every(u => selectedUserIds.has(u.user_id));
-  }, [paginatedAvailableUsers, selectedUserIds]);
-
-  // Check if some (but not all) users on CURRENT PAGE are selected (for indeterminate checkbox)
-  const someCurrentPageSelected = useMemo(() => {
-    return (
-      paginatedAvailableUsers.some(u => selectedUserIds.has(u.user_id)) &&
-      !allCurrentPageSelected
-    );
-  }, [paginatedAvailableUsers, selectedUserIds, allCurrentPageSelected]);
+    return name.slice(0, 2).toUpperCase();
+  };
 
   // Toggle single user selection (preserves selection across page turns and searches)
   const handleToggleUserSelection = (userId: string) => {
@@ -214,25 +205,12 @@ export const AdminUsersPage: React.FC = () => {
     });
   };
 
-  // Toggle select all visible on current page
-  const handleToggleSelectAllCurrentPage = () => {
-    setSelectedUserIds(prev => {
-      const next = new Set(prev);
-      if (allCurrentPageSelected) {
-        // Deselect all on current page
-        paginatedAvailableUsers.forEach(u => next.delete(u.user_id));
-      } else {
-        // Select all on current page
-        paginatedAvailableUsers.forEach(u => next.add(u.user_id));
-      }
-      return next;
-    });
-  };
-
   // Submit bulk admin users via POST /api/admin-users
   const handleSubmitBulk = async () => {
-    if (selectedUserIds.size === 0) {
-      setModalError('Please select at least one Workday employee before submitting.');
+    if (selectedUserIds.size === 0 || submittingBulk) {
+      if (selectedUserIds.size === 0) {
+        setModalError('Please select at least one Workday employee before submitting.');
+      }
       return;
     }
     setSubmittingBulk(true);
@@ -545,7 +523,7 @@ export const AdminUsersPage: React.FC = () => {
           />
 
           <div className="flex min-h-full items-center justify-center p-4">
-            <div className="relative w-full max-w-4xl bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden transform transition-all flex flex-col max-h-[92vh]">
+            <div className="relative w-full max-w-4xl bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden transform transition-all flex flex-col max-h-[90vh]">
               {/* Modal Header */}
               <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50/70 shrink-0">
                 <div className="flex items-center gap-3">
@@ -556,6 +534,9 @@ export const AdminUsersPage: React.FC = () => {
                     <h3 className="text-base font-bold text-slate-900">
                       Add Admin User
                     </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Select Workday employees to grant administrator privileges
+                    </p>
                   </div>
                 </div>
                 <button
@@ -577,14 +558,16 @@ export const AdminUsersPage: React.FC = () => {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => loadAvailableUsers(userSearch)}
-                      className="px-2 py-0.5 bg-rose-600 text-white rounded text-[11px] font-medium hover:bg-rose-700"
+                      type="button"
+                      onClick={() => loadAvailableUsers(modalPage, userSearch)}
+                      className="px-2 py-0.5 bg-rose-600 text-white rounded text-[11px] font-medium hover:bg-rose-700 cursor-pointer"
                     >
                       Retry
                     </button>
                     <button
+                      type="button"
                       onClick={() => setModalError(null)}
-                      className="text-slate-400 hover:text-slate-600"
+                      className="text-slate-400 hover:text-slate-600 cursor-pointer"
                       aria-label="Dismiss error"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -593,264 +576,233 @@ export const AdminUsersPage: React.FC = () => {
                 </div>
               )}
 
-              {/* User Search Input Toolbar */}
-              <div className="p-6 pb-3 shrink-0">
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3.5 top-2.5 w-4 h-4 text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="Search by User ID, Name or Email"
-                      value={userSearch}
-                      onChange={e => handleUserSearchChange(e.target.value)}
-                      className="w-full pl-10 pr-9 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800 placeholder-slate-400"
-                    />
-                    {userSearch && (
+              {/* Search and Selection Toolbar */}
+              <div className="p-6 pb-3 shrink-0 space-y-3">
+                {/* Search input */}
+                <div className="relative">
+                  <Search className="absolute left-3.5 top-2.5 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search by name, user ID, email, or department"
+                    value={userSearch}
+                    onChange={e => handleUserSearchChange(e.target.value)}
+                    className="w-full pl-10 pr-9 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800 placeholder-slate-400"
+                  />
+                  {userSearch && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUserSearch('');
+                        setModalPage(1);
+                        loadAvailableUsers(1, '');
+                      }}
+                      className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      aria-label="Clear user search"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Selected Count Indicator */}
+                <div className="flex items-center justify-between px-1 text-xs">
+                  <span className="text-slate-500">
+                    Select individual employees to grant administrator privileges
+                  </span>
+
+                  <div className="flex items-center gap-3">
+                    {selectedUserIds.size > 0 && (
                       <button
-                        onClick={() => {
-                          setUserSearch('');
-                          loadAvailableUsers('');
-                          setModalPage(1);
-                        }}
-                        className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
-                        aria-label="Clear user search"
+                        type="button"
+                        onClick={() => setSelectedUserIds(new Set())}
+                        className="text-[11px] text-slate-500 hover:text-slate-800 underline cursor-pointer"
                       >
-                        <X className="w-4 h-4" />
+                        Clear Selection
                       </button>
                     )}
-                  </div>
-
-                  <div className="shrink-0 flex items-center justify-end">
-                    <span className="text-xs font-semibold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-md border border-blue-200">
+                    <span className="font-semibold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-md border border-blue-200 text-xs">
                       {selectedUserIds.size} user{selectedUserIds.size === 1 ? '' : 's'} selected
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* Selectable Users Table */}
+              {/* Employee Selection List */}
               <div className="flex-1 overflow-y-auto px-6 pb-2 min-w-0">
-                <div className="border border-slate-200 rounded-lg overflow-hidden w-full">
-                  {availableLoading ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-slate-500 space-y-2.5">
-                      <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
-                      <span className="text-xs font-medium">Loading eligible Workday employees...</span>
-                    </div>
-                  ) : modalError && selectableAvailableUsers.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
-                      <AlertCircle className="w-8 h-8 text-rose-500 mb-2" />
-                      <h4 className="text-xs font-semibold text-slate-800">Unable to load employee records</h4>
-                      <p className="text-[11px] text-slate-500 max-w-sm mt-1 mb-3">
-                        {modalError}
-                      </p>
+                {availableLoading && availableUsers.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-slate-500 space-y-2.5">
+                    <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                    <span className="text-xs font-medium">Loading Workday employees...</span>
+                  </div>
+                ) : modalError && availableUsers.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+                    <AlertCircle className="w-8 h-8 text-rose-500 mb-2" />
+                    <h4 className="text-xs font-semibold text-slate-800">Unable to load employee records</h4>
+                    <p className="text-[11px] text-slate-500 max-w-sm mt-1 mb-3">
+                      {modalError}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => loadAvailableUsers(modalPage, userSearch)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md shadow-xs transition-colors cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Retry Request</span>
+                    </button>
+                  </div>
+                ) : availableUsers.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+                    <Users className="w-8 h-8 text-slate-300 mb-2" />
+                    <h4 className="text-xs font-semibold text-slate-800">
+                      {userSearch ? 'No matching employees found' : 'No available employees to add'}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 max-w-sm mt-1 mb-3">
+                      {userSearch
+                        ? `No Workday employees match "${userSearch}". Try searching by another name, user ID, email, or department.`
+                        : 'All eligible Workday employees are already registered as administrators, or no records were returned.'}
+                    </p>
+                    {userSearch && (
                       <button
-                        onClick={() => loadAvailableUsers(userSearch)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md shadow-xs transition-colors cursor-pointer"
+                        type="button"
+                        onClick={() => {
+                          setUserSearch('');
+                          setModalPage(1);
+                          loadAvailableUsers(1, '');
+                        }}
+                        className="px-3 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium transition-colors cursor-pointer"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Retry Request</span>
+                        Clear Search
                       </button>
-                    </div>
-                  ) : selectableAvailableUsers.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
-                      <Users className="w-8 h-8 text-slate-300 mb-2" />
-                      <h4 className="text-xs font-semibold text-slate-800">
-                        {userSearch ? 'No matching active employees' : 'No available active employees to add'}
-                      </h4>
-                      <p className="text-[11px] text-slate-500 max-w-sm mt-1 mb-3">
-                        {userSearch
-                          ? `No active Workday employees match "${userSearch}". Try searching by another User ID, Full Name, or Work Email.`
-                          : 'All active Workday employees are already registered as administrators, or no active employee records were found.'}
-                      </p>
-                      {userSearch && (
-                        <button
-                          onClick={() => {
-                            setUserSearch('');
-                            loadAvailableUsers('');
-                            setModalPage(1);
-                          }}
-                          className="px-3 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium transition-colors cursor-pointer"
+                    )}
+                  </div>
+                ) : (
+                  <div className={`space-y-2 relative transition-opacity duration-150 ${availableLoading ? 'opacity-60 pointer-events-none' : ''}`}>
+                    {availableUsers.map(emp => {
+                      const isSelected = selectedUserIds.has(emp.user_id);
+
+                      return (
+                        <div
+                          key={emp.user_id}
+                          onClick={() => handleToggleUserSelection(emp.user_id)}
+                          className={`group relative flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border transition-all cursor-pointer gap-2.5 sm:gap-4 ${
+                            isSelected
+                              ? 'bg-blue-50/75 border-blue-400 ring-1 ring-blue-500/20 shadow-xs'
+                              : 'bg-white hover:bg-slate-50/80 border-slate-200 hover:border-slate-300'
+                          }`}
                         >
-                          Clear Search
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <table className="w-full text-left text-xs divide-y divide-slate-200">
-                      <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[10px] sticky top-0 z-10 shadow-2xs">
-                        <tr>
-                          {/* 1. Checkbox */}
-                          <th className="py-2.5 px-3 w-12 text-center shrink-0">
+                          {/* Checkbox, Avatar, Name & ID */}
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
                             <input
                               type="checkbox"
-                              checked={allCurrentPageSelected}
-                              ref={el => {
-                                if (el) el.indeterminate = someCurrentPageSelected;
-                              }}
-                              onChange={handleToggleSelectAllCurrentPage}
-                              disabled={paginatedAvailableUsers.length === 0}
-                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer disabled:opacity-40"
-                              title="Select / deselect all users on current page"
-                              aria-label="Select all on current page"
+                              checked={isSelected}
+                              onChange={() => handleToggleUserSelection(emp.user_id)}
+                              onClick={e => e.stopPropagation()}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-4 w-4 cursor-pointer shrink-0"
+                              aria-label={`Select ${emp.full_name || emp.user_id}`}
                             />
-                          </th>
-                          {/* 2. User ID */}
-                          <th className="py-2.5 px-3 w-36">User ID</th>
-                          {/* 3. Full Name */}
-                          <th className="py-2.5 px-3">Full Name</th>
-                          {/* 4. Work Email */}
-                          <th className="py-2.5 px-3">Work Email</th>
-                          {/* 5. Employee Status */}
-                          <th className="py-2.5 px-3 w-36 text-center">Employee Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {paginatedAvailableUsers.map(emp => {
-                          const isSelected = selectedUserIds.has(emp.user_id);
-                          const isActive = (emp.employee_status || '').toLowerCase() === 'active';
 
-                          return (
-                            <tr
-                              key={emp.user_id}
-                              onClick={() => handleToggleUserSelection(emp.user_id)}
-                              className={`transition-colors cursor-pointer ${
+                            <div
+                              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 transition-colors ${
                                 isSelected
-                                  ? 'bg-blue-50/70 hover:bg-blue-50/90 font-medium'
-                                  : 'hover:bg-slate-50/80'
+                                  ? 'bg-blue-600 text-white'
+                                  : 'bg-slate-100 text-slate-700 border border-slate-200'
                               }`}
                             >
-                              {/* 1. Checkbox */}
-                              <td className="py-2.5 px-3 text-center shrink-0">
-                                <input
-                                  type="checkbox"
-                                  checked={isSelected}
-                                  onChange={() => handleToggleUserSelection(emp.user_id)}
-                                  onClick={e => e.stopPropagation()}
-                                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
-                                  aria-label={`Select ${emp.full_name || emp.user_id}`}
-                                />
-                              </td>
+                              {getInitials(emp.full_name || emp.user_id)}
+                            </div>
 
-                              {/* 2. User ID */}
-                              <td className="py-2.5 px-3 whitespace-nowrap">
-                                <span
-                                  className="font-mono font-semibold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-[11px] border border-slate-200"
-                                  title={emp.user_id}
-                                >
-                                  {emp.user_id || '—'}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-slate-900 text-xs">
+                                  {emp.full_name || '—'}
                                 </span>
-                              </td>
-
-                              {/* 3. Full Name */}
-                              <td className="py-2.5 px-3">
-                                <div className="min-w-0">
-                                  <span
-                                    className="font-semibold text-slate-900 block truncate"
-                                    title={emp.full_name || '—'}
-                                  >
-                                    {emp.full_name || '—'}
-                                  </span>
-                                  {emp.job_title && (
-                                    <span
-                                      className="text-[10px] text-slate-400 block truncate"
-                                      title={emp.job_title}
-                                    >
-                                      {emp.job_title}
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-
-                              {/* 4. Work Email */}
-                              <td className="py-2.5 px-3">
-                                {emp.email_work ? (
-                                  <span
-                                    className="font-mono text-[11px] text-slate-600 block truncate"
-                                    title={emp.email_work}
-                                  >
-                                    {emp.email_work}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400 italic text-[11px]">—</span>
-                                )}
-                              </td>
-
-                              {/* 5. Employee Status (Visually distinguish Active and Inactive) */}
-                              <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                                <span
-                                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-semibold border ${
-                                    isActive
-                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                      : 'bg-rose-50 text-rose-800 border-rose-200'
-                                  }`}
-                                >
-                                  <span
-                                    className={`w-1.5 h-1.5 rounded-full ${
-                                      isActive ? 'bg-emerald-600' : 'bg-rose-600'
-                                    } shrink-0`}
-                                  />
-                                  <span>{emp.employee_status || 'Inactive'}</span>
+                                <span className="font-mono text-[11px] text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200/80 shrink-0 font-medium">
+                                  {emp.user_id}
                                 </span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
+                              </div>
+                              {emp.job_title && (
+                                <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                                  {emp.job_title}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Email & Department */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between sm:justify-end gap-2.5 sm:gap-4 pl-11 sm:pl-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-slate-100 shrink-0">
+                            <div className="flex items-center gap-1.5 text-xs text-slate-600 min-w-0">
+                              <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0 hidden sm:inline-block" />
+                              <span className="font-mono text-[11px] truncate max-w-[160px] sm:max-w-[200px]" title={emp.email_work || ''}>
+                                {emp.email_work || '—'}
+                              </span>
+                            </div>
+
+                            <div className="text-left sm:text-right shrink-0">
+                              <span
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 rounded-md border border-slate-200 whitespace-nowrap shrink-0"
+                              >
+                                <Building className="w-3 h-3 text-slate-400 shrink-0" />
+                                <span className="whitespace-nowrap">{emp.department || '—'}</span>
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Pagination Controls inside Modal */}
-              {selectableAvailableUsers.length > 0 && (
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-2 px-6 py-2.5 border-t border-slate-200 bg-slate-50/50 text-xs text-slate-600 shrink-0">
-                  <div className="text-[11px]">
-                    Showing <span className="font-semibold text-slate-900">{(modalPage - 1) * modalPageSize + 1}</span> to{' '}
-                    <span className="font-semibold text-slate-900">
-                      {Math.min(modalPage * modalPageSize, selectableAvailableUsers.length)}
-                    </span>{' '}
-                    of <span className="font-semibold text-slate-900">{selectableAvailableUsers.length}</span> eligible employees
-                  </div>
-
-                  {totalModalPages > 1 && (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setModalPage(p => Math.max(1, p - 1))}
-                        disabled={modalPage <= 1}
-                        className="p-1 border border-slate-200 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                        aria-label="Previous page"
-                        title="Previous page"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                      </button>
-                      <span className="text-[11px] font-medium px-2">
-                        Page {modalPage} of {totalModalPages}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setModalPage(p => Math.min(totalModalPages, p + 1))}
-                        disabled={modalPage >= totalModalPages}
-                        className="p-1 border border-slate-200 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                        aria-label="Next page"
-                        title="Next page"
-                      >
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </div>
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2 px-6 py-2.5 border-t border-slate-200 bg-slate-50/50 text-xs text-slate-600 shrink-0">
+                <div className="text-[11px]">
+                  {modalTotal > 0 ? (
+                    <>
+                      Showing <span className="font-semibold text-slate-900">{startIndex}</span> to{' '}
+                      <span className="font-semibold text-slate-900">{endIndex}</span> of{' '}
+                      <span className="font-semibold text-slate-900">{modalTotal}</span> employees
+                    </>
+                  ) : (
+                    <span>Showing 0 employees</span>
                   )}
                 </div>
-              )}
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handlePrevPage}
+                    disabled={modalPage <= 1 || availableLoading || modalTotal === 0}
+                    className="p-1 border border-slate-200 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    aria-label="Previous page"
+                    title="Previous page"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-[11px] font-medium px-2">
+                    Page {modalTotal > 0 ? modalPage : 1} of {Math.max(1, modalTotalPages)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleNextPage}
+                    disabled={modalPage >= modalTotalPages || availableLoading || modalTotal === 0}
+                    className="p-1 border border-slate-200 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    aria-label="Next page"
+                    title="Next page"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
 
               {/* Modal Footer / Action Buttons */}
               <div className="flex items-center justify-between px-6 py-4 border-t border-slate-200 bg-slate-50/80 shrink-0">
                 <div className="text-xs text-slate-600">
                   {selectedUserIds.size > 0 ? (
                     <span className="font-semibold text-slate-900">
-                      {selectedUserIds.size} user{selectedUserIds.size === 1 ? '' : 's'} selected across all searches/pages
+                      {selectedUserIds.size} user{selectedUserIds.size === 1 ? '' : 's'} selected
                     </span>
                   ) : (
-                    <span>Select users from the table to grant administrator privileges</span>
+                    <span>Select employees to grant administrator privileges</span>
                   )}
                 </div>
 
@@ -877,12 +829,12 @@ export const AdminUsersPage: React.FC = () => {
                     {submittingBulk ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Adding Selected Users ({selectedUserIds.size})...</span>
+                        <span>Adding Selected Users...</span>
                       </>
                     ) : (
                       <>
                         <Check className="w-3.5 h-3.5" />
-                        <span>Add Selected Users ({selectedUserIds.size})</span>
+                        <span>Add Selected Users</span>
                       </>
                     )}
                   </button>

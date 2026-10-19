@@ -35,7 +35,7 @@ def test_available_users_endpoint_returns_non_admin_workday_employees(client: Te
     assert data["total"] == 1
     assert data["total_pages"] == 1
     assert data["page"] == 1
-    assert data["page_size"] == 25
+    assert data["page_size"] == 10
 
     items = data["items"]
     assert len(items) == 1
@@ -372,4 +372,145 @@ def test_delete_admin_user(client: TestClient):
     assert avail_res.status_code == 200
     avail_ids = [u["user_id"] for u in avail_res.json()["items"]]
     assert "johndoe" in avail_ids
+
+
+def test_available_users_search_by_department(client: TestClient, db_session: Session):
+    """
+    Requirement 3: Match search query against department in addition to full_name, user_id, and email_work.
+    """
+    # sarahconnor is in Security department
+    res = client.get("/api/admin-users/available-users?search=Security")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] == 1
+    assert data["items"][0]["user_id"] == "sarahconnor"
+    assert data["items"][0]["department"] == "Security"
+
+    # Case-insensitive department search with leading/trailing spaces
+    res_lower = client.get("/api/admin-users/available-users?search=  security  ")
+    assert res_lower.status_code == 200
+    assert res_lower.json()["total"] == 1
+    assert res_lower.json()["items"][0]["user_id"] == "sarahconnor"
+
+    # Non-matching department search
+    res_nomatch = client.get("/api/admin-users/available-users?search=NonExistentDepartment999")
+    assert res_nomatch.status_code == 200
+    assert res_nomatch.json()["total"] == 0
+    assert len(res_nomatch.json()["items"]) == 0
+
+
+def test_available_users_pagination_parameter_validation(client: TestClient):
+    """
+    Requirement 2: Validate query parameters:
+    - page: min 1
+    - page_size: min 1, max 100
+    Invalid parameters should return HTTP 422.
+    """
+    # page < 1
+    res_page_0 = client.get("/api/admin-users/available-users?page=0")
+    assert res_page_0.status_code == 422
+
+    res_page_neg = client.get("/api/admin-users/available-users?page=-1")
+    assert res_page_neg.status_code == 422
+
+    # page_size < 1
+    res_size_0 = client.get("/api/admin-users/available-users?page_size=0")
+    assert res_size_0.status_code == 422
+
+    res_size_neg = client.get("/api/admin-users/available-users?page_size=-5")
+    assert res_size_neg.status_code == 422
+
+    # page_size > 100
+    res_size_101 = client.get("/api/admin-users/available-users?page_size=101")
+    assert res_size_101.status_code == 422
+
+    # page_size non-integer string
+    res_size_str = client.get("/api/admin-users/available-users?page_size=invalid")
+    assert res_size_str.status_code == 422
+
+    # Valid boundary values: page=1, page_size=1 and page_size=100
+    res_size_1 = client.get("/api/admin-users/available-users?page=1&page_size=1")
+    assert res_size_1.status_code == 200
+    assert res_size_1.json()["page_size"] == 1
+
+    res_size_100 = client.get("/api/admin-users/available-users?page=1&page_size=100")
+    assert res_size_100.status_code == 200
+    assert res_size_100.json()["page_size"] == 100
+
+
+def test_available_users_server_side_pagination_and_count(client: TestClient, db_session: Session):
+    """
+    Requirements 2, 3, 4:
+    Seed multiple active employees and verify server-side page navigation,
+    limit/offset calculations, and exact total count consistency.
+    """
+    from datetime import datetime, timezone
+    from app.models.workday_employee import WorkdayEmployee
+
+    now_utc = datetime.now(timezone.utc)
+    new_emps = [
+        WorkdayEmployee(
+            employee_id=50,
+            user_id="alice_active",
+            full_name="Alice Active",
+            email_work="alice@enterprise.com",
+            department="DevOps",
+            employee_status="ACTIVE",
+            created_at=now_utc,
+        ),
+        WorkdayEmployee(
+            employee_id=51,
+            user_id="bob_active",
+            full_name="Bob Active",
+            email_work="bob@enterprise.com",
+            department="DevOps",
+            employee_status="Active",
+            created_at=now_utc,
+        ),
+        WorkdayEmployee(
+            employee_id=52,
+            user_id="carol_active",
+            full_name="Carol Active",
+            email_work="carol@enterprise.com",
+            department="DevOps",
+            employee_status="active",
+            created_at=now_utc,
+        ),
+        WorkdayEmployee(
+            employee_id=53,
+            user_id="dave_inactive",
+            full_name="Dave Inactive",
+            email_work="dave@enterprise.com",
+            department="DevOps",
+            employee_status="INACTIVE",
+            created_at=now_utc,
+        ),
+    ]
+    db_session.add_all(new_emps)
+    db_session.commit()
+
+    # Search for 'DevOps': should only find alice, bob, carol (3 total, dave is inactive)
+    res_search = client.get("/api/admin-users/available-users?search=DevOps&page=1&page_size=2")
+    assert res_search.status_code == 200
+    d_search = res_search.json()
+    assert d_search["total"] == 3
+    assert d_search["total_pages"] == 2
+    assert d_search["page"] == 1
+    assert d_search["page_size"] == 2
+    assert len(d_search["items"]) == 2
+
+    # Page 2
+    res_search_p2 = client.get("/api/admin-users/available-users?search=DevOps&page=2&page_size=2")
+    assert res_search_p2.status_code == 200
+    d_search_p2 = res_search_p2.json()
+    assert d_search_p2["page"] == 2
+    assert len(d_search_p2["items"]) == 1
+    assert d_search_p2["total"] == 3
+
+    # Ensure no overlap between page 1 and page 2
+    p1_users = {u["user_id"] for u in d_search["items"]}
+    p2_users = {u["user_id"] for u in d_search_p2["items"]}
+    assert p1_users.isdisjoint(p2_users)
+    assert p1_users | p2_users == {"alice_active", "bob_active", "carol_active"}
+
 

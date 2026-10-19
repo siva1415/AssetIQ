@@ -60,6 +60,17 @@ function getInitialAuthState(): boolean {
   return false;
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'assetiq_sidebar_collapsed';
+
+function getInitialSidebarCollapsed(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 interface AppContextType {
   mockMode: boolean;
   setMockMode: (val: boolean) => void;
@@ -74,6 +85,9 @@ interface AppContextType {
   isAuthenticated: boolean;
   login: (username: string, password: string) => boolean;
   logout: () => void;
+  sidebarCollapsed: boolean;
+  setSidebarCollapsed: (val: boolean) => void;
+  toggleSidebarCollapse: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -84,6 +98,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [mockMode, setMockModeState] = useState<boolean>(getInitialMockMode);
   const [apiBaseUrl, setApiBaseUrlState] = useState<string>(getApiBaseUrl);
   const [dataRefreshKey, setDataRefreshKey] = useState<number>(0);
+  const [sidebarCollapsed, setSidebarCollapsedState] = useState<boolean>(getInitialSidebarCollapsed);
   const [health, setHealth] = useState<HealthState>({
     status: 'checking',
     data: null,
@@ -91,6 +106,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     latencyMs: null,
     lastChecked: null,
   });
+
+  const setSidebarCollapsed = (val: boolean) => {
+    setSidebarCollapsedState(val);
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(val));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const toggleSidebarCollapse = () => {
+    setSidebarCollapsedState(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  };
 
   const setCurrentUser = (user: LoggedInUser) => {
     setCurrentUserState(user);
@@ -223,6 +259,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isAuthenticated,
         login,
         logout,
+        sidebarCollapsed,
+        setSidebarCollapsed,
+        toggleSidebarCollapse,
       }}
     >
       {children}

@@ -5,21 +5,19 @@ import {
   UserRoundPen,
   CheckCircle2,
   AlertTriangle,
+  AlertCircle,
+  Users,
   Loader2,
   HardDrive,
-  User,
-  Building,
-  Briefcase,
   ChevronLeft,
   ChevronRight,
-  ArrowUpDown,
   RefreshCw,
 } from 'lucide-react';
 import { Asset, Employee, ASSET_STATUSES } from '../../types';
 import { api } from '../../services/api';
 import { SourceBadge } from '../common/SourceBadge';
-import { StatusBadge } from '../common/StatusBadge';
 import { CopyButton } from '../common/CopyButton';
+import { SelectableEmployeeCard } from '../employees/SelectableEmployeeCard';
 
 interface AssignAssetModalProps {
   asset: Asset;
@@ -186,22 +184,42 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
     asset.matched_employee,
   ]);
 
-  // Debounce search input to avoid spamming the backend API
-  useEffect(() => {
-    if (isFirstSearchRef.current) {
-      isFirstSearchRef.current = false;
-      return;
+  // Debounce search in modal (300ms)
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    setPage(1);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
     }
-    const timer = setTimeout(() => {
-      setDebouncedSearch(searchQuery.trim());
-      setPage(1);
+    searchTimeoutRef.current = setTimeout(() => {
+      setDebouncedSearch(value.trim());
     }, 300);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
+  };
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    setDebouncedSearch('');
+    setPage(1);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Stale request tracking
+  const fetchReqIdRef = useRef<number>(0);
 
   // Fetch Workday employees with pagination and sorting
   const fetchEmployees = useCallback(async () => {
-    let isMounted = true;
+    const reqId = ++fetchReqIdRef.current;
     setLoadingEmployees(true);
     setEmployeesError(null);
 
@@ -215,7 +233,7 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
         sort_order: sortOrder,
       });
 
-      if (!isMounted) return;
+      if (reqId !== fetchReqIdRef.current) return;
       setEmployees(res.items);
       setTotalCount(res.total);
       setTotalPages(res.total_pages || Math.max(1, Math.ceil(res.total / pageSize)));
@@ -234,17 +252,15 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
         }
       }
     } catch (err: any) {
-      if (!isMounted) return;
+      if (reqId !== fetchReqIdRef.current) return;
       setEmployeesError(
         err?.message || 'Failed to load Workday employee directory. Please check your connection.'
       );
     } finally {
-      if (isMounted) setLoadingEmployees(false);
+      if (reqId === fetchReqIdRef.current) {
+        setLoadingEmployees(false);
+      }
     }
-
-    return () => {
-      isMounted = false;
-    };
   }, [
     page,
     pageSize,
@@ -259,14 +275,19 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
     fetchEmployees();
   }, [fetchEmployees]);
 
-  const handleSort = (field: string) => {
-    if (sortBy === field) {
-      setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortBy(field);
-      setSortOrder('asc');
+  const startIndex = totalCount > 0 ? (page - 1) * pageSize + 1 : 0;
+  const endIndex = totalCount > 0 ? Math.min(page * pageSize, totalCount) : 0;
+
+  const handlePrevPage = () => {
+    if (page > 1 && !loadingEmployees) {
+      setPage(p => p - 1);
     }
-    setPage(1);
+  };
+
+  const handleNextPage = () => {
+    if (page < totalPages && !loadingEmployees) {
+      setPage(p => p + 1);
+    }
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -451,12 +472,13 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
             </div>
           )}
 
-          {/* Field A: Group (Mandatory Dropdown) */}
-          <div className="space-y-1.5">
-            <label htmlFor="group-select" className="block text-xs font-bold text-slate-800">
-              Group <span className="text-rose-500">*</span>
-            </label>
-            <div className="w-full sm:w-72">
+          {/* Assignment Configuration: Managed By and Remarks in parallel on desktop */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+            {/* Managed By Group (Mandatory Dropdown) */}
+            <div className="md:col-span-4 space-y-1.5">
+              <label htmlFor="group-select" className="block text-xs font-bold text-slate-800">
+                Managed By <span className="text-rose-500">*</span>
+              </label>
               <select
                 id="group-select"
                 value={group}
@@ -468,22 +490,49 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
                 <option value="GROUP">GROUP</option>
               </select>
             </div>
+
+            {/* Remarks Text Box beside Managed By */}
+            <div className="md:col-span-8 space-y-1.5">
+              <label htmlFor="remarks-textarea" className="block text-xs font-bold text-slate-800">
+                Remarks
+              </label>
+              <textarea
+                id="remarks-textarea"
+                rows={2}
+                value={remarks}
+                onChange={e => setRemarks(e.target.value)}
+                placeholder="Enter assignment remarks (optional)"
+                className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-md shadow-2xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-400 resize-none"
+              />
+            </div>
           </div>
 
           {/* Field B: Selected User (Workday User Selector) */}
-          <div className="space-y-2">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+          <div className="space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
               <label className="block text-xs font-bold text-slate-800">
                 Selected User <span className="text-rose-500">*</span>
               </label>
 
               {/* Selected User Indicator */}
               {selectedUser ? (
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200 rounded-md text-xs text-emerald-900 font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>
-                    Selected: <strong>{selectedUser.full_name}</strong> (<span className="font-mono">{selectedUser.user_id}</span>)
-                  </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedUserId(null);
+                      setSelectedUser(null);
+                    }}
+                    className="text-[11px] text-slate-500 hover:text-slate-800 underline cursor-pointer"
+                  >
+                    Clear Selection
+                  </button>
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200 rounded-md text-xs text-emerald-900 font-medium">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>
+                      Selected: <strong>{selectedUser.full_name}</strong> (<span className="font-mono">{selectedUser.user_id}</span>)
+                    </span>
+                  </div>
                 </div>
               ) : (
                 <span className="text-[11px] text-amber-700 font-medium">
@@ -494,229 +543,139 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
 
             {/* Search Input for Employees */}
             <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+              <Search className="absolute left-3.5 top-2.5 w-4 h-4 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search by name, user ID, or work email"
+                placeholder="Search by name, user ID, email, or department"
                 value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 border border-slate-300 rounded-md focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-400"
+                onChange={e => handleSearchChange(e.target.value)}
+                className="w-full pl-10 pr-9 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800 placeholder-slate-400"
               />
               {searchQuery && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setSearchQuery('');
-                    setDebouncedSearch('');
-                    setPage(1);
-                  }}
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                  onClick={handleClearSearch}
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
                   aria-label="Clear employee search"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="w-4 h-4" />
                 </button>
               )}
             </div>
 
-            {/* Selectable Employee Table */}
-            <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
-              {loadingEmployees ? (
-                <div className="p-8 text-center text-xs text-slate-500 flex flex-col items-center justify-center gap-2">
-                  <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
-                  <span>Loading Workday employee records...</span>
+            {/* Selectable Employee Card List */}
+            <div className="border border-slate-200 rounded-lg overflow-hidden bg-slate-50/30">
+              <div className="p-2.5 max-h-72 sm:max-h-80 overflow-y-auto">
+                {loadingEmployees && employees.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-slate-500 space-y-2.5 bg-white rounded-lg border border-slate-100">
+                    <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                    <span className="text-xs font-medium">Loading Workday employee records...</span>
+                  </div>
+                ) : employeesError && employees.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 px-4 text-center bg-white rounded-lg border border-slate-100">
+                    <AlertCircle className="w-8 h-8 text-rose-500 mb-2" />
+                    <h4 className="text-xs font-semibold text-slate-800">Unable to load employee records</h4>
+                    <p className="text-[11px] text-slate-500 max-w-sm mt-1 mb-3">
+                      {employeesError}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => fetchEmployees()}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md shadow-xs transition-colors cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Retry Request</span>
+                    </button>
+                  </div>
+                ) : employees.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 px-4 text-center bg-white rounded-lg border border-slate-100">
+                    <Users className="w-8 h-8 text-slate-300 mb-2" />
+                    <h4 className="text-xs font-semibold text-slate-800">
+                      {debouncedSearch ? 'No matching employees found' : 'No available employees'}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 max-w-sm mt-1 mb-3">
+                      {debouncedSearch
+                        ? `No active Workday employees match "${debouncedSearch}". Try searching by another name, user ID, email, or department.`
+                        : 'No active employee records were returned.'}
+                    </p>
+                    {debouncedSearch && (
+                      <button
+                        type="button"
+                        onClick={handleClearSearch}
+                        className="px-3 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium transition-colors cursor-pointer"
+                      >
+                        Clear Search
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className={`space-y-2 relative transition-opacity duration-150 ${loadingEmployees ? 'opacity-60 pointer-events-none' : ''}`}>
+                    {employees.map(emp => {
+                      const isSelected = Boolean(
+                        (selectedUserId && emp.user_id.toLowerCase() === selectedUserId.toLowerCase()) ||
+                        (selectedUser && emp.user_id.toLowerCase() === selectedUser.user_id.toLowerCase())
+                      );
+
+                      return (
+                        <SelectableEmployeeCard
+                          key={emp.user_id}
+                          fullName={emp.full_name}
+                          userId={emp.user_id}
+                          jobTitle={emp.job_title}
+                          workEmail={emp.work_email || (emp as any).email_work}
+                          department={emp.department}
+                          isSelected={isSelected}
+                          onSelect={() => handleSelectEmployee(emp)}
+                          selectionType="radio"
+                          name="selectedWorkdayUser"
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Pagination footer */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2 px-3 py-2.5 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
+                <div className="text-[11px]">
+                  {totalCount > 0 ? (
+                    <>
+                      Showing <span className="font-semibold text-slate-900">{startIndex}</span> to{' '}
+                      <span className="font-semibold text-slate-900">{endIndex}</span> of{' '}
+                      <span className="font-semibold text-slate-900">{totalCount}</span> employees
+                    </>
+                  ) : (
+                    <span>Showing 0 employees</span>
+                  )}
                 </div>
-              ) : employeesError ? (
-                <div className="p-6 text-center text-xs text-rose-600 flex flex-col items-center gap-2">
-                  <span>{employeesError}</span>
+
+                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => fetchEmployees()}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors"
+                    onClick={handlePrevPage}
+                    disabled={page <= 1 || loadingEmployees || totalCount === 0}
+                    className="p-1 border border-slate-200 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    aria-label="Previous page"
+                    title="Previous page"
                   >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Retry</span>
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-[11px] font-medium px-2">
+                    Page {totalCount > 0 ? page : 1} of {Math.max(1, totalPages)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleNextPage}
+                    disabled={page >= totalPages || loadingEmployees || totalCount === 0}
+                    className="p-1 border border-slate-200 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    aria-label="Next page"
+                    title="Next page"
+                  >
+                    <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
-              ) : employees.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-500">
-                  No Workday employees match &ldquo;{searchQuery}&rdquo;.
-                </div>
-              ) : (
-                <>
-                  <div className="overflow-x-auto max-h-56 overflow-y-auto">
-                    <table className="w-full text-xs text-left border-collapse">
-                      <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-10 text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
-                        <tr>
-                          <th className="w-10 py-2.5 px-3 text-center">Select</th>
-                          <th
-                            className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors"
-                            onClick={() => handleSort('full_name')}
-                          >
-                            <div className="flex items-center gap-1">
-                              <span>Full Name</span>
-                              <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                            </div>
-                          </th>
-                          <th
-                            className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors"
-                            onClick={() => handleSort('user_id')}
-                          >
-                            <div className="flex items-center gap-1">
-                              <span>User ID</span>
-                              <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                            </div>
-                          </th>
-                          <th
-                            className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors"
-                            onClick={() => handleSort('job_title')}
-                          >
-                            <div className="flex items-center gap-1">
-                              <span>Job Title</span>
-                              <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                            </div>
-                          </th>
-                          <th
-                            className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors"
-                            onClick={() => handleSort('department')}
-                          >
-                            <div className="flex items-center gap-1">
-                              <span>Department</span>
-                              <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                            </div>
-                          </th>
-                          <th className="py-2.5 px-3 text-center">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {employees.map(emp => {
-                          const isSelected = Boolean(
-                            (selectedUserId && emp.user_id.toLowerCase() === selectedUserId.toLowerCase()) ||
-                            (selectedUser && emp.user_id.toLowerCase() === selectedUser.user_id.toLowerCase())
-                          );
-
-                          return (
-                            <tr
-                              key={emp.user_id}
-                              onClick={() => handleSelectEmployee(emp)}
-                              className={`cursor-pointer transition-colors ${
-                                isSelected
-                                  ? 'bg-blue-50/80 hover:bg-blue-100/70'
-                                  : 'hover:bg-slate-50'
-                              }`}
-                            >
-                              {/* Radio selector */}
-                              <td className="py-2 px-3 text-center align-middle">
-                                <input
-                                  type="radio"
-                                  name="selectedWorkdayUser"
-                                  checked={isSelected}
-                                  onChange={() => handleSelectEmployee(emp)}
-                                  className="w-3.5 h-3.5 text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer"
-                                />
-                              </td>
-
-                              {/* 1. Full Name */}
-                              <td className="py-2 px-3 whitespace-nowrap">
-                                <div className="flex items-center gap-1.5 font-medium text-slate-900">
-                                  <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                  <span>{emp.full_name}</span>
-                                </div>
-                              </td>
-
-                              {/* 2. User ID */}
-                              <td className="py-2 px-3 whitespace-nowrap">
-                                <span className="font-mono font-semibold text-blue-700">
-                                  {emp.user_id}
-                                </span>
-                              </td>
-
-                              {/* 3. Job Title */}
-                              <td className="py-2 px-3 whitespace-nowrap text-slate-700">
-                                <div className="flex items-center gap-1">
-                                  <Briefcase className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                  <span className="truncate max-w-[180px]" title={emp.job_title}>
-                                    {emp.job_title || '—'}
-                                  </span>
-                                </div>
-                              </td>
-
-                              {/* 4. Department */}
-                              <td className="py-2 px-3 whitespace-nowrap text-slate-600">
-                                <div className="flex items-center gap-1">
-                                  <Building className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                  <span className="truncate max-w-[160px]" title={emp.department}>
-                                    {emp.department || '—'}
-                                  </span>
-                                </div>
-                              </td>
-
-                              {/* 5. Status */}
-                              <td className="py-2 px-3 text-center whitespace-nowrap">
-                                <StatusBadge
-                                  status={emp.employee_status}
-                                  variant="solid"
-                                  type="employee"
-                                />
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Pagination footer */}
-                  <div className="flex items-center justify-between px-3 py-2 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
-                    <span>
-                      Showing{' '}
-                      <strong>{totalCount === 0 ? 0 : (page - 1) * pageSize + 1}</strong>
-                      –
-                      <strong>{Math.min(page * pageSize, totalCount)}</strong>{' '}
-                      of <strong>{totalCount}</strong> employees
-                    </span>
-
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setPage(p => Math.max(1, p - 1))}
-                        disabled={page <= 1 || loadingEmployees}
-                        className="px-2 py-1 border border-slate-300 rounded bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-0.5 text-xs font-medium transition-colors"
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                        <span>Prev</span>
-                      </button>
-                      <span className="px-2 font-medium">
-                        Page {page} of {totalPages}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                        disabled={page >= totalPages || loadingEmployees}
-                        className="px-2 py-1 border border-slate-300 rounded bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-0.5 text-xs font-medium transition-colors"
-                      >
-                        <span>Next</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
+              </div>
             </div>
-          </div>
-
-          {/* Field C: Remarks (Optional Text Box) */}
-          <div className="space-y-1.5">
-            <label htmlFor="remarks-textarea" className="block text-xs font-bold text-slate-800">
-              Remarks
-            </label>
-            <textarea
-              id="remarks-textarea"
-              rows={2}
-              value={remarks}
-              onChange={e => setRemarks(e.target.value)}
-              placeholder="Enter assignment remarks (optional)"
-              className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-md shadow-2xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-400 resize-none"
-            />
           </div>
         </form>
 

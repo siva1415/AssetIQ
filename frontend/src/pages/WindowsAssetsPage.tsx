@@ -8,6 +8,7 @@ export const WindowsAssetsPage: React.FC = () => {
         initialSourceFilter="BIGFIX"
         hideSourceFilter={true}
         showKPICards={true}
+        exportFilenamePrefix="AssetIQ_Windows_Assets"
       />
     </div>
   );

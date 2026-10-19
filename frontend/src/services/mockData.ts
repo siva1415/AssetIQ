@@ -18,12 +18,17 @@ import {
   AdminUser,
   AdminUserRecord,
   AvailableWorkdayUser,
+  AvailableWorkdayUsersQueryParams,
+  PaginatedAvailableUsersResponse,
   BulkAddAdminUsersResponse,
   ReassignAssetRequest,
   ReassignAssetResponse,
+  BulkAssignAssetsRequest,
+  BulkAssignAssetsResponse,
   ASSET_STATUSES,
   toStandardAssetStatus,
   toStandardEOLStatus,
+  formatEolDate,
 } from '../types';
 
 export const MOCK_EMPLOYEES: Employee[] = [
@@ -424,9 +429,18 @@ export let MOCK_DEVICE_EOL_REFERENCES: DeviceEOLReference[] = [
 
 // Helper to recalculate runtime asset EOL statuses after EOL reference table updates
 export function recalculateAssetEOLFromReferences(): void {
+  const normMfrStr = (mfr: string) => {
+    let lower = (mfr || '').toLowerCase().trim();
+    if (lower.includes('apple')) return 'apple';
+    if (lower.includes('dell')) return 'dell';
+    if (lower.includes('hp')) return 'hp';
+    if (lower.includes('lenovo')) return 'lenovo';
+    return lower;
+  };
+
   const refMap = new Map<string, string>();
   for (const ref of MOCK_DEVICE_EOL_REFERENCES) {
-    const key = `${ref.manufacturer.toLowerCase()}::${ref.model.toLowerCase().trim()}`;
+    const key = `${normMfrStr(ref.manufacturer)}::${ref.model.toLowerCase().trim()}`;
     refMap.set(key, ref.eol_date);
   }
 
@@ -434,13 +448,7 @@ export function recalculateAssetEOLFromReferences(): void {
   today.setHours(0, 0, 0, 0);
 
   for (const asset of MOCK_ASSETS) {
-    // Standardize mfr lookup: 'Apple Inc.' -> 'apple', 'Dell Inc.' -> 'dell', 'HP Inc.' -> 'hp', 'Lenovo' -> 'lenovo'
-    let normMfr = asset.manufacturer.toLowerCase();
-    if (normMfr.includes('apple')) normMfr = 'apple';
-    else if (normMfr.includes('dell')) normMfr = 'dell';
-    else if (normMfr.includes('hp')) normMfr = 'hp';
-    else if (normMfr.includes('lenovo')) normMfr = 'lenovo';
-
+    const normMfr = normMfrStr(asset.manufacturer);
     const key = `${normMfr}::${asset.model.toLowerCase().trim()}`;
     const matchedEolDate = refMap.get(key);
 
@@ -489,15 +497,21 @@ export function getMockEOLReferences(search?: string): DeviceEOLReference[] {
 }
 
 export function createMockEOLReference(data: DeviceEOLReferenceCreate): DeviceEOLReference {
-  const normMfr = data.manufacturer;
+  const normMfr = data.manufacturer.trim();
   const normModel = data.model.trim();
 
   // Check unique constraint on (manufacturer, model)
   const existing = MOCK_DEVICE_EOL_REFERENCES.find(
-    r => r.manufacturer.toLowerCase() === normMfr.toLowerCase() && r.model.toLowerCase() === normModel.toLowerCase()
+    r => r.manufacturer.toLowerCase().trim() === normMfr.toLowerCase() && r.model.toLowerCase().trim() === normModel.toLowerCase()
   );
   if (existing) {
-    throw new Error(`A reference record already exists for ${normMfr} - ${normModel}. Duplicate model combination is not allowed.`);
+    existing.eol_date = data.eol_date;
+    if (data.reference_source) {
+      existing.reference_source = data.reference_source;
+    }
+    existing.updated_at = new Date().toISOString();
+    recalculateAssetEOLFromReferences();
+    return existing;
   }
 
   const maxId = MOCK_DEVICE_EOL_REFERENCES.reduce((max, r) => Math.max(max, r.eol_id), 0);
@@ -506,7 +520,7 @@ export function createMockEOLReference(data: DeviceEOLReferenceCreate): DeviceEO
     manufacturer: normMfr,
     model: normModel,
     eol_date: data.eol_date,
-    reference_source: 'Manual Administrator Entry',
+    reference_source: data.reference_source || 'Manual Administrator Entry',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -585,19 +599,104 @@ export const MOCK_ADMIN_USERS_TABLE: AdminUserRecord[] = [
   },
 ];
 
+// 191 eligible Workday employees for available-users endpoint
+const MOCK_AVAILABLE_DEPARTMENTS = [
+  'Engineering',
+  'Finance',
+  'Security & Compliance',
+  'Sales',
+  'Product',
+  'Human Resources',
+  'Operations',
+  'Legal',
+  'Marketing',
+  'IT Services',
+];
+
+const MOCK_AVAILABLE_JOB_TITLES: Record<string, string[]> = {
+  Engineering: ['Senior Frontend Engineer', 'DevOps Specialist', 'Backend Systems Engineer', 'Cloud Architect', 'QA Automation Engineer', 'Full Stack Developer', 'Site Reliability Engineer'],
+  Finance: ['Senior Financial Analyst', 'Director of Global Finance', 'Accountant', 'Payroll Lead', 'Tax Consultant', 'Treasury Analyst'],
+  'Security & Compliance': ['Lead SecOps Engineer', 'Compliance Officer', 'SOC Analyst', 'Risk Manager', 'InfoSec Auditor', 'Security Architect'],
+  Sales: ['Account Executive', 'Enterprise Sales Director', 'Sales Operations Analyst', 'Customer Success Manager', 'Solutions Consultant'],
+  Product: ['Principal Product Manager', 'Product Designer', 'Technical Program Manager', 'UX Researcher', 'Data Analyst'],
+  'Human Resources': ['HR Business Partner', 'Talent Acquisition Lead', 'People Operations Specialist', 'Benefits Coordinator'],
+  Operations: ['Supply Chain Coordinator', 'Facilities Manager', 'Procurement Specialist', 'Operations Analyst', 'Logistics Coordinator'],
+  Legal: ['Corporate Counsel', 'Contracts Administrator', 'Privacy Specialist', 'Legal Operations Manager'],
+  Marketing: ['Growth Marketing Lead', 'Content Strategist', 'Brand Manager', 'SEO Specialist', 'Demand Gen Specialist'],
+  'IT Services': ['IT Support Specialist', 'Network Administrator', 'Systems Administrator', 'Helpdesk Lead', 'Endpoint Engineer'],
+};
+
+const MOCK_FIRST_NAMES = [
+  'Devan', 'Sarah', 'Alex', 'Elena', 'Marcus', 'Jessica', 'David', 'Rachel', 'Carlos', 'Aisha',
+  'Liam', 'Emma', 'Noah', 'Olivia', 'Ethan', 'Sophia', 'Lucas', 'Mia', 'Mason', 'Amelia',
+  'Oliver', 'Harper', 'Elijah', 'Evelyn', 'James', 'Abigail', 'Benjamin', 'Emily', 'William', 'Elizabeth',
+  'Alexander', 'Mila', 'Michael', 'Ella', 'Daniel', 'Avery', 'Henry', 'Sofia', 'Jackson', 'Camila',
+  'Sebastian', 'Aria', 'Aiden', 'Scarlett', 'Matthew', 'Victoria', 'Samuel', 'Madison', 'Luna', 'Joseph',
+  'Grace', 'Carter', 'Chloe', 'Owen', 'Penelope', 'Wyatt', 'Layla', 'John', 'Riley', 'Jack',
+  'Zoey', 'Luke', 'Nora', 'Jayden', 'Lily', 'Dylan', 'Eleanor', 'Grayson', 'Hannah', 'Levi',
+  'Lillian', 'Isaac', 'Addison', 'Gabriel', 'Aubrey', 'Julian', 'Ellie', 'Mateo', 'Stella', 'Anthony',
+  'Natalie', 'Jaxon', 'Zoe', 'Lincoln', 'Leah', 'Joshua', 'Hazel', 'Christopher', 'Violet', 'Andrew',
+  'Aurora', 'Theodore', 'Savannah', 'Caleb', 'Audrey', 'Ryan', 'Brooklyn', 'Asher', 'Bella', 'Nathan',
+  'Claire', 'Thomas', 'Skylar'
+];
+
+const MOCK_LAST_NAMES = [
+  'Patel', 'Washington', 'Robinson', 'Vance', 'Thorne', 'Chen', 'Miller', 'Green', 'Rodriguez', 'Khan',
+  'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Davis', 'Martinez', 'Hernandez', 'Lopez',
+  'Gonzalez', 'Wilson', 'Anderson', 'Thomas', 'Taylor', 'Moore', 'Jackson', 'Martin', 'Lee', 'Perez',
+  'Thompson', 'White', 'Harris', 'Sanchez', 'Clark', 'Ramirez', 'Lewis', 'Walker', 'Young', 'Allen',
+  'King', 'Wright', 'Scott', 'Torres', 'Nguyen', 'Hill', 'Flores', 'Adams', 'Nelson', 'Baker',
+  'Hall', 'Rivera', 'Campbell', 'Mitchell', 'Carter', 'Roberts'
+];
+
+function build191EligibleEmployees(): AvailableWorkdayUser[] {
+  const result: AvailableWorkdayUser[] = [];
+  const registeredAdmins = new Set(MOCK_ADMIN_USERS_TABLE.map(a => a.admin_user_id.toLowerCase()));
+  let idx = 0;
+
+  while (result.length < 191) {
+    const f = MOCK_FIRST_NAMES[idx % MOCK_FIRST_NAMES.length];
+    const l = MOCK_LAST_NAMES[Math.floor(idx / MOCK_FIRST_NAMES.length) % MOCK_LAST_NAMES.length];
+    const uid = (f[0] + l).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const dept = MOCK_AVAILABLE_DEPARTMENTS[idx % MOCK_AVAILABLE_DEPARTMENTS.length];
+    const titles = MOCK_AVAILABLE_JOB_TITLES[dept];
+    const title = titles[idx % titles.length];
+    idx++;
+
+    if (registeredAdmins.has(uid) || result.some(u => u.user_id.toLowerCase() === uid)) {
+      continue;
+    }
+
+    result.push({
+      user_id: uid,
+      full_name: `${f} ${l}`,
+      email_work: `${uid}@enterprise.corp`,
+      department: dept,
+      job_title: title,
+      employee_status: 'Active',
+      is_admin: false,
+    });
+  }
+
+  return result;
+}
+
+export const MOCK_AVAILABLE_191_USERS: AvailableWorkdayUser[] = build191EligibleEmployees();
+
 export function getMockAdminUsers(search?: string): AdminUser[] {
   // Join admin_users with workday_employees: admin_users.admin_user_id = workday_employees.user_id
   let results: AdminUser[] = MOCK_ADMIN_USERS_TABLE.map(admin => {
-    const emp = MOCK_EMPLOYEES.find(
-      e => e.user_id.toLowerCase() === admin.admin_user_id.toLowerCase()
-    );
+    const emp =
+      MOCK_EMPLOYEES.find(e => e.user_id.toLowerCase() === admin.admin_user_id.toLowerCase()) ||
+      MOCK_AVAILABLE_191_USERS.find(e => e.user_id.toLowerCase() === admin.admin_user_id.toLowerCase());
+
     return {
       admin_id: admin.admin_id,
       admin_user_id: admin.admin_user_id,
       created_at: admin.created_at,
       updated_at: admin.updated_at,
       full_name: emp ? emp.full_name : null,
-      email_work: emp ? emp.work_email : null,
+      email_work: emp ? (emp as any).work_email ?? (emp as any).email_work ?? null : null,
       department: emp ? emp.department : null,
       division: emp ? emp.division : null,
       job_title: emp ? emp.job_title : null,
@@ -621,25 +720,19 @@ export function getMockAdminUsers(search?: string): AdminUser[] {
   return results;
 }
 
-export function getMockAvailableWorkdayUsers(search?: string): AvailableWorkdayUser[] {
-  let list: AvailableWorkdayUser[] = MOCK_EMPLOYEES.map(emp => {
-    const isAdmin = MOCK_ADMIN_USERS_TABLE.some(
-      a => a.admin_user_id.toLowerCase() === emp.user_id.toLowerCase()
-    );
-    return {
-      user_id: emp.user_id,
-      full_name: emp.full_name,
-      email_work: emp.work_email,
-      department: emp.department,
-      division: emp.division,
-      job_title: emp.job_title,
-      employee_status: emp.employee_status,
-      is_admin: isAdmin,
-    };
-  });
+export function getMockAvailableWorkdayUsers(
+  params?: string | AvailableWorkdayUsersQueryParams
+): PaginatedAvailableUsersResponse {
+  const search = typeof params === 'string' ? params : params?.search;
+  const page = typeof params === 'object' && params?.page ? Math.max(1, params.page) : 1;
+  const pageSize = typeof params === 'object' && params?.page_size ? Math.max(1, params.page_size) : 10;
 
-  // Backend filters out users already listed as admins and only includes active Workday employees
-  list = list.filter(u => !u.is_admin && (u.employee_status || '').toLowerCase() === 'active');
+  const currentAdminIds = new Set(MOCK_ADMIN_USERS_TABLE.map(a => a.admin_user_id.toLowerCase()));
+
+  // Filter out users already added as admins and keep active users
+  let list = MOCK_AVAILABLE_191_USERS.filter(
+    u => !currentAdminIds.has(u.user_id.toLowerCase()) && (u.employee_status || '').toLowerCase() === 'active'
+  );
 
   if (search && search.trim() !== '') {
     const q = search.trim().toLowerCase();
@@ -647,13 +740,26 @@ export function getMockAvailableWorkdayUsers(search?: string): AvailableWorkdayU
       u =>
         u.user_id.toLowerCase().includes(q) ||
         u.full_name.toLowerCase().includes(q) ||
-        u.email_work.toLowerCase().includes(q)
+        u.email_work.toLowerCase().includes(q) ||
+        (u.department && u.department.toLowerCase().includes(q))
     );
   }
 
   // Sort alphabetically by full name
   list.sort((a, b) => a.full_name.localeCompare(b.full_name));
-  return list;
+
+  const total = list.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const startIndex = (page - 1) * pageSize;
+  const items = list.slice(startIndex, startIndex + pageSize);
+
+  return {
+    items,
+    total,
+    page,
+    page_size: pageSize,
+    total_pages: totalPages,
+  };
 }
 
 export function bulkAddMockAdminUsers(userIds: string[]): BulkAddAdminUsersResponse {
@@ -664,10 +770,11 @@ export function bulkAddMockAdminUsers(userIds: string[]): BulkAddAdminUsersRespo
     const trimmed = uid.trim();
     if (!trimmed) continue;
 
-    // Validate that user exists in workday_employees
-    const employeeExists = MOCK_EMPLOYEES.some(
-      e => e.user_id.toLowerCase() === trimmed.toLowerCase()
-    );
+    // Validate that user exists in workday employees
+    const employeeExists =
+      MOCK_EMPLOYEES.some(e => e.user_id.toLowerCase() === trimmed.toLowerCase()) ||
+      MOCK_AVAILABLE_191_USERS.some(e => e.user_id.toLowerCase() === trimmed.toLowerCase());
+
     if (!employeeExists) {
       skipped.push(trimmed);
       continue;
@@ -778,6 +885,81 @@ export function reassignMockAsset(
     notes: asset.notes,
     updated_at: new Date().toISOString(),
     message: `Asset ${asset.asset_number} successfully assigned to ${emp.full_name} (${emp.user_id}).`,
+  };
+}
+
+export function bulkAssignMockAssets(
+  data: BulkAssignAssetsRequest
+): BulkAssignAssetsResponse {
+  // Verify employee exists in workday_employees
+  const emp = MOCK_EMPLOYEES.find(
+    e => e.user_id.toLowerCase() === data.user_id.toLowerCase().trim()
+  );
+  if (!emp) {
+    throw new Error(`Workday employee with user ID '${data.user_id}' was not found.`);
+  }
+
+  // Validate managed_by
+  const normManagedBy = data.managed_by?.trim().toUpperCase();
+  if (normManagedBy !== 'INDIVIDUAL' && normManagedBy !== 'GROUP') {
+    throw new Error(`Invalid managed_by value '${data.managed_by}'. Must be 'INDIVIDUAL' or 'GROUP'.`);
+  }
+
+  const successful: (string | number)[] = [];
+  const failed: (string | number)[] = [];
+
+  for (const assetId of data.asset_ids) {
+    const normAssetId = String(assetId).trim();
+    const asset = MOCK_ASSETS.find(
+      a => String(a.id) === normAssetId || a.asset_number === normAssetId
+    );
+    if (!asset) {
+      failed.push(assetId);
+      continue;
+    }
+
+    // Update existing asset record
+    asset.assigned_username = emp.user_id;
+    asset.assignedUsername = emp.user_id;
+    asset.managed_by = normManagedBy;
+    asset.managedBy = normManagedBy;
+    asset.assignment_type = 'Manual';
+    asset.assignmentType = 'Manual';
+
+    // Update verified Workday identity details
+    asset.verified_employee_id = emp.employee_id;
+    asset.verified_employee_name = emp.full_name;
+    asset.full_name = emp.full_name;
+    asset.email_work = emp.work_email;
+    asset.work_email = emp.work_email;
+    asset.department = emp.department;
+    asset.division = emp.division;
+    asset.job_title = emp.job_title;
+    asset.manager_user_name = emp.manager_username;
+    asset.manager_username = emp.manager_username;
+    asset.managerUsername = emp.manager_username;
+    asset.manager_name = emp.manager_name;
+    asset.employee_status = emp.employee_status;
+    asset.workday_status = 'Matched';
+
+    // Manual assignment must update operational asset status to ACTIVE
+    asset.asset_status = ASSET_STATUSES.ACTIVE;
+    asset.assetStatus = ASSET_STATUSES.ACTIVE;
+
+    // Persist remarks
+    if (data.remarks !== undefined) {
+      asset.notes = data.remarks.trim();
+      asset.remarks = data.remarks.trim();
+    }
+
+    successful.push(asset.id);
+  }
+
+  return {
+    assigned_count: successful.length,
+    successful_asset_ids: successful,
+    failed_asset_ids: failed,
+    message: `Successfully assigned ${successful.length} asset${successful.length === 1 ? '' : 's'} to ${emp.full_name} (${emp.user_id}).`,
   };
 }
 
@@ -1729,3 +1911,106 @@ export const MOCK_HEALTH: HealthResponse = {
   workday_status: 'Connected (Daily sync ok)',
   eol_warning_threshold_days: 90,
 };
+
+export function generateMockAssetsCsvExport(params: AssetQueryParams): {
+  blob: Blob;
+  count: number;
+} {
+  const filtered = filterAndPaginateAssets({ ...params, page: 1, page_size: 100000 });
+  if (filtered.items.length === 0) {
+    return {
+      blob: new Blob([''], { type: 'text/csv;charset=utf-8;' }),
+      count: 0,
+    };
+  }
+
+  const headers = [
+    'Asset',
+    'Source',
+    'DeviceType',
+    'Manufacturer',
+    'Model',
+    'SerialNumber',
+    'Operating System',
+    'MacAddress',
+    'Computer ID',
+    'Asset Status',
+    'EOL Expiry Date',
+    'EOL Status',
+    'EOL Days Remaining',
+    'Managed By',
+    'Assigned UserID',
+    'Assigned UserName',
+    'Department',
+  ];
+
+  const escapeField = (val: any): string => {
+    if (val === null || val === undefined) return '';
+    const str = String(val);
+    if (/[",\r\n]/.test(str)) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  const headerRow = headers.map(escapeField).join(',');
+
+  const rows = filtered.items.map(asset => {
+    const assetNum = asset.asset_number || asset.assetNumber || asset.id || '';
+    const source = asset.source || '';
+    const devType = (asset.devicetype || asset.device_type || '').toString().trim();
+    const manufacturer = asset.manufacturer || '';
+    const model = asset.model || '';
+    const serial = asset.serial_number || asset.serialNumber || '';
+    const os = asset.os_name || asset.osName || (asset as any).osname || (source === 'JAMF' ? 'macOS Sonoma 14.5' : 'Windows 11 Enterprise 23H2');
+    const mac = asset.mac_address || asset.macAddress || (asset as any).macaddress || '—';
+    const compId = (asset as any).computer_id ?? (asset as any).computerId ?? asset.id ?? '';
+    const status = asset.asset_status || 'ACTIVE';
+    const eolDate = asset.eol_date ? formatEolDate(asset.eol_date) : (asset.eolDate ? formatEolDate(asset.eolDate) : '—');
+    const eolStatus = asset.eol_status || asset.calculated_eol_status || 'UNKNOWN';
+    const daysRem = asset.days_remaining !== null && asset.days_remaining !== undefined
+      ? String(asset.days_remaining)
+      : (asset.daysRemaining !== null && asset.daysRemaining !== undefined ? String(asset.daysRemaining) : '');
+
+    let managedBy = 'INDIVIDUAL';
+    if (asset.managed_by) {
+      const mb = asset.managed_by.toUpperCase();
+      if (mb.includes('GROUP') || mb.includes('SERVER') || mb.includes('DATACENTER') || mb.includes('POOL') || devType === 'Server' || asset.assignment_type === 'Unassigned') {
+        managedBy = 'GROUP';
+      }
+    } else if (devType === 'Server' || asset.assignment_type === 'Unassigned') {
+      managedBy = 'GROUP';
+    }
+
+    const assignedUserId = asset.assigned_username || (asset.assignment_type === 'Unassigned' ? '' : '');
+    const assignedUserName = asset.verified_employee_name || asset.verifiedEmployeeName || (asset.assignment_type === 'Unassigned' ? 'Unassigned' : asset.assigned_username || 'Unassigned');
+    const dept = asset.department || '';
+
+    return [
+      assetNum,
+      source,
+      devType,
+      manufacturer,
+      model,
+      serial,
+      os,
+      mac,
+      compId,
+      status,
+      eolDate,
+      eolStatus,
+      daysRem,
+      managedBy,
+      assignedUserId,
+      assignedUserName,
+      dept,
+    ].map(escapeField).join(',');
+  });
+
+  const csvContent = '\uFEFF' + [headerRow, ...rows].join('\r\n');
+  return {
+    blob: new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }),
+    count: filtered.items.length,
+  };
+}
+

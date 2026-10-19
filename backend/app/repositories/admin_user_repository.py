@@ -30,15 +30,16 @@ class AdminUserRepository:
     def list_available_users(
         db: Session,
         page: int = 1,
-        page_size: int = 25,
+        page_size: int = 10,
         search: Optional[str] = None,
         user_id: Optional[str] = None,
         full_name: Optional[str] = None,
         email: Optional[str] = None,
+        department: Optional[str] = None,
     ) -> Tuple[List[WorkdayEmployee], int]:
         """
         Retrieves employees from workday_employees who are not in admin_users,
-        supporting search (user_id, full_name, email_work) and pagination.
+        supporting search (user_id, full_name, email_work, department) and pagination.
         """
         admin_subq = select(func.lower(func.trim(AdminUser.admin_user_id))).where(
             AdminUser.admin_user_id.isnot(None)
@@ -53,9 +54,10 @@ class AdminUserRepository:
             term = f"%{search.strip().lower()}%"
             base_query = base_query.where(
                 or_(
-                    func.lower(WorkdayEmployee.user_id).like(term),
-                    func.lower(WorkdayEmployee.full_name).like(term),
-                    func.lower(WorkdayEmployee.email_work).like(term),
+                    func.lower(func.coalesce(WorkdayEmployee.user_id, "")).like(term),
+                    func.lower(func.coalesce(WorkdayEmployee.full_name, "")).like(term),
+                    func.lower(func.coalesce(WorkdayEmployee.email_work, "")).like(term),
+                    func.lower(func.coalesce(WorkdayEmployee.department, "")).like(term),
                 )
             )
 
@@ -70,6 +72,10 @@ class AdminUserRepository:
         if email and email.strip():
             base_query = base_query.where(
                 func.lower(WorkdayEmployee.email_work).like(f"%{email.strip().lower()}%")
+            )
+        if department and department.strip():
+            base_query = base_query.where(
+                func.lower(WorkdayEmployee.department).like(f"%{department.strip().lower()}%")
             )
 
         count_stmt = select(func.count()).select_from(base_query.order_by(None).subquery())

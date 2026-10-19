@@ -100,15 +100,22 @@ class EolService:
         return EolReferenceResponse.model_validate(record)
 
     @classmethod
-    def create_reference(cls, db: Session, data: EolReferenceCreate) -> EolReferenceResponse:
-        record = EolRepository.create_reference(
+    def upsert_reference(
+        cls, db: Session, data: EolReferenceCreate
+    ) -> Tuple[EolReferenceResponse, bool]:
+        record, is_created = EolRepository.upsert_reference(
             db=db,
             manufacturer=data.manufacturer,
             model=data.model,
             eol_date=data.eol_date,
             reference_source=data.reference_source,
         )
-        return EolReferenceResponse.model_validate(record)
+        return EolReferenceResponse.model_validate(record), is_created
+
+    @classmethod
+    def create_reference(cls, db: Session, data: EolReferenceCreate) -> EolReferenceResponse:
+        response, _ = cls.upsert_reference(db=db, data=data)
+        return response
 
     @classmethod
     def update_reference(cls, db: Session, eol_id: int, data: EolReferenceUpdate) -> Optional[EolReferenceResponse]:

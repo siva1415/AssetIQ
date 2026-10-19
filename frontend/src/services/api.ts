@@ -31,10 +31,16 @@ import {
   EmployeeQueryParams,
   AdminUser,
   AvailableWorkdayUser,
+  AvailableWorkdayUsersQueryParams,
+  PaginatedAvailableUsersResponse,
   BulkAddAdminUsersRequest,
   BulkAddAdminUsersResponse,
   ReassignAssetRequest,
   ReassignAssetResponse,
+  BulkAssignAssetsRequest,
+  BulkAssignAssetsResponse,
+  AssetExportParams,
+  AssetExportResponse,
 } from '../types';
 import {
   MOCK_ASSETS,
@@ -58,6 +64,8 @@ import {
   bulkAddMockAdminUsers,
   deleteMockAdminUser,
   reassignMockAsset,
+  bulkAssignMockAssets,
+  generateMockAssetsCsvExport,
 } from './mockData';
 
 // Storage keys
@@ -400,8 +408,10 @@ export function normalizeAvailableWorkdayUser(raw: any): AvailableWorkdayUser {
   const department = String(raw.department ?? raw.dept ?? raw.division ?? '—').trim();
   const division = raw.division ? String(raw.division).trim() : undefined;
   const jobTitle = raw.job_title ?? raw.jobTitle ?? raw.title ?? raw.position;
-  const employeeStatus = String(raw.employee_status ?? raw.employeeStatus ?? raw.status ?? 'Active').trim();
-  const isAdmin = Boolean(raw.is_admin ?? raw.isAdmin ?? false);
+  const rawStatus = raw.employee_status ?? raw.employeeStatus ?? raw.status;
+  const employeeStatus = rawStatus !== undefined && rawStatus !== null ? String(rawStatus).trim() : 'Active';
+  const rawIsAdmin = raw.is_admin ?? raw.isAdmin;
+  const isAdmin = rawIsAdmin === true || rawIsAdmin === 'true' || rawIsAdmin === 1 || rawIsAdmin === '1';
 
   return {
     user_id: userId,
@@ -1443,6 +1453,129 @@ class ApiService {
     };
   }
 
+  // Export standardized CSV report from backend export endpoint
+  public async exportAssetsCsv(params: AssetExportParams): Promise<AssetExportResponse> {
+    const queryParams: any = { ...params };
+    delete queryParams.page;
+    delete queryParams.page_size;
+
+    if (params.devicetype && !queryParams.device_type) {
+      queryParams.device_type = params.devicetype;
+    }
+    if (params.device_type && !queryParams.devicetype) {
+      queryParams.devicetype = params.device_type;
+    }
+
+    if (queryParams.assignment_type) {
+      const aType = String(queryParams.assignment_type).trim().toLowerCase();
+      if (aType === 'auto' || aType === 'automatic') {
+        queryParams.assignment_type = 'Auto';
+      } else if (aType === 'manual') {
+        queryParams.assignment_type = 'Manual';
+      } else {
+        delete queryParams.assignment_type;
+      }
+    } else {
+      delete queryParams.assignment_type;
+    }
+
+    if (queryParams.asset_status) {
+      const s = String(queryParams.asset_status).trim().toUpperCase().replace(/_/g, ' ');
+      if (s === 'REVIEW' || s === 'NEED VALIDATION' || s === 'NEEDVALIDATION') {
+        queryParams.asset_status = 'REVIEW';
+      } else if (s === 'ACTIVE') {
+        queryParams.asset_status = 'ACTIVE';
+      } else if (s === 'IN STOCK' || s === 'INSTOCK') {
+        queryParams.asset_status = 'IN STOCK';
+      } else if (s === 'RETIRED') {
+        queryParams.asset_status = 'RETIRED';
+      }
+    }
+
+    if (queryParams.eol_status) {
+      const e = String(queryParams.eol_status).trim().toUpperCase().replace(/_/g, ' ');
+      if (e === 'EOL SOON' || e === 'EOLSOON' || e === 'NEARING EOL' || e === 'NEARINGEOL' || e.startsWith('NEARING')) {
+        queryParams.eol_status = 'EOL SOON';
+      } else if (e === 'ACTIVE') {
+        queryParams.eol_status = 'ACTIVE';
+      } else if (e === 'EXPIRED') {
+        queryParams.eol_status = 'EXPIRED';
+      } else if (e === 'UNKNOWN') {
+        queryParams.eol_status = 'UNKNOWN';
+      }
+    }
+
+    // Omit undefined, null, or empty string parameters
+    Object.keys(queryParams).forEach(key => {
+      if (queryParams[key] === undefined || queryParams[key] === null || queryParams[key] === '') {
+        delete queryParams[key];
+      }
+    });
+
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return generateMockAssetsCsvExport(queryParams);
+    }
+
+    const client = createAxiosClient();
+    const exportRoutes = [
+      '/api/assets/export',
+      '/api/assets/export.csv',
+      '/api/assets/csv',
+    ];
+
+    let lastError: any = null;
+    for (const route of exportRoutes) {
+      try {
+        const response = await client.get(route, {
+          params: queryParams,
+          responseType: 'blob',
+          headers: {
+            Accept: 'text/csv, application/octet-stream, application/json, */*',
+          },
+        });
+
+        const data = response.data;
+        if (data instanceof Blob && data.type.includes('application/json')) {
+          const text = await data.text();
+          let json: any = {};
+          try {
+            json = JSON.parse(text);
+          } catch (_) {}
+          if (json?.detail || json?.error || json?.message) {
+            throw new Error(json.detail || json.error || json.message);
+          }
+        }
+
+        let filename: string | undefined = undefined;
+        const disposition = response.headers['content-disposition'] || response.headers['Content-Disposition'];
+        if (disposition) {
+          const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+          if (utf8Match && utf8Match[1]) {
+            filename = decodeURIComponent(utf8Match[1].trim());
+          } else {
+            const basicMatch = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/i);
+            if (basicMatch && basicMatch[1]) {
+              filename = basicMatch[1].replace(/['"]/g, '').trim();
+            }
+          }
+        }
+
+        return {
+          blob: data instanceof Blob ? data : new Blob([data], { type: 'text/csv;charset=utf-8;' }),
+          filename,
+        };
+      } catch (err: any) {
+        lastError = err;
+        if (err?.response?.status !== 404 && err?.status !== 404) {
+          throw err;
+        }
+      }
+    }
+
+    throw lastError || new Error('Backend CSV export endpoint returned an error or was not reachable');
+  }
+
   // Dedicated Fleet Summary KPI endpoint with fallback to complete asset dataset aggregation
   public async getFleetKpiSummary(params?: { source?: string; search?: string }): Promise<FleetKpiMetrics> {
     if (this.isMockMode) {
@@ -1676,6 +1809,102 @@ class ApiService {
     return this.reassignAsset(assetId, data);
   }
 
+  // Bulk Assign or Reassign Workday employee to multiple assets
+  public async bulkAssignAssets(data: BulkAssignAssetsRequest): Promise<BulkAssignAssetsResponse> {
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return bulkAssignMockAssets(data);
+    }
+    const client = createAxiosClient();
+
+    const assetStatus: StandardAssetStatus = data.asset_status
+      ? toStandardAssetStatus(data.asset_status)
+      : ASSET_STATUSES.ACTIVE;
+
+    const payload: Record<string, any> = {
+      asset_ids: data.asset_ids,
+      user_id: data.user_id,
+      assigned_username: data.assigned_username || data.user_id,
+      managed_by: data.managed_by,
+      assignment_type: 'MANUAL',
+      asset_status: assetStatus,
+    };
+
+    if (data.remarks !== undefined && data.remarks !== null && data.remarks !== '') {
+      payload.remarks = data.remarks;
+      payload.notes = data.remarks;
+    }
+
+    // Attempt standard bulk assignment routes
+    const routes = [
+      '/api/assets/bulk-assign',
+      '/api/assets/bulk-reassign',
+      '/api/assets/assign/bulk',
+      '/api/assets/reassign/bulk',
+      '/api/assets/bulk',
+    ];
+
+    for (const route of routes) {
+      try {
+        const response = await client.post<any>(route, payload);
+        const resData = response.data?.data ?? response.data ?? {};
+        return {
+          assigned_count: resData.assigned_count ?? resData.count ?? data.asset_ids.length,
+          successful_asset_ids: resData.successful_asset_ids ?? resData.asset_ids ?? data.asset_ids,
+          failed_asset_ids: resData.failed_asset_ids ?? [],
+          message:
+            resData.message ??
+            `Successfully assigned ${data.asset_ids.length} assets to ${data.user_id}.`,
+        };
+      } catch (err: any) {
+        const status = err?.status || err?.response?.status;
+        if (status !== 404 && status !== 405) {
+          throw err;
+        }
+      }
+    }
+
+    // Fallback: If backend does not expose a dedicated bulk endpoint, run individual reassignments
+    const results = await Promise.allSettled(
+      data.asset_ids.map(assetId =>
+        this.reassignAsset(assetId, {
+          user_id: data.user_id,
+          assigned_username: data.assigned_username || data.user_id,
+          managed_by: data.managed_by,
+          remarks: data.remarks,
+          assignment_type: 'MANUAL',
+          asset_status: assetStatus,
+        })
+      )
+    );
+
+    const successful: (string | number)[] = [];
+    const failed: (string | number)[] = [];
+    results.forEach((res, index) => {
+      if (res.status === 'fulfilled') {
+        successful.push(data.asset_ids[index]);
+      } else {
+        failed.push(data.asset_ids[index]);
+      }
+    });
+
+    if (successful.length === 0 && failed.length > 0) {
+      throw new Error(`Failed to assign assets: All ${failed.length} requests failed.`);
+    }
+
+    return {
+      assigned_count: successful.length,
+      successful_asset_ids: successful,
+      failed_asset_ids: failed,
+      message: `Successfully assigned ${successful.length} of ${data.asset_ids.length} assets to ${data.user_id}.`,
+    };
+  }
+
+  // Bulk assign alias
+  public async bulkReassignAssets(data: BulkAssignAssetsRequest): Promise<BulkAssignAssetsResponse> {
+    return this.bulkAssignAssets(data);
+  }
+
   // Employees list with safe parameter normalization to prevent FastAPI HTTP 422
   public async getEmployees(params: EmployeeQueryParams): Promise<PaginatedResponse<Employee>> {
     if (this.isMockMode) {
@@ -1719,11 +1948,12 @@ class ApiService {
       let totalPages = 1;
 
       if (Array.isArray(data)) {
-        rawList = data;
         total = data.length;
         totalPages = Math.max(1, Math.ceil(total / respPageSize));
+        const startIndex = (respPage - 1) * respPageSize;
+        rawList = data.slice(startIndex, startIndex + respPageSize);
       } else if (data && typeof data === 'object') {
-        rawList = data.items ?? data.data ?? data.results ?? data.employees ?? [];
+        const fullList = data.items ?? data.data ?? data.results ?? data.employees ?? [];
         const extractedTotal =
           data.total ??
           data.count ??
@@ -1733,10 +1963,17 @@ class ApiService {
           data.totalRecords;
         total = typeof extractedTotal === 'number' && !isNaN(extractedTotal)
           ? extractedTotal
-          : Number(extractedTotal) || rawList.length;
+          : Number(extractedTotal) || fullList.length;
         respPage = Number(data.page) || respPage;
         respPageSize = Number(data.page_size ?? data.pageSize ?? data.size) || respPageSize;
-        totalPages = Number(data.total_pages ?? data.totalPages) || Math.max(1, Math.ceil(total / respPageSize));
+        totalPages = Number(data.total_pages ?? data.totalPages ?? data.last_page) || Math.max(1, Math.ceil(total / respPageSize));
+
+        if (extractedTotal === undefined && fullList.length > respPageSize) {
+          const startIndex = (respPage - 1) * respPageSize;
+          rawList = fullList.slice(startIndex, startIndex + respPageSize);
+        } else {
+          rawList = fullList;
+        }
       } else {
         throw new ApiError({
           type: 'INVALID_RESPONSE_DATA',
@@ -1884,6 +2121,40 @@ class ApiService {
     return this.requestWithRouteFallback<DeviceEOLReference>(client, 'POST', routes, undefined, data);
   }
 
+  // Create or update EOL reference for a manufacturer/model
+  public async saveEOLReference(data: DeviceEOLReferenceCreate): Promise<DeviceEOLReference> {
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return createMockEOLReference(data);
+    }
+    const client = createAxiosClient();
+    try {
+      const routes = ['/api/eol-reference', '/api/eol-references', '/api/eol_reference'];
+      return await this.requestWithRouteFallback<DeviceEOLReference>(client, 'POST', routes, undefined, data);
+    } catch (err: any) {
+      const isConflict =
+        err?.response?.status === 409 ||
+        err?.response?.status === 400 ||
+        (typeof err?.message === 'string' && err.message.toLowerCase().includes('already exists'));
+      if (isConflict) {
+        try {
+          const refs = await this.getEOLReferences(data.model);
+          const match = refs.find(
+            r =>
+              r.manufacturer.toLowerCase().trim() === data.manufacturer.toLowerCase().trim() &&
+              r.model.toLowerCase().trim() === data.model.toLowerCase().trim()
+          );
+          if (match && match.eol_id) {
+            return await this.updateEOLReference(match.eol_id, data);
+          }
+        } catch {
+          // fallback failed, throw original
+        }
+      }
+      throw err;
+    }
+  }
+
   public async updateEOLReference(eolId: number, data: DeviceEOLReferenceUpdate): Promise<DeviceEOLReference> {
     if (this.isMockMode) {
       await this.simulateLatency();
@@ -1919,168 +2190,140 @@ class ApiService {
   }
 
   public async getAvailableWorkdayUsers(
-    searchOrQuery?: string | { search?: string; page?: number; page_size?: number; fetch_all?: boolean }
-  ): Promise<AvailableWorkdayUser[]> {
-    const searchParam = typeof searchOrQuery === 'string' ? searchOrQuery : searchOrQuery?.search;
+    params?: string | AvailableWorkdayUsersQueryParams
+  ): Promise<PaginatedAvailableUsersResponse> {
+    const searchParam = typeof params === 'string' ? params : params?.search;
     const cleanSearch = searchParam?.trim();
+    const page = typeof params === 'object' && params?.page ? Math.max(1, params.page) : 1;
+    const pageSize = typeof params === 'object' && params?.page_size ? Math.max(1, params.page_size) : 10;
 
     if (this.isMockMode) {
       await this.simulateLatency();
-      return getMockAvailableWorkdayUsers(cleanSearch);
+      return getMockAvailableWorkdayUsers({ page, page_size: pageSize, search: cleanSearch });
     }
 
     const client = createAxiosClient();
-    const queryParams: Record<string, any> = {};
+    const queryParams: Record<string, any> = {
+      page,
+      page_size: pageSize,
+    };
     if (cleanSearch) {
       queryParams.search = cleanSearch;
-      queryParams.q = cleanSearch;
     }
 
     // Determine target route with 404 fallback
     const routes = ['/api/admin-users/available-users', '/api/admin_users/available_users'];
 
-    let initialResp: any = null;
+    let resp: any = null;
     let endpointUsed = routes[0];
 
     try {
-      initialResp = await client.get<any>(routes[0], {
-        params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+      resp = await client.get<any>(routes[0], {
+        params: queryParams,
       });
       endpointUsed = routes[0];
     } catch (err: any) {
       const status = err?.status || err?.response?.status;
       if (status === 404) {
         endpointUsed = routes[1];
-        initialResp = await client.get<any>(routes[1], {
-          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+        resp = await client.get<any>(routes[1], {
+          params: queryParams,
         });
       } else {
         throw err;
       }
     }
 
-    const parsePageResponse = (responseData: any, requestedPage = 1, requestedPageSize = 25) => {
-      if (!responseData) {
-        return { items: [], total: 0, page: requestedPage, pageSize: requestedPageSize, totalPages: 1, isPaginated: false };
-      }
-
-      // Scenario A: direct array returned
-      if (Array.isArray(responseData)) {
-        return {
-          items: responseData,
-          total: responseData.length,
-          page: 1,
-          pageSize: responseData.length || requestedPageSize,
-          totalPages: 1,
-          isPaginated: false,
-        };
-      }
-
-      // Scenario C: nested object wrappers, e.g. responseData.data or responseData.response
-      let target = responseData;
-      if (target.data && typeof target.data === 'object' && !Array.isArray(target.data)) {
-        if (target.data.items || target.data.results || target.data.users || target.data.employees || target.data.records) {
-          target = target.data;
-        }
-      }
-
-      const rawList =
-        target.items ??
-        target.data ??
-        target.results ??
-        target.users ??
-        target.employees ??
-        target.records ??
-        [];
-
-      const items = Array.isArray(rawList) ? rawList : [];
-
-      const rawTotal =
-        target.total ??
-        target.count ??
-        target.total_records ??
-        target.totalRecords ??
-        target.total_count ??
-        target.totalCount ??
-        target.records_total;
-
-      const hasExplicitTotal = rawTotal !== undefined && rawTotal !== null;
-      const total = hasExplicitTotal ? (Number(rawTotal) || items.length) : items.length;
-
-      const page = Number(target.page ?? target.current_page ?? target.currentPage) || requestedPage;
-      const pageSize = Number(target.page_size ?? target.pageSize ?? target.size ?? target.limit) || items.length || requestedPageSize;
-
-      const rawTotalPages = target.total_pages ?? target.totalPages ?? target.pages ?? target.page_count;
-      const totalPages = Number(rawTotalPages) || Math.max(1, Math.ceil(total / (pageSize || 1)));
-
-      const isPaginated = total > items.length && totalPages > 1;
-
-      return { items, total, page, pageSize, totalPages, isPaginated };
-    };
-
-    const firstPageParsed = parsePageResponse(initialResp.data, 1, 25);
-    const allRawItems: any[] = [...firstPageParsed.items];
-
-    // Scenario B: API uses server-side pagination (e.g. returns 25 items out of 191 total)
-    // Fetch subsequent pages so that all eligible employees returned by the API are accessible
-    if (firstPageParsed.isPaginated && firstPageParsed.totalPages > 1) {
-      const totalPages = Math.min(firstPageParsed.totalPages, 50); // safety cap up to 50 pages (1000+ items)
-      const pageSize = firstPageParsed.pageSize || 25;
-
-      const pagePromises: Promise<any[]>[] = [];
-
-      for (let p = 2; p <= totalPages; p++) {
-        pagePromises.push(
-          (async (pageNumber: number) => {
-            const pageParams: Record<string, any> = { ...queryParams };
-            pageParams.page = pageNumber;
-            pageParams.page_size = pageSize;
-            pageParams.size = pageSize;
-
-            try {
-              const resp = await client.get<any>(endpointUsed, { params: pageParams });
-              const parsed = parsePageResponse(resp.data, pageNumber, pageSize);
-              return parsed.items;
-            } catch (pageErr: any) {
-              const pageStatus = pageErr?.status || pageErr?.response?.status;
-              if (pageStatus === 422) {
-                // If 422 Unprocessable Entity (e.g. backend rejected 'size' or 'page_size'), retry with minimal params
-                try {
-                  const retryParams: Record<string, any> = { ...queryParams, page: pageNumber };
-                  const retryResp = await client.get<any>(endpointUsed, { params: retryParams });
-                  const retryParsed = parsePageResponse(retryResp.data, pageNumber, pageSize);
-                  return retryParsed.items;
-                } catch {
-                  return [];
-                }
-              }
-              return [];
-            }
-          })(p)
-        );
-      }
-
-      const subsequentPages = await Promise.all(pagePromises);
-      for (const pageItems of subsequentPages) {
-        allRawItems.push(...pageItems);
+    const responseData = resp.data;
+    let target = responseData;
+    if (target && target.data && typeof target.data === 'object' && !Array.isArray(target.data)) {
+      if (target.data.items || target.data.results || target.data.users || target.data.employees || target.data.records) {
+        target = target.data;
       }
     }
 
-    // Normalize all records and deduplicate by user_id
-    const seen = new Set<string>();
-    const deduplicated: AvailableWorkdayUser[] = [];
+    const rawList =
+      target?.items ??
+      target?.data ??
+      target?.results ??
+      target?.users ??
+      target?.employees ??
+      target?.records ??
+      (Array.isArray(target) ? target : []);
 
-    for (const raw of allRawItems) {
+    const rawItems = Array.isArray(rawList) ? rawList : [];
+    const items: AvailableWorkdayUser[] = [];
+    const seen = new Set<string>();
+
+    for (const raw of rawItems) {
       const normalized = normalizeAvailableWorkdayUser(raw);
       if (!normalized.user_id) continue;
       const lower = normalized.user_id.toLowerCase();
       if (!seen.has(lower)) {
         seen.add(lower);
-        deduplicated.push(normalized);
+        items.push(normalized);
       }
     }
 
-    return deduplicated;
+    const meta = target?.meta ?? target?.pagination ?? {};
+    const rawTotal =
+      target?.total ??
+      target?.count ??
+      target?.total_records ??
+      target?.totalRecords ??
+      target?.total_count ??
+      target?.totalCount ??
+      meta.total ??
+      meta.total_records ??
+      meta.count;
+
+    const total = rawTotal !== undefined && rawTotal !== null
+      ? (Number(rawTotal) || items.length)
+      : items.length;
+
+    const respPage =
+      Number(target?.page ?? target?.current_page ?? target?.currentPage ?? meta.page ?? meta.current_page) ||
+      page;
+
+    const respPageSize =
+      Number(
+        target?.page_size ??
+        target?.pageSize ??
+        target?.size ??
+        target?.limit ??
+        target?.per_page ??
+        target?.perPage ??
+        meta.page_size ??
+        meta.size ??
+        meta.limit
+      ) ||
+      pageSize;
+
+    const rawTotalPages =
+      target?.total_pages ??
+      target?.totalPages ??
+      target?.pages ??
+      target?.page_count ??
+      target?.last_page ??
+      meta.total_pages ??
+      meta.totalPages ??
+      meta.last_page;
+
+    const totalPages = Number(rawTotalPages) || Math.max(1, Math.ceil(total / (respPageSize || 1)));
+
+    let finalItems = items;
+    if (rawTotal === undefined && items.length > respPageSize) {
+      const startIndex = (respPage - 1) * respPageSize;
+      finalItems = items.slice(startIndex, startIndex + respPageSize);
+    }
+
+    return {
+      items: finalItems,
+      total,
+      page: respPage,
+      page_size: respPageSize,
+      total_pages: totalPages,
+    };
   }
 
   public async bulkAddAdminUsers(userIds: string[]): Promise<BulkAddAdminUsersResponse> {

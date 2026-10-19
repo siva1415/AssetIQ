@@ -21,8 +21,9 @@ router = APIRouter(prefix="/admin-users", tags=["Admin Users"])
     summary="List Workday HCM Employees Available for Admin Authorization",
 )
 def get_available_users(
-    pagination: PaginationParams = Depends(),
-    search: Optional[str] = Query(None, description="Search by user ID, full name, or work email"),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(10, ge=1, le=100, description="Items per page (1-100)"),
+    search: Optional[str] = Query(None, description="Search by user ID, full name, work email, or department"),
     q: Optional[str] = Query(None, include_in_schema=False),
     query: Optional[str] = Query(None, include_in_schema=False),
     user_id: Optional[str] = Query(None, description="Filter by user ID"),
@@ -33,25 +34,36 @@ def get_available_users(
     email: Optional[str] = Query(None, description="Filter by work email"),
     email_work: Optional[str] = Query(None, include_in_schema=False),
     emailWork: Optional[str] = Query(None, include_in_schema=False),
+    department: Optional[str] = Query(None, description="Filter by department"),
+    pageSize: Optional[int] = Query(None, include_in_schema=False, ge=1, le=100),
+    limit: Optional[int] = Query(None, include_in_schema=False, ge=1, le=100),
+    offset: Optional[int] = Query(None, include_in_schema=False, ge=0),
     db: Session = Depends(get_database),
 ):
     """
     Retrieve employees from workday_employees who are not currently registered as admins.
-    Supports searching by user ID, full name, work email, and pagination.
+    Supports searching by user ID, full name, work email, department, and pagination.
     """
     eff_search = search or q or query
     eff_user_id = user_id or userId
     eff_name = full_name or fullName or name
     eff_email = email or email_work or emailWork
+    eff_department = department
+
+    eff_page_size = pageSize or limit or page_size
+    eff_page = page
+    if offset is not None and page == 1:
+        eff_page = (offset // eff_page_size) + 1 if eff_page_size > 0 else 1
 
     return AdminUserService.get_available_users(
         db=db,
-        page=pagination.page,
-        page_size=pagination.page_size,
+        page=eff_page,
+        page_size=eff_page_size,
         search=eff_search,
         user_id=eff_user_id,
         full_name=eff_name,
         email=eff_email,
+        department=eff_department,
     )
 
 

@@ -1,4 +1,6 @@
+import csv
 from datetime import datetime, timezone
+import io
 from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -10,11 +12,37 @@ from app.repositories.asset_repository import AssetRepository
 from app.repositories.employee_repository import EmployeeRepository
 from app.repositories.eol_repository import EolRepository
 from app.services.eol_service import EolService
-from app.schemas.asset import AssetResponse, AssetDetailResponse, AssetAssignmentRequest
+from app.schemas.asset import (
+    AssetResponse,
+    AssetDetailResponse,
+    AssetAssignmentRequest,
+    BulkAssetAssignmentRequest,
+    BulkAssetAssignmentResponse,
+    BulkAssetAssignmentItemResult,
+)
 from app.schemas.employee import EmployeeSummary
 from app.schemas.eol import EolInfo
 from app.schemas.common import PaginatedResponse
 
+ASSET_CSV_HEADERS = [
+    "Asset",
+    "Source",
+    "DeviceType",
+    "Manufacturer",
+    "Model",
+    "SerialNumber",
+    "Operating System",
+    "MacAddress",
+    "Computer ID",
+    "Asset Status",
+    "EOL Expiry Date",
+    "EOL Status",
+    "EOL Days Remaining",
+    "Managed By",
+    "Assigned UserID",
+    "Assigned UserName",
+    "Department",
+]
 
 
 class AssetService:
@@ -268,7 +296,8 @@ class AssetService:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Workday employee with ID {emp_id_val} not found",
                     )
-                if emp.employee_status and emp.employee_status.strip().lower() in ("terminated", "inactive", "separated"):
+                emp_status = emp.employee_status.strip().upper() if emp.employee_status else ""
+                if emp_status != "ACTIVE":
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Employee '{emp.user_id}' has status '{emp.employee_status}' and cannot be assigned hardware assets",
@@ -292,7 +321,8 @@ class AssetService:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Workday employee '{clean_user}' not found",
                     )
-                if emp.employee_status and emp.employee_status.strip().lower() in ("terminated", "inactive", "separated"):
+                emp_status = emp.employee_status.strip().upper() if emp.employee_status else ""
+                if emp_status != "ACTIVE":
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Employee '{emp.user_id}' has status '{emp.employee_status}' and cannot be assigned hardware assets",
@@ -417,4 +447,312 @@ class AssetService:
             )
 
         return cls.get_asset_detail(db, asset.asset_id)
+
+    @classmethod
+    def bulk_assign_assets(
+        cls,
+        db: Session,
+        payload: BulkAssetAssignmentRequest,
+    ) -> BulkAssetAssignmentResponse:
+        """
+        Bulk assign multiple assets to one active Workday employee.
+        Enforces:
+        - Non-empty, unique positive integer asset IDs.
+        - Existing and currently active Workday employee (UPPER(TRIM(employee_status)) == 'ACTIVE').
+        - Valid managed_by enum ('INDIVIDUAL' or 'GROUP').
+        - Preserving existing asset remarks when new remarks is omitted, null, or blank.
+        - Updating asset_status to 'ACTIVE', assignment_type to 'MANUAL', and updated_at.
+        - Transaction savepoints per asset to safely report per-asset outcomes on partial failures.
+        """
+        # 1. Validate asset_ids
+        if not payload.asset_ids or len(payload.asset_ids) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one asset ID must be provided in asset_ids",
+            )
+
+        # Validate elements are positive integers
+        for aid in payload.asset_ids:
+            if not isinstance(aid, int) or aid <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid asset ID '{aid}'. Asset IDs must be positive integers.",
+                )
+
+        # Validate uniqueness of requested asset IDs
+        if len(payload.asset_ids) != len(set(payload.asset_ids)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Duplicate asset IDs are not allowed in asset_ids. Each asset ID must be unique.",
+            )
+
+        # 2. Validate assigned_username
+        user_val = (
+            payload.assigned_username
+            or payload.assignedUsername
+            or payload.user_id
+            or payload.userId
+            or payload.username
+        )
+        if not user_val or not str(user_val).strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="assigned_username is required for bulk asset assignment",
+            )
+
+        clean_user = str(user_val).strip()
+        emp = EmployeeRepository.get_by_user_id(db, clean_user)
+        if not emp:
+            stmt_email = select(WorkdayEmployee).where(
+                func.lower(func.trim(WorkdayEmployee.email_work)) == clean_user.lower()
+            )
+            emp = db.execute(stmt_email).scalar_one_or_none()
+        if not emp:
+            stmt_name = select(WorkdayEmployee).where(
+                func.lower(func.trim(WorkdayEmployee.full_name)) == clean_user.lower()
+            )
+            emp = db.execute(stmt_name).scalar_one_or_none()
+        if not emp:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Workday employee '{clean_user}' not found",
+            )
+
+        emp_status = emp.employee_status.strip().upper() if emp.employee_status else ""
+        if emp_status != "ACTIVE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Employee '{emp.user_id}' has status '{emp.employee_status}' and cannot be assigned hardware assets",
+            )
+
+        target_user_id = emp.user_id
+
+        # 3. Validate managed_by
+        raw_managed = (
+            payload.managed_by
+            or payload.managedBy
+            or payload.management_group
+            or payload.managementGroup
+        )
+        if raw_managed is None:
+            clean_managed = "INDIVIDUAL"
+        elif not str(raw_managed).strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="managed_by cannot be empty. Allowed values are 'INDIVIDUAL' or 'GROUP'.",
+            )
+        else:
+            clean_managed = str(raw_managed).strip().upper()
+            if clean_managed not in ("INDIVIDUAL", "GROUP"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid managed_by '{raw_managed}'. Allowed values are 'INDIVIDUAL' or 'GROUP'.",
+                )
+
+        # 4. Remarks: if nonblank, trim and update; if omitted, null, or blank, preserve existing remarks
+        raw_remarks = (
+            payload.remarks
+            if payload.remarks is not None
+            else (
+                payload.remark
+                if payload.remark is not None
+                else (payload.notes if payload.notes is not None else payload.comment)
+            )
+        )
+        clean_remarks = str(raw_remarks).strip() if (raw_remarks is not None and str(raw_remarks).strip()) else None
+
+        # 5. Set-based retrieval of existing assets
+        stmt = select(Asset).where(Asset.asset_id.in_(payload.asset_ids))
+        existing_assets = {a.asset_id: a for a in db.execute(stmt).scalars().all()}
+
+        results: list[BulkAssetAssignmentItemResult] = []
+        success_count = 0
+        failure_count = 0
+
+        # Process each asset ID using transaction savepoints
+        now_time = datetime.now(timezone.utc)
+        for aid in payload.asset_ids:
+            savepoint = db.begin_nested()
+            try:
+                asset = existing_assets.get(aid)
+                if not asset:
+                    savepoint.rollback()
+                    failure_count += 1
+                    results.append(
+                        BulkAssetAssignmentItemResult(
+                            asset_id=aid,
+                            asset_number=None,
+                            status="FAILED",
+                            reason=f"Asset with ID {aid} was not found",
+                        )
+                    )
+                    continue
+
+                asset.assigned_username = target_user_id
+                asset.managed_by = clean_managed
+                asset.assignment_type = "MANUAL"
+                asset.asset_status = "ACTIVE"
+                if clean_remarks is not None:
+                    asset.remarks = clean_remarks
+                # If clean_remarks is None, preserve existing asset.remarks
+                asset.updated_at = now_time
+
+                db.flush()
+                savepoint.commit()
+                success_count += 1
+                results.append(
+                    BulkAssetAssignmentItemResult(
+                        asset_id=asset.asset_id,
+                        asset_number=asset.asset_number,
+                        status="SUCCESS",
+                        reason=None,
+                    )
+                )
+            except Exception as exc:
+                savepoint.rollback()
+                failure_count += 1
+                logger.warning(f"Error assigning asset {aid} during bulk assignment: {exc}")
+                results.append(
+                    BulkAssetAssignmentItemResult(
+                        asset_id=aid,
+                        asset_number=getattr(existing_assets.get(aid), "asset_number", None),
+                        status="FAILED",
+                        reason="Database error during asset assignment",
+                    )
+                )
+
+        try:
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.error(f"Failed to commit bulk asset assignment batch: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database transaction error during bulk asset assignment",
+            )
+
+        requested_count = len(payload.asset_ids)
+        if failure_count == 0:
+            message = f"Bulk assignment completed successfully: {success_count} asset(s) assigned"
+        elif success_count == 0:
+            message = "Bulk assignment failed for all requested assets"
+        else:
+            message = f"Bulk assignment completed with some failures: {success_count} succeeded, {failure_count} failed"
+
+        return BulkAssetAssignmentResponse(
+            message=message,
+            requested_count=requested_count,
+            success_count=success_count,
+            failure_count=failure_count,
+            results=results,
+        )
+
+    @classmethod
+    def generate_assets_csv_stream(
+        cls,
+        db: Session,
+        source: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        devicetype: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        search: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        eol_status: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = "asc",
+    ):
+        """
+        Stream CSV data for all assets matching dynamic search and multi-dimensional filters.
+        Emits standard RFC 4180 CSV with CRLF line endings in UTF-8.
+        Supports datasets of 10,000+ records via buffered streaming without memory bloat.
+        """
+        normalized_assignment_type = cls.normalize_assignment_type_filter(assignment_type)
+
+        output = io.StringIO()
+        writer = csv.writer(output, lineterminator="\r\n")
+
+        # 1. Emit Header Row
+        writer.writerow(ASSET_CSV_HEADERS)
+        yield output.getvalue().encode("utf-8")
+        output.seek(0)
+        output.truncate(0)
+
+        # 2. Iterate database rows using yield_per
+        results = AssetRepository.iter_assets_joined(
+            db=db,
+            source=source,
+            asset_status=asset_status,
+            devicetype=devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=normalized_assignment_type,
+            search=search,
+            is_unassigned=is_unassigned,
+            eol_status=eol_status,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+
+        chunk_size = 500
+        count = 0
+
+        for row in results:
+            asset, emp, eol_date, ref_source = row
+
+            eol_stat, days_rem = EolService.calculate_eol(eol_date)
+            eol_expiry_str = eol_date.strftime("%Y-%m-%d") if eol_date else ""
+            days_rem_str = str(days_rem) if days_rem is not None else ""
+
+            assigned_user_id = (
+                asset.assigned_username.strip()
+                if (asset.assigned_username and asset.assigned_username.strip())
+                else ""
+            )
+            assigned_user_name = emp.full_name if (emp and emp.full_name) else ""
+            department = emp.department if (emp and emp.department) else ""
+
+            computer_id = (
+                str(getattr(asset, "computer_id", None))
+                if getattr(asset, "computer_id", None) is not None
+                else ""
+            )
+
+            csv_row = [
+                asset.asset_number or "",
+                asset.source or "",
+                asset.devicetype or "",
+                asset.manufacturer or "",
+                asset.model or "",
+                asset.serial_number or "",
+                asset.os_name or "",
+                asset.macaddress or "",
+                computer_id,
+                asset.asset_status or "",
+                eol_expiry_str,
+                eol_stat,
+                days_rem_str,
+                asset.managed_by or "",
+                assigned_user_id,
+                assigned_user_name,
+                department,
+            ]
+
+            writer.writerow(csv_row)
+            count += 1
+
+            if count >= chunk_size:
+                yield output.getvalue().encode("utf-8")
+                output.seek(0)
+                output.truncate(0)
+                count = 0
+
+        if count > 0:
+            yield output.getvalue().encode("utf-8")
+            output.seek(0)
+            output.truncate(0)
+
 

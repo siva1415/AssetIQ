@@ -269,3 +269,123 @@ class AssetCreateRequest(AssetAssignmentRequest):
     """
     asset_number: Optional[str] = None
 
+
+class BulkAssetAssignmentItemResult(BaseModel):
+    """
+    Per-asset result for bulk assignment.
+    """
+    asset_id: int
+    asset_number: Optional[str] = None
+    status: str  # "SUCCESS" or "FAILED"
+    reason: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class BulkAssetAssignmentResponse(BaseModel):
+    """
+    Aggregate response schema for bulk asset assignment.
+    """
+    message: str
+    requested_count: int
+    success_count: int
+    failure_count: int
+    results: list[BulkAssetAssignmentItemResult]
+
+    # camelCase aliases
+    requestedCount: Optional[int] = None
+    successCount: Optional[int] = None
+    failureCount: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_bulk_response_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            req_c = data.get("requested_count", data.get("requestedCount", 0))
+            data["requested_count"] = req_c
+            data["requestedCount"] = req_c
+
+            succ_c = data.get("success_count", data.get("successCount", 0))
+            data["success_count"] = succ_c
+            data["successCount"] = succ_c
+
+            fail_c = data.get("failure_count", data.get("failureCount", 0))
+            data["failure_count"] = fail_c
+            data["failureCount"] = fail_c
+        return data
+
+
+class BulkAssetAssignmentRequest(BaseModel):
+    """
+    Request payload for bulk assigning multiple assets to one active Workday employee.
+    """
+    asset_ids: list[int]
+    assigned_username: str
+    managed_by: Optional[str] = "INDIVIDUAL"
+    remarks: Optional[str] = None
+
+    # Aliases
+    assetIds: Optional[list[int]] = None
+    assignedUsername: Optional[str] = None
+    user_id: Optional[str] = None
+    userId: Optional[str] = None
+    username: Optional[str] = None
+    managedBy: Optional[str] = None
+    management_group: Optional[str] = None
+    managementGroup: Optional[str] = None
+    remark: Optional[str] = None
+    notes: Optional[str] = None
+    comment: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_bulk_request_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            aids = data.get("asset_ids", data.get("assetIds"))
+            if aids is not None:
+                data["asset_ids"] = aids
+
+            uname = (
+                data.get("assigned_username")
+                or data.get("assignedUsername")
+                or data.get("user_id")
+                or data.get("userId")
+                or data.get("username")
+            )
+            if uname is not None:
+                data["assigned_username"] = uname
+
+            mby = (
+                data.get("managed_by")
+                if "managed_by" in data
+                else (
+                    data.get("managedBy")
+                    if "managedBy" in data
+                    else (
+                        data.get("management_group")
+                        if "management_group" in data
+                        else data.get("managementGroup")
+                    )
+                )
+            )
+            if mby is not None:
+                data["managed_by"] = mby
+
+            rem = (
+                data.get("remarks")
+                if "remarks" in data
+                else (
+                    data.get("remark")
+                    if "remark" in data
+                    else (data.get("notes") if "notes" in data else data.get("comment"))
+                )
+            )
+            if rem is not None:
+                data["remarks"] = rem
+        return data
+
+

@@ -143,12 +143,14 @@ export interface DeviceEOLReferenceCreate {
   manufacturer: string;
   model: string;
   eol_date: string;
+  reference_source?: string | null;
 }
 
 export interface DeviceEOLReferenceUpdate {
   manufacturer: string;
   model: string;
   eol_date: string;
+  reference_source?: string | null;
 }
 
 export interface Asset {
@@ -291,7 +293,6 @@ export interface DepartmentDistributionItem {
   percentage: number;
 }
 
-
 export interface DashboardRedesignOverview {
   kpis: { total_assets: number; active_assets: number; review: number; in_stock: number; employee_count: number };
   assets_by_source: { source: string; count: number }[];
@@ -371,6 +372,14 @@ export interface AssetQueryParams {
   sort_order?: 'asc' | 'desc';
 }
 
+export type AssetExportParams = Omit<AssetQueryParams, 'page' | 'page_size'>;
+
+export interface AssetExportResponse {
+  blob: Blob;
+  filename?: string;
+  count?: number;
+}
+
 export interface EmployeeQueryParams {
   page?: number;
   page_size?: number;
@@ -416,6 +425,20 @@ export interface AvailableWorkdayUser {
   is_admin: boolean;
 }
 
+export interface AvailableWorkdayUsersQueryParams {
+  page?: number;
+  page_size?: number;
+  search?: string;
+}
+
+export interface PaginatedAvailableUsersResponse {
+  items: AvailableWorkdayUser[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
 export interface BulkAddAdminUsersRequest {
   user_ids: string[];
 }
@@ -444,6 +467,23 @@ export interface ReassignAssetResponse {
   verified_employee_name?: string | null;
   notes?: string;
   updated_at?: string;
+  message: string;
+}
+
+export interface BulkAssignAssetsRequest {
+  asset_ids: (string | number)[];
+  user_id: string;
+  managed_by: 'INDIVIDUAL' | 'GROUP' | string;
+  remarks?: string;
+  assigned_username?: string;
+  assignment_type?: 'MANUAL' | 'AUTOMATIC' | string;
+  asset_status?: StandardAssetStatus | string;
+}
+
+export interface BulkAssignAssetsResponse {
+  assigned_count: number;
+  successful_asset_ids: (string | number)[];
+  failed_asset_ids: (string | number)[];
   message: string;
 }
 

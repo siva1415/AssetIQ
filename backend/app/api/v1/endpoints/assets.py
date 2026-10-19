@@ -1,8 +1,16 @@
+from datetime import datetime, timezone
 from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from app.api.deps import PaginationParams, get_database
-from app.schemas.asset import AssetResponse, AssetDetailResponse, AssetAssignmentRequest
+from app.api.deps import PaginationParams, get_database, verify_admin_access
+from app.schemas.asset import (
+    AssetResponse,
+    AssetDetailResponse,
+    AssetAssignmentRequest,
+    BulkAssetAssignmentRequest,
+    BulkAssetAssignmentResponse,
+)
 from app.schemas.dashboard import (
     DashboardSummaryResponse,
     OperationalStatusResponse,
@@ -78,6 +86,108 @@ def list_assets(
         eol_status=effective_eol_status,
         sort_by=effective_sort_by,
         sort_order=effective_sort_order,
+    )
+
+
+@router.get(
+    "/export",
+    summary="Export Filtered Assets to CSV",
+    response_class=StreamingResponse,
+)
+@router.get(
+    "/export.csv",
+    include_in_schema=False,
+)
+@router.get(
+    "/export/csv",
+    include_in_schema=False,
+)
+@router.get(
+    "/csv",
+    include_in_schema=False,
+)
+def export_assets_csv(
+    scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
+    source: Optional[str] = Query(None, description="Filter by discovery source (BIGFIX or JAMF)"),
+    asset_status: Optional[str] = Query(None, description="Filter by status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
+    devicetype: Optional[str] = Query(None, description="Filter by device type (Server or Desktop)"),
+    device_type: Optional[str] = Query(None, include_in_schema=False),
+    deviceType: Optional[str] = Query(None, include_in_schema=False),
+    DeviceType: Optional[str] = Query(None, include_in_schema=False),
+    eol_status: Optional[str] = Query(None, description="Filter by EOL status (ACTIVE, EOL SOON, EXPIRED, UNKNOWN)"),
+    eolStatus: Optional[str] = Query(None, include_in_schema=False),
+    manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
+    model: Optional[str] = Query(None, description="Filter by hardware model"),
+    assigned_username: Optional[str] = Query(None, description="Filter by assigned login username"),
+    assignment_type: Optional[str] = Query(None, description="Filter by assignment model ('Auto' or 'Manual')"),
+    assignmentType: Optional[str] = Query(None, include_in_schema=False),
+    is_unassigned: Optional[bool] = Query(None, description="Filter for unassigned assets (true/false)"),
+    search: Optional[str] = Query(None, description="Text search across asset number, serial, model, username, employee name"),
+    sort_by: Optional[str] = Query(None, description="Field to sort by (e.g. last_report_time, asset_id, asset_number, model)"),
+    sort_order: Optional[str] = Query("asc", description="Sort direction ('asc' or 'desc')"),
+    sortBy: Optional[str] = Query(None, include_in_schema=False),
+    sortOrder: Optional[str] = Query(None, include_in_schema=False),
+    filename: Optional[str] = Query(None, description="Custom download filename"),
+    db: Session = Depends(get_database),
+):
+    """
+    Stream filtered hardware assets to an RFC 4180 compliant CSV file.
+    Supports All Assets, Windows Assets (BigFix), Mac Assets (Jamf), and Asset Ownership scopes.
+    Streams memory-efficiently without row count limits, supporting 10,000+ records.
+    """
+    effective_devicetype = devicetype or device_type or deviceType or DeviceType
+    effective_eol_status = eol_status or eolStatus
+    effective_assignment_type = assignment_type or assignmentType
+    effective_sort_by = sort_by or sortBy
+    effective_sort_order = sort_order or sortOrder or "asc"
+
+    clean_scope = (scope or "all").strip().lower()
+    resolved_source = source
+    if not resolved_source and scope:
+        if clean_scope in ["windows", "windows_assets", "bigfix"]:
+            resolved_source = "BIGFIX"
+        elif clean_scope in ["mac", "mac_assets", "jamf", "macos", "apple"]:
+            resolved_source = "JAMF"
+
+    # Resolve filename
+    today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+    if clean_scope in ["windows", "windows_assets", "bigfix"]:
+        scope_tag = "windows_assets"
+    elif clean_scope in ["mac", "mac_assets", "jamf", "macos", "apple"]:
+        scope_tag = "mac_assets"
+    elif clean_scope in ["ownership", "asset_ownership"]:
+        scope_tag = "asset_ownership"
+    else:
+        scope_tag = "all_assets"
+
+    default_filename = f"assetiq_{scope_tag}_{today_str}.csv"
+    download_filename = filename.strip() if (filename and filename.strip()) else default_filename
+    if not download_filename.endswith(".csv"):
+        download_filename += ".csv"
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{download_filename}"',
+        "Content-Type": "text/csv; charset=utf-8",
+    }
+
+    return StreamingResponse(
+        AssetService.generate_assets_csv_stream(
+            db=db,
+            source=resolved_source,
+            asset_status=asset_status,
+            devicetype=effective_devicetype,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=effective_assignment_type,
+            search=search,
+            is_unassigned=is_unassigned,
+            eol_status=effective_eol_status,
+            sort_by=effective_sort_by,
+            sort_order=effective_sort_order,
+        ),
+        media_type="text/csv",
+        headers=headers,
     )
 
 
@@ -232,6 +342,39 @@ def assign_asset_payload(
             detail="Asset ID is required for assignment",
         )
     return AssetService.assign_asset(db=db, asset_id=int(target_id), payload=payload)
+
+
+@router.post(
+    "/bulk-assign",
+    response_model=BulkAssetAssignmentResponse,
+    summary="Bulk Assign Multiple Hardware Assets to Active Workday Employee",
+)
+@router.put(
+    "/bulk-assign",
+    response_model=BulkAssetAssignmentResponse,
+    include_in_schema=False,
+)
+@router.post(
+    "/bulk-assignment",
+    response_model=BulkAssetAssignmentResponse,
+    include_in_schema=False,
+)
+@router.put(
+    "/bulk-assignment",
+    response_model=BulkAssetAssignmentResponse,
+    include_in_schema=False,
+)
+def bulk_assign_assets(
+    payload: BulkAssetAssignmentRequest,
+    current_admin: str = Depends(verify_admin_access),
+    db: Session = Depends(get_database),
+):
+    """
+    Bulk assign one or more hardware assets to an active Workday employee.
+    Requires administrative privileges (verified against admin_users table).
+    Supports per-asset savepoints to accurately report successes and failures.
+    """
+    return AssetService.bulk_assign_assets(db=db, payload=payload)
 
 
 @router.get(

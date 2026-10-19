@@ -1,7 +1,7 @@
 from typing import List, Optional, Union
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
-from app.api.deps import get_database
+from app.api.deps import get_database, verify_admin_access
 from app.schemas.common import PaginatedResponse
 from app.schemas.eol_reference import (
     EolReferenceResponse,
@@ -94,30 +94,64 @@ def get_eol_reference(
     "",
     response_model=EolReferenceResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create Device EOL Reference Record",
+    summary="Create or Update Device EOL Reference Record",
 )
-def create_eol_reference(
+def create_or_update_eol_reference(
     payload: EolReferenceCreate,
+    response: Response,
+    current_admin: str = Depends(verify_admin_access),
     db: Session = Depends(get_database),
 ):
     """
-    Add a new OEM hardware model lifecycle record.
+    Add or update an OEM hardware model lifecycle record (upsert).
+    If a reference for the exact manufacturer/model already exists, updates its EOL date.
+    If no matching reference exists, creates a new record.
+    Preserves existing reference_source when omitted in update.
+    Requires administrative privileges.
     """
-    return EolService.create_reference(db=db, data=payload)
+    result, is_created = EolService.upsert_reference(db=db, data=payload)
+    if not is_created:
+        response.status_code = status.HTTP_200_OK
+    return result
+
+
+@router.put(
+    "",
+    response_model=EolReferenceResponse,
+    summary="Create or Update Device EOL Reference Record (PUT Alias)",
+)
+def upsert_eol_reference_put(
+    payload: EolReferenceCreate,
+    response: Response,
+    current_admin: str = Depends(verify_admin_access),
+    db: Session = Depends(get_database),
+):
+    """
+    Idempotent create or update for OEM hardware model lifecycle records.
+    Requires administrative privileges.
+    """
+    result, is_created = EolService.upsert_reference(db=db, data=payload)
+    if is_created:
+        response.status_code = status.HTTP_201_CREATED
+    else:
+        response.status_code = status.HTTP_200_OK
+    return result
 
 
 @router.put(
     "/{eol_id}",
     response_model=EolReferenceResponse,
-    summary="Update Device EOL Reference Record",
+    summary="Update Device EOL Reference Record by ID",
 )
 def update_eol_reference(
     eol_id: int,
     payload: EolReferenceUpdate,
+    current_admin: str = Depends(verify_admin_access),
     db: Session = Depends(get_database),
 ):
     """
-    Update an existing hardware lifecycle reference record.
+    Update an existing hardware lifecycle reference record by ID.
+    Requires administrative privileges.
     """
     updated = EolService.update_reference(db=db, eol_id=eol_id, data=payload)
     if not updated:
@@ -134,10 +168,12 @@ def update_eol_reference(
 )
 def delete_eol_reference(
     eol_id: int,
+    current_admin: str = Depends(verify_admin_access),
     db: Session = Depends(get_database),
 ):
     """
-    Remove an OEM lifecycle reference record.
+    Remove an OEM lifecycle reference record by ID.
+    Requires administrative privileges.
     """
     deleted = EolService.delete_reference(db=db, eol_id=eol_id)
     if not deleted:

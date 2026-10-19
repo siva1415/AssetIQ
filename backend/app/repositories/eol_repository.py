@@ -132,6 +132,78 @@ class EolRepository:
         return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod
+    def upsert_reference(
+        db: Session,
+        manufacturer: str,
+        model: str,
+        eol_date: Optional[date] = None,
+        reference_source: Optional[str] = None,
+    ) -> Tuple[DeviceEolReference, bool]:
+        """
+        Create or update an EOL lifecycle reference record by exact manufacturer and model.
+        - Matches exact manufacturer and model.
+        - If matching record exists:
+            - Updates its eol_date.
+            - If reference_source is provided (non-empty), updates it; otherwise preserves existing reference_source.
+            - Updates updated_at.
+            - Cleans up any legacy duplicate records for the same manufacturer and model.
+            - Returns (record, False) indicating an update.
+        - If no matching record exists:
+            - Inserts a new record.
+            - Returns (record, True) indicating creation.
+        """
+        clean_mfg = manufacturer.strip() if manufacturer else ""
+        clean_model = model.strip() if model else ""
+
+        stmt = (
+            select(DeviceEolReference)
+            .where(
+                DeviceEolReference.manufacturer == clean_mfg,
+                DeviceEolReference.model == clean_model,
+            )
+            .order_by(DeviceEolReference.eol_id.asc())
+        )
+        existing_records = list(db.execute(stmt).scalars().all())
+
+        now = datetime.now(timezone.utc)
+
+        if existing_records:
+            record = existing_records[0]
+            record.eol_date = eol_date
+            if reference_source is not None and str(reference_source).strip():
+                record.reference_source = str(reference_source).strip()
+            # If reference_source is omitted or None, preserve existing record.reference_source
+            record.updated_at = now
+
+            # Enforce uniqueness by cleaning up any pre-existing duplicates
+            if len(existing_records) > 1:
+                for dup in existing_records[1:]:
+                    db.delete(dup)
+
+            db.commit()
+            db.refresh(record)
+            return record, False
+
+        # No existing record: create new record
+        clean_ref_source = (
+            str(reference_source).strip()
+            if (reference_source is not None and str(reference_source).strip())
+            else None
+        )
+        record = DeviceEolReference(
+            manufacturer=clean_mfg,
+            model=clean_model,
+            eol_date=eol_date,
+            reference_source=clean_ref_source,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        return record, True
+
+    @staticmethod
     def create_reference(
         db: Session,
         manufacturer: str,
@@ -139,18 +211,13 @@ class EolRepository:
         eol_date: Optional[date] = None,
         reference_source: Optional[str] = None,
     ) -> DeviceEolReference:
-        now = datetime.now(timezone.utc)
-        record = DeviceEolReference(
-            manufacturer=manufacturer.strip(),
-            model=model.strip(),
+        record, _ = EolRepository.upsert_reference(
+            db=db,
+            manufacturer=manufacturer,
+            model=model,
             eol_date=eol_date,
-            reference_source=reference_source.strip() if reference_source else None,
-            created_at=now,
-            updated_at=now,
+            reference_source=reference_source,
         )
-        db.add(record)
-        db.commit()
-        db.refresh(record)
         return record
 
     @staticmethod

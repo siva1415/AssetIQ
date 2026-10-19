@@ -61,15 +61,16 @@ class AdminUserService:
         cls,
         db: Session,
         page: int = 1,
-        page_size: int = 25,
+        page_size: int = 10,
         search: Optional[str] = None,
         user_id: Optional[str] = None,
         full_name: Optional[str] = None,
         email: Optional[str] = None,
+        department: Optional[str] = None,
     ) -> PaginatedResponse[AvailableAdminUserItem]:
         """
         Retrieves employees from workday_employees who are not currently registered as admins.
-        Supports searching by user ID, full name, work email, and pagination.
+        Supports searching by user ID, full name, work email, department, and pagination.
         """
         employees, total = AdminUserRepository.list_available_users(
             db=db,
@@ -79,6 +80,7 @@ class AdminUserService:
             user_id=user_id,
             full_name=full_name,
             email=email,
+            department=department,
         )
 
         items = [AvailableAdminUserItem.model_validate(emp) for emp in employees]

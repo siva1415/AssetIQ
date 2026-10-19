@@ -54,14 +54,17 @@ class EmployeeService:
         cls,
         db: Session,
         page: int = 1,
-        page_size: int = 25,
+        page_size: int = 10,
         user_id: Optional[str] = None,
         name: Optional[str] = None,
         email: Optional[str] = None,
         department: Optional[str] = None,
         division: Optional[str] = None,
         employee_status: Optional[str] = None,
+        active_only: Optional[bool] = None,
         search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = "asc",
     ) -> PaginatedResponse[EmployeeResponse]:
         skip = (page - 1) * page_size
         employees, total_count = EmployeeRepository.list_employees(
@@ -74,7 +77,10 @@ class EmployeeService:
             department=department,
             division=division,
             employee_status=employee_status,
+            active_only=active_only,
             search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
         items = [EmployeeResponse.model_validate(emp) for emp in employees]
@@ -82,10 +88,13 @@ class EmployeeService:
 
         return PaginatedResponse(
             items=items,
+            data=items,
             total=total_count,
             total_items=total_count,
             total_pages=total_pages,
+            totalPages=total_pages,
             page=page,
             page_size=page_size,
+            pageSize=page_size,
         )
 
