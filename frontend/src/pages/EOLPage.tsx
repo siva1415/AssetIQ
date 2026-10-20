@@ -67,8 +67,17 @@ export const EOLPage: React.FC = () => {
   const loadRecords = async () => {
     setLoading(true);
     try {
-      const data = await api.getEOLReferences();
-      setRecords(data);
+      const data: any = await api.getEOLReferences();
+      const list: DeviceEOLReference[] = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data?.records)
+        ? data.records
+        : [];
+      setRecords(list);
     } catch (err: any) {
       setNotification({
         type: 'error',
@@ -83,6 +92,42 @@ export const EOLPage: React.FC = () => {
     loadRecords();
   }, [dataRefreshKey]);
 
+  // Dynamically extract distinct, non-null, non-empty manufacturers from records
+  const manufacturerOptions = useMemo(() => {
+    const mfrMap = new Map<string, string>(); // lowercase trimmed key -> display name
+
+    for (const record of records) {
+      const raw = record?.manufacturer;
+      if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (trimmed) {
+          const key = trimmed.toLowerCase();
+          if (!mfrMap.has(key)) {
+            mfrMap.set(key, trimmed);
+          }
+        }
+      }
+    }
+
+    // Sort alphabetically (case-insensitive)
+    return Array.from(mfrMap.values()).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' })
+    );
+  }, [records]);
+
+  // Reset manufacturerFilter if the selected manufacturer is no longer present in records
+  useEffect(() => {
+    if (manufacturerFilter && !loading && manufacturerOptions.length > 0) {
+      const normalizedSelected = manufacturerFilter.trim().toLowerCase();
+      const exists = manufacturerOptions.some(
+        m => m.trim().toLowerCase() === normalizedSelected
+      );
+      if (!exists) {
+        setManufacturerFilter('');
+      }
+    }
+  }, [manufacturerOptions, manufacturerFilter, loading]);
+
   // Filter and sort records
   const filteredRecords = useMemo(() => {
     let result = [...records];
@@ -90,19 +135,24 @@ export const EOLPage: React.FC = () => {
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       result = result.filter(
-        r => r.manufacturer.toLowerCase().includes(q) || r.model.toLowerCase().includes(q)
+        r =>
+          (typeof r.manufacturer === 'string' && r.manufacturer.toLowerCase().includes(q)) ||
+          (typeof r.model === 'string' && r.model.toLowerCase().includes(q))
       );
     }
 
-    if (manufacturerFilter) {
-      result = result.filter(r => r.manufacturer === manufacturerFilter);
+    if (manufacturerFilter && manufacturerFilter.trim()) {
+      const targetMfr = manufacturerFilter.trim().toLowerCase();
+      result = result.filter(
+        r => typeof r.manufacturer === 'string' && r.manufacturer.trim().toLowerCase() === targetMfr
+      );
     }
 
     // Default sort by Manufacturer, then Model
     result.sort((a, b) => {
-      const mComp = a.manufacturer.localeCompare(b.manufacturer);
+      const mComp = (a.manufacturer || '').localeCompare(b.manufacturer || '', undefined, { sensitivity: 'base' });
       if (mComp !== 0) return mComp;
-      return a.model.localeCompare(b.model);
+      return (a.model || '').localeCompare(b.model || '', undefined, { sensitivity: 'base' });
     });
 
     return result;
@@ -255,14 +305,15 @@ export const EOLPage: React.FC = () => {
   // Manufacturer badge styling helper
   const renderMfrBadge = (mfr: EOLManufacturer | string) => {
     let colorStyle = 'bg-slate-100 text-slate-800 border-slate-200';
-    if (mfr === 'DELL') colorStyle = 'bg-blue-50 text-blue-700 border-blue-200';
-    else if (mfr === 'HP') colorStyle = 'bg-teal-50 text-teal-700 border-teal-200';
-    else if (mfr === 'Lenovo') colorStyle = 'bg-red-50 text-red-700 border-red-200';
-    else if (mfr === 'Apple') colorStyle = 'bg-purple-50 text-purple-700 border-purple-200';
+    const norm = (mfr || '').trim().toUpperCase();
+    if (norm === 'DELL') colorStyle = 'bg-blue-50 text-blue-700 border-blue-200';
+    else if (norm === 'HP') colorStyle = 'bg-teal-50 text-teal-700 border-teal-200';
+    else if (norm === 'LENOVO') colorStyle = 'bg-red-50 text-red-700 border-red-200';
+    else if (norm === 'APPLE') colorStyle = 'bg-purple-50 text-purple-700 border-purple-200';
 
     return (
       <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold font-mono border ${colorStyle}`}>
-        {mfr}
+        {mfr || '—'}
       </span>
     );
   };
@@ -327,10 +378,11 @@ export const EOLPage: React.FC = () => {
             className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-md text-slate-700 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
           >
             <option value="">All Manufacturers</option>
-            <option value="DELL">DELL</option>
-            <option value="HP">HP</option>
-            <option value="Lenovo">Lenovo</option>
-            <option value="Apple">Apple</option>
+            {manufacturerOptions.map(mfr => (
+              <option key={mfr} value={mfr}>
+                {mfr}
+              </option>
+            ))}
           </select>
 
           <span className="text-slate-400 font-mono text-[11px] ml-1">

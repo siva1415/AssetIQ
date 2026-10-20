@@ -186,47 +186,60 @@ export function setStoredApiBaseUrl(url: string): void {
 export function normalizeAsset(raw: any): Asset {
   if (!raw) return raw;
 
-  const id = raw.assetId ?? raw.asset_id ?? raw.id ?? '';
-  const assetNumber = raw.assetNumber ?? raw.asset_number ?? String(id || '—');
-  const serialNumber = raw.serialNumber ?? raw.serial_number ?? '—';
-  const source = ((raw.source || '').toUpperCase() === 'JAMF' ? 'JAMF' : 'BIGFIX') as AssetSource;
-  const manufacturer = raw.manufacturer || '—';
-  const model = raw.model || '—';
-  const osName = raw.osName ?? raw.os_name ?? raw.osname ?? '—';
-  const hostname = raw.hostname ?? null;
+  const id = raw.assetId ?? raw.asset_id ?? raw.id ?? raw.Asset ?? '';
+  const assetNumber = raw.assetNumber ?? raw.asset_number ?? raw.Asset ?? String(id || '—');
+  const serialNumber = raw.serialNumber ?? raw.serial_number ?? raw.SerialNumber ?? raw['Serial Number'] ?? '—';
+  // Canonical computer_id from assets backend table (never fall back to asset_id or asset_number)
+  const computerId =
+    raw.computer_id !== undefined && raw.computer_id !== null && raw.computer_id !== ''
+      ? raw.computer_id
+      : (raw.computerId !== undefined && raw.computerId !== null && raw.computerId !== ''
+          ? raw.computerId
+          : (raw['Computer ID'] !== undefined && raw['Computer ID'] !== null && raw['Computer ID'] !== ''
+              ? raw['Computer ID']
+              : (raw['ComputerId'] !== undefined && raw['ComputerId'] !== null && raw['ComputerId'] !== ''
+                  ? raw['ComputerId']
+                  : (raw.computerid !== undefined && raw.computerid !== null && raw.computerid !== ''
+                      ? raw.computerid
+                      : null))));
+  const source = ((raw.source || raw.Source || '').toUpperCase() === 'JAMF' ? 'JAMF' : 'BIGFIX') as AssetSource;
+  const manufacturer = raw.manufacturer || raw.Manufacturer || '—';
+  const model = raw.model || raw.Model || '—';
+  const osName = raw.osName ?? raw.os_name ?? raw.osname ?? raw['Operating System'] ?? raw.OperatingSystem ?? '—';
+  const hostname = raw.hostname ?? raw.Hostname ?? null;
 
   // Device Type: Canonical devicetype from FastAPI backend
-  const deviceType = (raw.devicetype ?? raw.device_type ?? raw.deviceType ?? '').trim();
+  const deviceType = (raw.devicetype ?? raw.device_type ?? raw.deviceType ?? raw.DeviceType ?? raw['Device Type'] ?? '').trim();
 
   // MAC Address: Agreed property macAddress, mapped from macaddress
-  const macAddress = raw.macAddress ?? raw.mac_address ?? raw.macaddress ?? '—';
+  const macAddress = raw.macAddress ?? raw.mac_address ?? raw.macaddress ?? raw.MacAddress ?? raw['Mac Address'] ?? '—';
 
   // Last Discovery Date: Agreed property lastDiscoveryDate, mapped from lastreporttime
-  const lastDiscoveryDate = raw.lastDiscoveryDate ?? raw.last_report_time ?? raw.lastreporttime ?? raw.last_discovery_date ?? '';
+  const lastDiscoveryDate = raw.lastDiscoveryDate ?? raw.last_report_time ?? raw.lastreporttime ?? raw.last_discovery_date ?? raw['Last Discovery Date'] ?? '';
 
   // EOL: Canonical eol_status and eol_date from backend API
-  const rawEol = raw.eol_status ?? raw.eolStatus ?? raw.calculated_eol_status ?? raw.calculatedEolStatus;
+  const rawEol = raw.eol_status ?? raw.eolStatus ?? raw.calculated_eol_status ?? raw.calculatedEolStatus ?? raw['EOL Status'];
   const eolStatus: StandardEOLStatus = toStandardEOLStatus(rawEol);
-  const rawEolDate = raw.eolDate ?? raw.eol_date ?? null;
+  const rawEolDate = raw.eolDate ?? raw.eol_date ?? raw['EOL Expiry Date'] ?? null;
   const eolDate = rawEolDate && String(rawEolDate).trim() !== '' && String(rawEolDate).trim() !== '—'
     ? String(rawEolDate).trim()
     : null;
-  const rawDays = raw.daysRemaining ?? raw.days_remaining ?? null;
+  const rawDays = raw.daysRemaining ?? raw.days_remaining ?? raw['EOL Days Remaining'] ?? null;
   const daysRemaining = rawDays !== null && rawDays !== undefined && !isNaN(Number(rawDays))
     ? Number(rawDays)
     : null;
 
   // Status & Assignment: Canonical asset_status
-  const rawStatus = raw.asset_status ?? raw.assetStatus ?? raw.status;
+  const rawStatus = raw.asset_status ?? raw.assetStatus ?? raw.status ?? raw['Asset Status'];
   const assetStatus = toStandardAssetStatus(rawStatus);
-  const assignmentType = (raw.assignmentType ?? raw.assignment_type ?? 'Unassigned') as AssignmentType;
+  const assignmentType = (raw.assignmentType ?? raw.assignment_type ?? raw['Assignment Type'] ?? 'Unassigned') as AssignmentType;
   // Canonical managed_by property from backend API contract ('GROUP' | 'INDIVIDUAL')
-  const managedBy = typeof raw.managed_by === 'string' ? raw.managed_by.trim() : (raw.managed_by || '');
+  const managedBy = typeof raw.managed_by === 'string' ? raw.managed_by.trim() : (raw['Managed By'] || raw.managedBy || raw.managed_by || '');
 
   // Assigned Username & Workday Matching
-  const assignedUsername = raw.assignedUsername ?? raw.assigned_username ?? raw.username ?? null;
+  const assignedUsername = raw.assignedUsername ?? raw.assigned_username ?? raw['Assigned UserID'] ?? raw['Assigned UserId'] ?? raw['Assigned Username'] ?? raw.username ?? null;
   const verifiedEmployeeId = raw.verifiedEmployeeId ?? raw.verified_employee_id ?? raw.employee?.employee_id ?? raw.workday_employee?.employee_id ?? null;
-  const verifiedEmployeeName = raw.verifiedEmployeeName ?? raw.verified_employee_name ?? raw.employeeName ?? raw.employee_name ?? raw.fullName ?? raw.full_name ?? raw.employee?.full_name ?? raw.workday_employee?.full_name ?? null;
+  const verifiedEmployeeName = raw.verifiedEmployeeName ?? raw.verified_employee_name ?? raw['Assigned UserName'] ?? raw['Assigned Username'] ?? raw.employeeName ?? raw.employee_name ?? raw.fullName ?? raw.full_name ?? raw.employee?.full_name ?? raw.workday_employee?.full_name ?? null;
   const employeeStatus = raw.employeeStatus ?? raw.employee_status ?? raw.employee?.employee_status ?? raw.workday_employee?.employee_status ?? null;
   const workdayStatus = raw.workdayStatus ?? raw.workday_status ?? raw.matchStatus ?? raw.match_status ?? (verifiedEmployeeName ? 'Matched' : (assignedUsername ? 'Not Found in Workday' : 'Unassigned'));
 
@@ -235,6 +248,8 @@ export function normalizeAsset(raw: any): Asset {
     assetId: id,
     asset_number: assetNumber,
     assetNumber,
+    computer_id: computerId,
+    computerId: computerId,
     serial_number: serialNumber,
     serialNumber,
     source,
@@ -276,16 +291,39 @@ export function normalizeAsset(raw: any): Asset {
     email_work: raw.email_work ?? raw.work_email ?? raw.workEmail ?? raw.employee?.work_email ?? null,
     work_email: raw.work_email ?? raw.workEmail ?? raw.email_work ?? raw.employee?.work_email ?? null,
     workEmail: raw.workEmail ?? raw.work_email ?? raw.email_work ?? raw.employee?.work_email ?? null,
-    division: raw.division ?? raw.employee?.division ?? '',
-    job_title: raw.job_title ?? raw.jobTitle ?? raw.employee?.job_title ?? '',
-    jobTitle: raw.jobTitle ?? raw.job_title ?? raw.employee?.job_title ?? '',
+    job_title:
+      raw.job_title ??
+      raw.jobTitle ??
+      raw['Job Title'] ??
+      raw['job_title'] ??
+      raw['JobTitle'] ??
+      raw.employee?.job_title ??
+      raw.workday_employee?.job_title ??
+      raw.matched_employee?.job_title ??
+      '',
+    jobTitle:
+      raw.job_title ??
+      raw.jobTitle ??
+      raw['Job Title'] ??
+      raw['job_title'] ??
+      raw['JobTitle'] ??
+      raw.employee?.job_title ??
+      raw.workday_employee?.job_title ??
+      raw.matched_employee?.job_title ??
+      '',
     manager_user_name:
       raw.manager_user_name ??
       raw.manager_username ??
       raw.managerUsername ??
+      raw['Manager UserID'] ??
+      raw['Manager UserId'] ??
+      raw['Manager User Name'] ??
+      raw['manager_user_id'] ??
+      raw['manager_user'] ??
       raw.manager_user ??
       raw.employee?.manager_user_name ??
       raw.employee?.manager_username ??
+      raw.employee?.manager_user_id ??
       raw.workday_employee?.manager_user_name ??
       raw.workday_employee?.manager_username ??
       raw.matched_employee?.manager_user_name ??
@@ -295,6 +333,9 @@ export function normalizeAsset(raw: any): Asset {
       raw.manager_user_name ??
       raw.manager_username ??
       raw.managerUsername ??
+      raw['Manager UserID'] ??
+      raw['Manager UserId'] ??
+      raw['manager_user_id'] ??
       raw.manager_user ??
       raw.employee?.manager_user_name ??
       raw.employee?.manager_username ??
@@ -307,6 +348,9 @@ export function normalizeAsset(raw: any): Asset {
       raw.manager_user_name ??
       raw.manager_username ??
       raw.managerUsername ??
+      raw['Manager UserID'] ??
+      raw['Manager UserId'] ??
+      raw['manager_user_id'] ??
       raw.manager_user ??
       raw.employee?.manager_user_name ??
       raw.employee?.manager_username ??
@@ -318,6 +362,10 @@ export function normalizeAsset(raw: any): Asset {
     manager_name:
       raw.manager_name ??
       raw.managerName ??
+      raw['Manager UserName'] ??
+      raw['Manager Username'] ??
+      raw['Manager Name'] ??
+      raw['manager_name'] ??
       raw.employee?.manager_name ??
       raw.workday_employee?.manager_name ??
       raw.matched_employee?.manager_name ??
@@ -325,6 +373,10 @@ export function normalizeAsset(raw: any): Asset {
     managerName:
       raw.manager_name ??
       raw.managerName ??
+      raw['Manager UserName'] ??
+      raw['Manager Username'] ??
+      raw['Manager Name'] ??
+      raw['manager_name'] ??
       raw.employee?.manager_name ??
       raw.workday_employee?.manager_name ??
       raw.matched_employee?.manager_name ??
@@ -338,13 +390,13 @@ export function normalizeAsset(raw: any): Asset {
     workdayEmployee: raw.workdayEmployee ?? null,
     matched_employee: raw.matched_employee ?? null,
     matchedEmployee: raw.matchedEmployee ?? null,
-    department: raw.department ?? raw.employee?.department ?? '',
+    department: raw.department ?? raw['Department'] ?? raw.employee?.department ?? '',
     ip_address: raw.ip_address ?? raw.ipAddress ?? '',
     cpu: raw.cpu ?? '',
     ram_gb: raw.ram_gb ?? raw.ramGb,
     storage_gb: raw.storage_gb ?? raw.storageGb,
-    notes: raw.notes ?? raw.remarks ?? '',
-    remarks: raw.remarks ?? raw.notes ?? '',
+    notes: raw.notes ?? raw['Notes'] ?? raw.remarks ?? raw['Remarks'] ?? '',
+    remarks: raw.remarks ?? raw['Remarks'] ?? raw.notes ?? raw['Notes'] ?? '',
   };
 }
 
@@ -1702,7 +1754,7 @@ class ApiService {
         });
 
         const data = response.data;
-        if (data instanceof Blob && data.type.includes('application/json')) {
+        if (data instanceof Blob && (data.type.includes('application/json') || data.type.includes('text/json'))) {
           const text = await data.text();
           let json: any = {};
           try {
@@ -1718,6 +1770,11 @@ class ApiService {
               filename: json.filename,
               count: json.count || json.total,
             };
+          }
+          if (Array.isArray(json) || Array.isArray(json?.items) || Array.isArray(json?.assets) || Array.isArray(json?.data)) {
+            const rawItems: any[] = Array.isArray(json) ? json : (json.items || json.assets || json.data);
+            const normalized = rawItems.map(normalizeAsset);
+            return buildReportXlsxFromAssets(reportId, normalized);
           }
         }
 
@@ -1740,15 +1797,86 @@ class ApiService {
           const bytes = new Uint8Array(buffer);
           const isZipXlsx = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
           if (isZipXlsx) {
+            try {
+              const fullBuffer = await data.arrayBuffer();
+              const wb = XLSX.read(fullBuffer, { type: 'array' });
+              const sheetName = wb.SheetNames[0];
+              const sheet = wb.Sheets[sheetName];
+              const rawRows: any[] = XLSX.utils.sheet_to_json(sheet);
+              if (rawRows.length > 0) {
+                const sheetHeaders: string[] = [];
+                if (sheet['!ref']) {
+                  const range = XLSX.utils.decode_range(sheet['!ref']);
+                  for (let C = range.s.c; C <= range.e.c; ++C) {
+                    const cell = sheet[XLSX.utils.encode_cell({ r: range.s.r, c: C })];
+                    if (cell && cell.v !== undefined) {
+                      sheetHeaders.push(String(cell.v).trim());
+                    }
+                  }
+                }
+                const EXPECTED_REPORT_HEADERS = [
+                  'Asset',
+                  'Source',
+                  'DeviceType',
+                  'Manufacturer',
+                  'Model',
+                  'SerialNumber',
+                  'Operating System',
+                  'MacAddress',
+                  'Computer ID',
+                  'Asset Status',
+                  'EOL Expiry Date',
+                  'EOL Status',
+                  'EOL Days Remaining',
+                  'Managed By',
+                  'Assigned UserID',
+                  'Assigned UserName',
+                  'Department',
+                  'Manager UserID',
+                  'Manager UserName',
+                  'Job Title',
+                  'Remarks',
+                ];
+                const matchesExactColumns =
+                  sheetHeaders.length === EXPECTED_REPORT_HEADERS.length &&
+                  EXPECTED_REPORT_HEADERS.every((expected, idx) => sheetHeaders[idx] === expected);
+
+                if (!matchesExactColumns) {
+                  const normalized = rawRows.map(normalizeAsset);
+                  const rebuilt = buildReportXlsxFromAssets(reportId, normalized);
+                  return {
+                    blob: rebuilt.blob,
+                    filename: filename || rebuilt.filename,
+                    count: rebuilt.count,
+                  };
+                }
+              }
+            } catch (_) {}
+
             return {
               blob: data,
               filename,
             };
           }
 
-          // If backend returned CSV text instead of binary XLSX, convert to genuine XLSX with the 18 columns!
+          // If backend returned CSV text instead of binary XLSX, convert to genuine 21-column XLSX
           const text = await data.text();
           if (text.includes('\n') || text.includes(',')) {
+            try {
+              const wb = XLSX.read(text, { type: 'string' });
+              const sheetName = wb.SheetNames[0];
+              const sheet = wb.Sheets[sheetName];
+              const rawRows: any[] = XLSX.utils.sheet_to_json(sheet);
+              if (rawRows.length > 0) {
+                const normalized = rawRows.map(normalizeAsset);
+                const rebuilt = buildReportXlsxFromAssets(reportId, normalized);
+                return {
+                  blob: rebuilt.blob,
+                  filename: filename ? filename.replace(/\.csv$/i, '.xlsx') : rebuilt.filename,
+                  count: rebuilt.count,
+                };
+              }
+            } catch (_) {}
             const wb = XLSX.read(text, { type: 'string' });
             const xlsxBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
             return {

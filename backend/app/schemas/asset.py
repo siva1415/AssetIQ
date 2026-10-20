@@ -21,6 +21,8 @@ class AssetResponse(BaseModel):
     model: Optional[str] = None
     os_name: Optional[str] = None
     macaddress: Optional[str] = None
+    computer_id: Optional[str] = None
+    computerId: Optional[str] = None
     devicetype: Optional[str] = None
     managed_by: Optional[str] = None
 
@@ -83,6 +85,11 @@ class AssetResponse(BaseModel):
 
             if data.get("macaddress") is None and data.get("macAddress") is not None:
                 data["macaddress"] = data["macAddress"]
+
+            cid = data.get("computer_id", data.get("computerId", data.get("ComputerID")))
+            if cid is not None:
+                data["computer_id"] = str(cid) if cid != "" else None
+                data["computerId"] = str(cid) if cid != "" else None
 
             if data.get("devicetype") is None:
                 data["devicetype"] = data.get("deviceType") or data.get("DeviceType")

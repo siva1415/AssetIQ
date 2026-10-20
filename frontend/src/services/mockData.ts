@@ -1967,6 +1967,10 @@ export function generateMockAssetsCsvExport(params: AssetQueryParams): {
     'Assigned UserID',
     'Assigned UserName',
     'Department',
+    'Manager UserID',
+    'Manager UserName',
+    'Job Title',
+    'Remarks',
   ];
 
   const escapeField = (val: any): string => {
@@ -1989,7 +1993,17 @@ export function generateMockAssetsCsvExport(params: AssetQueryParams): {
     const serial = asset.serial_number || asset.serialNumber || '';
     const os = asset.os_name || asset.osName || (asset as any).osname || (source === 'JAMF' ? 'macOS Sonoma 14.5' : 'Windows 11 Enterprise 23H2');
     const mac = asset.mac_address || asset.macAddress || (asset as any).macaddress || '—';
-    const compId = (asset as any).computer_id ?? (asset as any).computerId ?? asset.id ?? '';
+    // Canonical Computer ID from assets.computer_id without falling back to Asset ID/Number
+    const compId =
+      asset.computer_id !== null && asset.computer_id !== undefined && asset.computer_id !== ''
+        ? asset.computer_id
+        : (asset.computerId !== null && asset.computerId !== undefined && asset.computerId !== ''
+            ? asset.computerId
+            : ((asset as any)['Computer ID'] !== null && (asset as any)['Computer ID'] !== undefined && (asset as any)['Computer ID'] !== ''
+                ? (asset as any)['Computer ID']
+                : ((asset as any).computerid !== null && (asset as any).computerid !== undefined && (asset as any).computerid !== ''
+                    ? (asset as any).computerid
+                    : '')));
     const status = asset.asset_status || 'ACTIVE';
     const eolDate = asset.eol_date ? formatEolDate(asset.eol_date) : (asset.eolDate ? formatEolDate(asset.eolDate) : '—');
     const eolStatus = asset.eol_status || asset.calculated_eol_status || 'UNKNOWN';
@@ -2007,9 +2021,49 @@ export function generateMockAssetsCsvExport(params: AssetQueryParams): {
       managedBy = 'GROUP';
     }
 
-    const assignedUserId = asset.assigned_username || (asset.assignment_type === 'Unassigned' ? '' : '');
-    const assignedUserName = asset.verified_employee_name || asset.verifiedEmployeeName || (asset.assignment_type === 'Unassigned' ? 'Unassigned' : asset.assigned_username || 'Unassigned');
-    const dept = asset.department || '';
+    const assignedUserId = asset.assigned_username || (asset as any).assigned_user_id || (asset as any)['Assigned UserID'] || (asset.assignment_type === 'Unassigned' ? '' : '');
+    const assignedUserName = asset.verified_employee_name || asset.verifiedEmployeeName || (asset as any)['Assigned UserName'] || (asset.assignment_type === 'Unassigned' ? 'Unassigned' : asset.assigned_username || 'Unassigned');
+    const dept = asset.department || (asset as any)['Department'] || (asset as any).employee?.department || '';
+    const managerUserId =
+      asset.manager_user_name ??
+      asset.manager_username ??
+      asset.managerUsername ??
+      (asset as any)['Manager UserID'] ??
+      (asset as any)['Manager UserId'] ??
+      (asset as any)['Manager User Name'] ??
+      (asset as any)['manager_user_id'] ??
+      (asset as any)['manager_user'] ??
+      (asset as any).manager_user ??
+      (asset as any).employee?.manager_user_name ??
+      (asset as any).employee?.manager_username ??
+      (asset as any).employee?.manager_user_id ??
+      (asset as any).workday_employee?.manager_user_name ??
+      (asset as any).workday_employee?.manager_username ??
+      (asset as any).matched_employee?.manager_user_name ??
+      (asset as any).matched_employee?.manager_username ??
+      '';
+    const managerUserName =
+      asset.manager_name ??
+      asset.managerName ??
+      (asset as any)['Manager UserName'] ??
+      (asset as any)['Manager Username'] ??
+      (asset as any)['Manager Name'] ??
+      (asset as any)['manager_name'] ??
+      (asset as any).employee?.manager_name ??
+      (asset as any).workday_employee?.manager_name ??
+      (asset as any).matched_employee?.manager_name ??
+      '';
+    const jobTitle =
+      asset.job_title ??
+      asset.jobTitle ??
+      (asset as any)['Job Title'] ??
+      (asset as any)['job_title'] ??
+      (asset as any)['JobTitle'] ??
+      (asset as any).employee?.job_title ??
+      (asset as any).workday_employee?.job_title ??
+      (asset as any).matched_employee?.job_title ??
+      '';
+    const remarks = asset.remarks || asset.notes || (asset as any)['Remarks'] || (asset as any)['Notes'] || '';
 
     return [
       assetNum,
@@ -2029,6 +2083,10 @@ export function generateMockAssetsCsvExport(params: AssetQueryParams): {
       assignedUserId,
       assignedUserName,
       dept,
+      managerUserId,
+      managerUserName,
+      jobTitle,
+      remarks,
     ].map(escapeField).join(',');
   });
 
@@ -2045,11 +2103,11 @@ export function buildReportXlsxFromAssets(
 ): { blob: Blob; filename: string; count: number } {
   const titleMap: Record<string, string> = {
     master: 'Master_Hardware',
-    warranty: 'Warranty_Compliance_Issues',
-    bigfix: 'BigFix_Assets',
-    jamf: 'Jamf_Assets',
-    instock: 'In_Stock_Inventory',
-    'need-validation': 'Need_Validation_Assets',
+    warranty: 'EOL_Compliance_Assets',
+    bigfix: 'BIGFIX_Assets',
+    jamf: 'JAMF_Assets',
+    instock: 'IN_STOCK_Assets',
+    'need-validation': 'NEED_REVIEW_Assets',
   };
   const titleName = titleMap[reportId] || 'Report';
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -2081,6 +2139,9 @@ export function buildReportXlsxFromAssets(
     'Assigned UserID',
     'Assigned UserName',
     'Department',
+    'Manager UserID',
+    'Manager UserName',
+    'Job Title',
     'Remarks',
   ];
 
@@ -2093,7 +2154,17 @@ export function buildReportXlsxFromAssets(
     const serial = a.serial_number || a.serialNumber || '';
     const os = a.os_name || a.osName || (a as any).osname || (source === 'JAMF' ? 'macOS Sonoma 14.5' : 'Windows 11 Enterprise 23H2');
     const mac = a.mac_address || a.macAddress || (a as any).macaddress || 'N/A';
-    const compId = (a as any).computer_id ?? (a as any).computerId ?? a.id ?? '';
+    // Canonical Computer ID from assets.computer_id without falling back to Asset ID/Number
+    const compId =
+      a.computer_id !== null && a.computer_id !== undefined && a.computer_id !== ''
+        ? a.computer_id
+        : (a.computerId !== null && a.computerId !== undefined && a.computerId !== ''
+            ? a.computerId
+            : ((a as any)['Computer ID'] !== null && (a as any)['Computer ID'] !== undefined && (a as any)['Computer ID'] !== ''
+                ? (a as any)['Computer ID']
+                : ((a as any).computerid !== null && (a as any).computerid !== undefined && (a as any).computerid !== ''
+                    ? (a as any).computerid
+                    : '')));
     const status = ASSET_STATUS_LABELS[toStandardAssetStatus(a.asset_status)] || a.asset_status || 'Active';
     const eolDate = a.eol_date ? formatEolDate(a.eol_date) : (a.eolDate ? formatEolDate(a.eolDate) : '—');
     const eolStatus = a.eol_status || a.calculated_eol_status || 'UNKNOWN';
@@ -2111,10 +2182,49 @@ export function buildReportXlsxFromAssets(
       managedBy = 'GROUP';
     }
 
-    const assignedUserId = a.assigned_username || (a.assignment_type === 'Unassigned' ? '' : '');
-    const assignedUserName = a.verified_employee_name || a.verifiedEmployeeName || (a.assignment_type === 'Unassigned' ? 'Unassigned' : a.assigned_username || 'Unassigned');
-    const dept = a.department || 'N/A';
-    const remarks = a.remarks || a.notes || '';
+    const assignedUserId = a.assigned_username || (a as any).assigned_user_id || (a as any)['Assigned UserID'] || (a.assignment_type === 'Unassigned' ? '' : '');
+    const assignedUserName = a.verified_employee_name || a.verifiedEmployeeName || (a as any)['Assigned UserName'] || (a.assignment_type === 'Unassigned' ? 'Unassigned' : a.assigned_username || 'Unassigned');
+    const dept = a.department || (a as any)['Department'] || (a as any).employee?.department || 'N/A';
+    const managerUserId =
+      a.manager_user_name ??
+      a.manager_username ??
+      a.managerUsername ??
+      (a as any)['Manager UserID'] ??
+      (a as any)['Manager UserId'] ??
+      (a as any)['Manager User Name'] ??
+      (a as any)['manager_user_id'] ??
+      (a as any)['manager_user'] ??
+      (a as any).manager_user ??
+      (a as any).employee?.manager_user_name ??
+      (a as any).employee?.manager_username ??
+      (a as any).employee?.manager_user_id ??
+      (a as any).workday_employee?.manager_user_name ??
+      (a as any).workday_employee?.manager_username ??
+      (a as any).matched_employee?.manager_user_name ??
+      (a as any).matched_employee?.manager_username ??
+      '';
+    const managerUserName =
+      a.manager_name ??
+      a.managerName ??
+      (a as any)['Manager UserName'] ??
+      (a as any)['Manager Username'] ??
+      (a as any)['Manager Name'] ??
+      (a as any)['manager_name'] ??
+      (a as any).employee?.manager_name ??
+      (a as any).workday_employee?.manager_name ??
+      (a as any).matched_employee?.manager_name ??
+      '';
+    const jobTitle =
+      a.job_title ??
+      a.jobTitle ??
+      (a as any)['Job Title'] ??
+      (a as any)['job_title'] ??
+      (a as any)['JobTitle'] ??
+      (a as any).employee?.job_title ??
+      (a as any).workday_employee?.job_title ??
+      (a as any).matched_employee?.job_title ??
+      '';
+    const remarks = a.remarks || a.notes || (a as any)['Remarks'] || (a as any)['Notes'] || '';
 
     return {
       'Asset': assetNum,
@@ -2134,6 +2244,9 @@ export function buildReportXlsxFromAssets(
       'Assigned UserID': assignedUserId,
       'Assigned UserName': assignedUserName,
       'Department': dept,
+      'Manager UserID': managerUserId,
+      'Manager UserName': managerUserName,
+      'Job Title': jobTitle,
       'Remarks': remarks,
     };
   });

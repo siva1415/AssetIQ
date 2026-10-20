@@ -158,6 +158,8 @@ export interface Asset {
   assetId?: string | number;
   asset_number: string;
   assetNumber?: string;
+  computer_id?: string | number | null;
+  computerId?: string | number | null;
   serial_number: string;
   serialNumber?: string;
   source: AssetSource;

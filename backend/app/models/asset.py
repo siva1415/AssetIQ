@@ -25,6 +25,7 @@ class Asset(Base):
     model = Column(String(150), nullable=True, index=True)
     os_name = Column(String(100), nullable=True)
     macaddress = Column(String(50), nullable=True)
+    computer_id = Column(String(100), nullable=True)
     devicetype = Column(String(30), nullable=True, index=True)  # Server or Desktop
     managed_by = Column(String(20), nullable=True)  # GROUP or INDIVIDUAL
     assigned_username = Column(String(150), nullable=True, index=True)

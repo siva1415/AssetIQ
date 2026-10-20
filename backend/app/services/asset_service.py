@@ -62,6 +62,9 @@ REPORT_XLSX_HEADERS = [
     "Assigned UserID",
     "Assigned UserName",
     "Department",
+    "Manager UserID",
+    "Manager UserName",
+    "Job Title",
     "Remarks",
 ]
 
@@ -139,6 +142,7 @@ class AssetService:
             "model": asset.model,
             "os_name": asset.os_name,
             "macaddress": asset.macaddress,
+            "computer_id": asset.computer_id,
             "devicetype": asset.devicetype,
             "managed_by": asset.managed_by,
             "assigned_username": asset.assigned_username,
@@ -847,34 +851,60 @@ class AssetService:
             )
             assigned_user_name = emp.full_name if (emp and emp.full_name) else ""
             department = emp.department if (emp and emp.department) else ""
+            manager_user_id = emp.manager_user_name if (emp and emp.manager_user_name) else ""
+            manager_user_name = emp.manager_name if (emp and emp.manager_name) else ""
+            job_title = emp.job_title if (emp and emp.job_title) else ""
 
             computer_id = (
-                str(getattr(asset, "computer_id", None))
-                if getattr(asset, "computer_id", None) is not None
+                str(asset.computer_id).strip()
+                if (asset.computer_id is not None and str(asset.computer_id).strip())
                 else ""
             )
 
-            csv_row = [
-                asset.asset_number or "",
-                asset.source or "",
-                asset.devicetype or "",
-                asset.manufacturer or "",
-                asset.model or "",
-                asset.serial_number or "",
-                asset.os_name or "",
-                asset.macaddress or "",
-                computer_id,
-                asset.asset_status or "",
-                eol_expiry_str,
-                eol_stat,
-                days_rem_str,
-                asset.managed_by or "",
-                assigned_user_id,
-                assigned_user_name,
-                department,
-            ]
             if report or include_remarks:
-                csv_row.append(asset.remarks or "")
+                csv_row = [
+                    asset.asset_number or "",
+                    asset.source or "",
+                    asset.devicetype or "",
+                    asset.manufacturer or "",
+                    asset.model or "",
+                    asset.serial_number or "",
+                    asset.os_name or "",
+                    asset.macaddress or "",
+                    computer_id,
+                    asset.asset_status or "",
+                    eol_expiry_str,
+                    eol_stat,
+                    days_rem_str,
+                    asset.managed_by or "",
+                    assigned_user_id,
+                    assigned_user_name,
+                    department,
+                    manager_user_id,
+                    manager_user_name,
+                    job_title,
+                    asset.remarks or "",
+                ]
+            else:
+                csv_row = [
+                    asset.asset_number or "",
+                    asset.source or "",
+                    asset.devicetype or "",
+                    asset.manufacturer or "",
+                    asset.model or "",
+                    asset.serial_number or "",
+                    asset.os_name or "",
+                    asset.macaddress or "",
+                    computer_id,
+                    asset.asset_status or "",
+                    eol_expiry_str,
+                    eol_stat,
+                    days_rem_str,
+                    asset.managed_by or "",
+                    assigned_user_id,
+                    assigned_user_name,
+                    department,
+                ]
 
             writer.writerow(csv_row)
             count += 1
@@ -921,7 +951,7 @@ class AssetService:
         wb = Workbook(write_only=True)
         ws = wb.create_sheet(title="Asset Inventory")
 
-        # 1. Emit 18 required report headers in exact order
+        # 1. Emit 21 required report headers in exact order
         ws.append(REPORT_XLSX_HEADERS)
 
         # 2. Iterate database rows using yield_per for constant-memory retrieval
@@ -956,10 +986,13 @@ class AssetService:
             )
             assigned_user_name = emp.full_name if (emp and emp.full_name) else ""
             department = emp.department if (emp and emp.department) else ""
+            manager_user_id = emp.manager_user_name if (emp and emp.manager_user_name) else ""
+            manager_user_name = emp.manager_name if (emp and emp.manager_name) else ""
+            job_title = emp.job_title if (emp and emp.job_title) else ""
 
             computer_id = (
-                str(getattr(asset, "computer_id", None))
-                if getattr(asset, "computer_id", None) is not None
+                str(asset.computer_id).strip()
+                if (asset.computer_id is not None and str(asset.computer_id).strip())
                 else ""
             )
 
@@ -983,6 +1016,9 @@ class AssetService:
                 assigned_user_id,
                 assigned_user_name,
                 department,
+                manager_user_id,
+                manager_user_name,
+                job_title,
                 remarks,
             ]
             ws.append(xlsx_row)

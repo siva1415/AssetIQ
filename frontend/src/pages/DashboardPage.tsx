@@ -25,17 +25,37 @@ import {
 } from 'lucide-react';
 import './DashboardPage.css';
 
-const SOURCE_COLORS: Record<string, string> = {
-  BIGFIX: '#2563eb',
-  JAMF: '#0d9488',
+export const SOURCE_COLORS: Record<string, string> = {
+  BIGFIX: '#4169E1', // Royal Blue
+  BigFix: '#4169E1',
+  bigfix: '#4169E1',
+  JAMF: '#C2185B',   // Dark Pink
+  Jamf: '#C2185B',
+  jamf: '#C2185B',
 };
 
-const EOL_COLORS: Record<string, string> = {
-  ACTIVE: '#16a34a',
-  'EOL SOON': '#d97706',
-  EXPIRED: '#dc2626',
-  UNKNOWN: '#94a3b8',
+export function getSourceColor(source: string): string {
+  const normalized = (source || '').trim().toUpperCase();
+  if (normalized === 'BIGFIX') return '#4169E1';
+  if (normalized === 'JAMF') return '#C2185B';
+  return SOURCE_COLORS[normalized] || '#4169E1';
+}
+
+export const EOL_COLORS: Record<string, string> = {
+  ACTIVE: '#22C55E',      // Green (≥90 days)
+  'EOL SOON': '#F97316',  // Orange (≤90 days)
+  EXPIRED: '#EF4444',     // Red
+  UNKNOWN: '#9CA3AF',     // Grey
 };
+
+export function getEolColor(status: string): string {
+  const s = (status || '').trim().toUpperCase();
+  if (s === 'ACTIVE' || s.startsWith('ACTIVE')) return '#22C55E';
+  if (s === 'EOL SOON' || s === 'EOL_SOON' || s.includes('SOON')) return '#F97316';
+  if (s === 'EXPIRED') return '#EF4444';
+  if (s === 'UNKNOWN') return '#9CA3AF';
+  return EOL_COLORS[s] || '#9CA3AF';
+}
 
 export interface ChartItem {
   name: string;
@@ -91,7 +111,7 @@ export function parseCategoryMap(
 }
 
 export const OS_PALETTE: string[] = [
-  '#2563eb', // Royal Blue
+  '#4169E1', // Royal Blue
   '#8b5cf6', // Vivid Purple
   '#0d9488', // Teal
   '#f97316', // Orange
@@ -110,15 +130,15 @@ export const OS_PALETTE: string[] = [
 ];
 
 export const KNOWN_OS_COLORS: Record<string, string> = {
-  // Windows: distinct blues/sky/indigo
-  'Windows 11 Pro': '#2563eb',
+  // Windows: royal blue, sky blue, vivid blue
+  'Windows 11 Pro': '#4169E1',
   'Windows 10 Enterprise': '#0284c7',
   'Windows 11 Enterprise': '#0ea5e9',
   'Windows 10 Professional': '#3b82f6',
-  'Windows 11 Professional': '#2563eb',
-  'Windows 11': '#2563eb',
+  'Windows 11 Professional': '#4169E1',
+  'Windows 11': '#4169E1',
   'Windows 10': '#0284c7',
-  Windows: '#2563eb',
+  Windows: '#4169E1',
 
   // macOS / Mac: vibrant purple / violet
   macOS: '#8b5cf6',
@@ -264,34 +284,80 @@ export function formatDepartmentDisplayName(name: string): string {
 }
 
 export const DEVICE_TYPE_COLORS: Record<string, string> = {
-  Laptop: '#4f46e5',
-  Desktop: '#0d9488',
-  Server: '#d97706',
-  Tablet: '#8b5cf6',
-  Mobile: '#ec4899',
-  Other: '#64748b',
+  Laptop: '#4F46E5',    // Vivid Indigo
+  Desktop: '#0D9488',   // Bright Teal
+  Server: '#EA580C',    // Vibrant Orange
+  Tablet: '#8B5CF6',    // Vivid Purple
+  Mobile: '#EC4899',    // Vivid Pink
+  Virtual: '#06B6D4',   // Cyan
+  Network: '#7C3AED',   // Deep Violet
+  Other: '#64748B',     // Slate
 };
 
 export const DEVICE_TYPE_PALETTE: string[] = [
-  '#4f46e5',
-  '#0d9488',
-  '#d97706',
-  '#8b5cf6',
-  '#ec4899',
-  '#0284c7',
-  '#64748b',
+  '#4F46E5', // Indigo
+  '#0D9488', // Teal
+  '#EA580C', // Orange
+  '#8B5CF6', // Purple
+  '#EC4899', // Pink
+  '#06B6D4', // Cyan
+  '#EAB308', // Yellow
+  '#10B981', // Emerald
+  '#7C3AED', // Violet
+  '#F43F5E', // Rose
 ];
 
 const DEVICE_COLOR_CACHE = new Map<string, string>();
 
 export function getDeviceTypeColor(name: string, index: number): string {
   const trimmed = (name || '').trim();
-  if (DEVICE_TYPE_COLORS[trimmed]) {
-    return DEVICE_TYPE_COLORS[trimmed];
-  }
   if (DEVICE_COLOR_CACHE.has(trimmed)) {
     return DEVICE_COLOR_CACHE.get(trimmed)!;
   }
+
+  // Exact match
+  if (DEVICE_TYPE_COLORS[trimmed]) {
+    const c = DEVICE_TYPE_COLORS[trimmed];
+    DEVICE_COLOR_CACHE.set(trimmed, c);
+    return c;
+  }
+
+  // Case-insensitive match
+  const lower = trimmed.toLowerCase();
+  for (const [key, val] of Object.entries(DEVICE_TYPE_COLORS)) {
+    if (key.toLowerCase() === lower) {
+      DEVICE_COLOR_CACHE.set(trimmed, val);
+      return val;
+    }
+  }
+
+  // Substring/category matching
+  if (lower.includes('laptop') || lower.includes('notebook')) {
+    const c = DEVICE_TYPE_COLORS.Laptop;
+    DEVICE_COLOR_CACHE.set(trimmed, c);
+    return c;
+  }
+  if (lower.includes('desktop') || lower.includes('workstation')) {
+    const c = DEVICE_TYPE_COLORS.Desktop;
+    DEVICE_COLOR_CACHE.set(trimmed, c);
+    return c;
+  }
+  if (lower.includes('server')) {
+    const c = DEVICE_TYPE_COLORS.Server;
+    DEVICE_COLOR_CACHE.set(trimmed, c);
+    return c;
+  }
+  if (lower.includes('tablet') || lower.includes('ipad')) {
+    const c = DEVICE_TYPE_COLORS.Tablet;
+    DEVICE_COLOR_CACHE.set(trimmed, c);
+    return c;
+  }
+  if (lower.includes('phone') || lower.includes('mobile')) {
+    const c = DEVICE_TYPE_COLORS.Mobile;
+    DEVICE_COLOR_CACHE.set(trimmed, c);
+    return c;
+  }
+
   const color = DEVICE_TYPE_PALETTE[index % DEVICE_TYPE_PALETTE.length];
   DEVICE_COLOR_CACHE.set(trimmed, color);
   return color;
@@ -871,16 +937,15 @@ export const DashboardPage: React.FC = () => {
                     data={sourceData}
                     dataKey="count"
                     nameKey="source"
-                    innerRadius={50}
+                    innerRadius={0}
                     outerRadius={74}
-                    paddingAngle={3}
                     stroke="#fff"
                     strokeWidth={2}
                   >
                     {sourceData.map((item) => (
                       <Cell
                         key={item.source}
-                        fill={SOURCE_COLORS[item.source] || '#64748b'}
+                        fill={getSourceColor(item.source)}
                       />
                     ))}
                   </Pie>
@@ -904,7 +969,7 @@ export const DashboardPage: React.FC = () => {
               const pct = formatChartPercentage(item.count, totalSourceCount);
               return (
                 <span key={item.source} className="di-legend-item">
-                  <i style={{ background: SOURCE_COLORS[item.source] || '#64748b' }} />
+                  <i style={{ background: getSourceColor(item.source) }} />
                   <span className="di-legend-name">{labelForSource(item.source)}</span>
                   <b className="di-legend-num">{formatNumber(item.count)}</b>
                   <span className="di-pct-pill">{pct}</span>
@@ -955,9 +1020,8 @@ export const DashboardPage: React.FC = () => {
                           data={osDistribution}
                           dataKey="count"
                           nameKey="name"
-                          innerRadius={32}
+                          innerRadius={0}
                           outerRadius={50}
-                          paddingAngle={3}
                           stroke="#fff"
                           strokeWidth={2}
                         >
@@ -1024,9 +1088,8 @@ export const DashboardPage: React.FC = () => {
                           data={deviceTypeDistribution}
                           dataKey="count"
                           nameKey="name"
-                          innerRadius={32}
+                          innerRadius={0}
                           outerRadius={50}
-                          paddingAngle={3}
                           stroke="#fff"
                           strokeWidth={2}
                         >
@@ -1162,16 +1225,15 @@ export const DashboardPage: React.FC = () => {
                     data={eolData}
                     dataKey="count"
                     nameKey="status"
-                    innerRadius={58}
+                    innerRadius={0}
                     outerRadius={84}
-                    paddingAngle={2}
                     stroke="#fff"
                     strokeWidth={2}
                   >
                     {eolData.map((item) => (
                       <Cell
                         key={item.status}
-                        fill={EOL_COLORS[item.status] || '#94a3b8'}
+                        fill={getEolColor(item.status)}
                       />
                     ))}
                   </Pie>
@@ -1196,7 +1258,7 @@ export const DashboardPage: React.FC = () => {
               return (
                 <div key={item.status} className="di-eol-legend-item">
                   <span className="di-eol-legend-label">
-                    <i style={{ background: EOL_COLORS[item.status] || '#94a3b8' }} />
+                    <i style={{ background: getEolColor(item.status) }} />
                     <span className="di-eol-legend-text">
                       {formatEolStatusLabel(item.status)}
                     </span>
@@ -1271,7 +1333,7 @@ export const DashboardPage: React.FC = () => {
                         {eolExposureFormatted.map((item) => (
                           <Cell
                             key={item.originalModel}
-                            fill={EOL_COLORS[item.eol_status] || '#94a3b8'}
+                            fill={getEolColor(item.eol_status)}
                             tabIndex={0}
                             aria-label={`Model: ${item.originalModel}, ${formatNumber(item.count)} assets, EOL status: ${formatEolStatusLabel(item.eol_status)}`}
                           >
@@ -1298,7 +1360,7 @@ export const DashboardPage: React.FC = () => {
           <div className="di-legend di-legend-wrap">
             {['EXPIRED', 'EOL SOON', 'UNKNOWN'].map((status) => (
               <span key={status} className="di-legend-item">
-                <i style={{ background: EOL_COLORS[status] }} />
+                <i style={{ background: getEolColor(status) }} />
                 <span className="di-legend-name">
                   {status === 'EOL SOON'
                     ? 'EOL soon (< 90 days)'
@@ -1357,7 +1419,7 @@ export const DashboardPage: React.FC = () => {
               {data.source_summary.map((row) => (
                 <tr key={row.source}>
                   <td className="di-source-name">
-                    <i style={{ background: SOURCE_COLORS[row.source] || '#64748b' }} />
+                    <i style={{ background: getSourceColor(row.source) }} />
                     {labelForSource(row.source)}
                   </td>
                   <td className="di-cell-total">{formatNumber(row.total)}</td>

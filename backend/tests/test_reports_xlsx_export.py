@@ -9,7 +9,7 @@ from app.models.asset import Asset
 from app.models.device_eol_reference import DeviceEolReference
 from app.models.workday_employee import WorkdayEmployee
 
-EXPECTED_18_REPORT_HEADERS = [
+EXPECTED_21_REPORT_HEADERS = [
     "Asset",
     "Source",
     "DeviceType",
@@ -27,8 +27,12 @@ EXPECTED_18_REPORT_HEADERS = [
     "Assigned UserID",
     "Assigned UserName",
     "Department",
+    "Manager UserID",
+    "Manager UserName",
+    "Job Title",
     "Remarks",
 ]
+EXPECTED_18_REPORT_HEADERS = EXPECTED_21_REPORT_HEADERS  # Alias for backward compatibility
 
 EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -203,6 +207,7 @@ def test_export_fields_mapping_and_remarks(client: TestClient):
     assert ast1[5] == "SN-APP-001"
     assert ast1[6] == "macOS 14 Sonoma"
     assert ast1[7] == "3c:22:fb:01:23:45"
+    assert ast1[8] == "COMP-1001"
     assert ast1[9] == "ACTIVE"
     assert ast1[11] == "EXPIRED"
     assert int(ast1[12]) < 0
@@ -210,18 +215,38 @@ def test_export_fields_mapping_and_remarks(client: TestClient):
     assert ast1[14].upper() == "JOHNDOE"
     assert ast1[15] == "John Doe"
     assert ast1[16] == "Engineering"
-    assert ast1[17] == "Primary developer laptop"
+    assert ast1[17] == "janemanager"
+    assert ast1[18] == "Jane Manager"
+    assert ast1[19] == "Senior Systems Engineer"
+    assert ast1[20] == "Primary developer laptop"
 
     ast2 = row_map["AST-1002"]
+    assert ast2[8] == "COMP-1002"
     assert ast2[15] == "Sarah Connor"
     assert ast2[16] == "Security"
-    assert ast2[17] == "Needs security check"
+    assert ast2[17] == "robertboss"
+    assert ast2[18] == "Robert Boss"
+    assert ast2[19] == "Lead Security Analyst"
+    assert ast2[20] == "Needs security check"
+
+    ast3 = row_map["AST-1003"]
+    assert (ast3[8] or "") == ""  # NULL preserved as blank
+    assert (ast3[14] or "") == ""
+    assert (ast3[15] or "") == ""
+    assert (ast3[16] or "") == ""
+    assert (ast3[17] or "") == ""
+    assert (ast3[18] or "") == ""
+    assert (ast3[19] or "") == ""
 
     ast4 = row_map["AST-1004"]
+    assert ast4[8] == "COMP-1004"
     assert ast4[14] == "admin_local"
     assert (ast4[15] or "") == ""
     assert (ast4[16] or "") == ""
     assert (ast4[17] or "") == ""
+    assert (ast4[18] or "") == ""
+    assert (ast4[19] or "") == ""
+    assert (ast4[20] or "") == ""
 
 
 def test_export_format_xlsx_and_route_aliases(client: TestClient):
@@ -318,7 +343,7 @@ def test_export_reports_large_dataset_50000_records(client: TestClient, db_sessi
     assert EXCEL_MIME in res.headers["content-type"]
 
     header, rows = _read_xlsx(res.content)
-    assert header == EXPECTED_18_REPORT_HEADERS
+    assert header == EXPECTED_21_REPORT_HEADERS
     assert len(rows) == 50000, f"Expected 50000 records, got {len(rows)}"
 
     # Spot check first row
@@ -328,7 +353,10 @@ def test_export_reports_large_dataset_50000_records(client: TestClient, db_sessi
     assert first[14] == "johndoe"
     assert first[15] == "John Doe"
     assert first[16] == "Engineering"
-    assert first[17] == "Bulk asset index 0"
+    assert first[17] == "janemanager"
+    assert first[18] == "Jane Manager"
+    assert first[19] == "Senior Systems Engineer"
+    assert first[20] == "Bulk asset index 0"
 
     # Spot check last row
     last = rows[-1]
@@ -336,4 +364,5 @@ def test_export_reports_large_dataset_50000_records(client: TestClient, db_sessi
     assert last[1] == "JAMF"
     assert (last[14] or "") == ""
     assert (last[15] or "") == ""
-    assert last[17] == "Bulk asset index 49999"
+    assert (last[17] or "") == ""
+    assert last[20] == "Bulk asset index 49999"

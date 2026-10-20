@@ -139,6 +139,7 @@ def db_session() -> Session:
         model="MacBook Pro 16",
         os_name="macOS 14 Sonoma",
         macaddress="3c:22:fb:01:23:45",
+        computer_id="COMP-1001",
         devicetype="Desktop",
         managed_by="INDIVIDUAL",
         assigned_username="  JOHNDOE  ",  # tests uppercase + whitespace
@@ -157,6 +158,7 @@ def db_session() -> Session:
         model="ThinkPad T14",
         os_name="Windows 11 Pro",
         macaddress="50:7b:9d:22:44:90",
+        computer_id="COMP-1002",
         devicetype="Desktop",
         managed_by="INDIVIDUAL",
         assigned_username="sarahconnor",
@@ -175,6 +177,7 @@ def db_session() -> Session:
         model="PowerEdge R750",
         os_name="Red Hat Enterprise Linux 9",
         macaddress="00:1e:67:d8:a4:20",
+        computer_id=None,
         devicetype="Server",
         managed_by="GROUP",
         assigned_username=None,  # Unassigned
@@ -193,6 +196,7 @@ def db_session() -> Session:
         model="ThinkPad T14",
         os_name="Windows 11 Pro",
         macaddress="50:7b:9d:88:12:33",
+        computer_id="COMP-1004",
         devicetype="Desktop",
         managed_by="INDIVIDUAL",
         assigned_username="admin_local",  # Not in Workday
@@ -211,6 +215,7 @@ def db_session() -> Session:
         model="EliteBook 840",  # No EOL reference -> Unknown
         os_name="Windows 10 Enterprise",
         macaddress=None,
+        computer_id=None,
         devicetype="Desktop",
         managed_by="INDIVIDUAL",
         assigned_username="alexturner",  # Inactive employee in Workday
@@ -229,6 +234,7 @@ def db_session() -> Session:
         model="PowerEdge R750",
         os_name="Ubuntu 22.04 LTS",
         macaddress=None,
+        computer_id="COMP-1006",
         devicetype="Server",
         managed_by="GROUP",
         assigned_username="   ",  # blank string -> Unassigned
