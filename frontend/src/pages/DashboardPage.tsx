@@ -91,57 +91,176 @@ export function parseCategoryMap(
 }
 
 export const OS_PALETTE: string[] = [
-  '#0284c7', // Sky Blue (e.g. Windows 11 Pro)
-  '#2563eb', // Royal Blue (e.g. Windows 10 Enterprise)
-  '#38bdf8', // Light Blue (e.g. Windows 11 Enterprise)
-  '#334155', // Slate (e.g. macOS)
-  '#0ea5e9', // Vivid Blue (e.g. Windows 10 Professional)
-  '#60a5fa', // Soft Blue (e.g. Windows 11 Professional)
-  '#1e293b', // Deep Slate (e.g. macOS Sequoia)
-  '#475569', // Dark Slate (e.g. macOS Sonoma)
-  '#64748b', // Medium Slate (e.g. macOS Ventura)
-  '#94a3b8', // Light Slate (e.g. macOS Monterey)
-  '#d97706', // Warm Amber (e.g. Linux / Ubuntu)
-  '#7c3aed', // Violet (e.g. VMware ESXi)
-  '#059669', // Emerald
-  '#ec4899', // Pink
-  '#8b5cf6', // Purple
+  '#2563eb', // Royal Blue
+  '#8b5cf6', // Vivid Purple
   '#0d9488', // Teal
+  '#f97316', // Orange
+  '#ef4444', // Red
+  '#ec4899', // Pink
+  '#eab308', // Yellow
+  '#06b6d4', // Cyan
+  '#10b981', // Emerald
+  '#7c3aed', // Deep Violet
+  '#f43f5e', // Rose
+  '#4f46e5', // Indigo
+  '#0284c7', // Sky Blue
+  '#ea580c', // Tangerine
+  '#14b8a6', // Bright Teal
+  '#d946ef', // Fuchsia
 ];
 
 export const KNOWN_OS_COLORS: Record<string, string> = {
-  'Windows 11 Pro': '#0284c7',
-  'Windows 10 Enterprise': '#2563eb',
-  'Windows 11 Enterprise': '#38bdf8',
-  macOS: '#334155',
-  'Windows 10 Professional': '#0ea5e9',
-  'Windows 11 Professional': '#60a5fa',
-  'macOS Sequoia': '#1e293b',
-  'macOS Sonoma': '#475569',
-  'macOS Ventura': '#64748b',
-  'macOS Monterey': '#94a3b8',
-  Windows: '#0284c7',
-  'Windows 11': '#0284c7',
-  'Windows 10': '#38bdf8',
-  Linux: '#d97706',
-  Ubuntu: '#ea580c',
-  'Red Hat': '#dc2626',
-  'VMware ESXi': '#7c3aed',
+  // Windows: distinct blues/sky/indigo
+  'Windows 11 Pro': '#2563eb',
+  'Windows 10 Enterprise': '#0284c7',
+  'Windows 11 Enterprise': '#0ea5e9',
+  'Windows 10 Professional': '#3b82f6',
+  'Windows 11 Professional': '#2563eb',
+  'Windows 11': '#2563eb',
+  'Windows 10': '#0284c7',
+  Windows: '#2563eb',
+
+  // macOS / Mac: vibrant purple / violet
+  macOS: '#8b5cf6',
+  Mac: '#8b5cf6',
+  'macOS Sequoia': '#7c3aed',
+  'macOS Sonoma': '#8b5cf6',
+  'macOS Ventura': '#a855f7',
+  'macOS Monterey': '#6366f1',
+
+  // Red Hat / RHEL: vivid red
+  'Red Hat': '#ef4444',
+  RHEL: '#ef4444',
+  'RED HAT ENTERPRISE LINUX': '#ef4444',
+  'Red Hat Enterprise Linux': '#ef4444',
+
+  // Linux / Ubuntu: vivid orange / tangerine / pink / yellow / teal
+  Ubuntu: '#f97316',
+  Linux: '#ea580c',
+  'Debian GNU/Linux': '#ec4899',
+  Debian: '#ec4899',
+  AIX: '#eab308',
+  'VMware ESXi': '#0d9488',
 };
 
 const OS_COLOR_CACHE = new Map<string, string>();
 
+/**
+ * Formats OS names for display according to short-form mapping rules:
+ * - "RED HAT ENTERPRISE LINUX" / "Red Hat Enterprise Linux" -> "RHEL"
+ * - "Red Hat Enterprise Linux 8.10 (Ootpa)" -> "RHEL 8.10 (Ootpa)"
+ * - "RED HAT ENTERPRISE LINUX 9.8 (PLOW)" -> "RHEL 9.8 (PLOW)"
+ * - "macOS" -> "Mac"
+ * - "macOS 27.0.1" -> "Mac 27.0.1"
+ * - "Windows" remains "Windows", "Windows 11 Professional" remains "Windows 11 Professional"
+ * - Unrelated names (Debian GNU/Linux, Ubuntu, AIX, RHEL) remain unchanged.
+ */
+export function formatOsDisplayName(name: string): string {
+  if (!name) return '';
+  const trimmed = name.trim();
+
+  // Red Hat Enterprise Linux prefix replacement (case-insensitive)
+  const rhelRegex = /^red\s+hat\s+enterprise\s+linux(\b|$)/i;
+  if (rhelRegex.test(trimmed)) {
+    return trimmed.replace(rhelRegex, 'RHEL');
+  }
+
+  // macOS prefix replacement (case-insensitive)
+  const macRegex = /^macos(\b|$)/i;
+  if (macRegex.test(trimmed)) {
+    return trimmed.replace(macRegex, 'Mac');
+  }
+
+  return trimmed;
+}
+
 export function getOsColor(name: string, index: number): string {
   const trimmed = (name || '').trim();
-  if (KNOWN_OS_COLORS[trimmed]) {
-    return KNOWN_OS_COLORS[trimmed];
-  }
   if (OS_COLOR_CACHE.has(trimmed)) {
     return OS_COLOR_CACHE.get(trimmed)!;
   }
+  if (KNOWN_OS_COLORS[trimmed]) {
+    const c = KNOWN_OS_COLORS[trimmed];
+    OS_COLOR_CACHE.set(trimmed, c);
+    return c;
+  }
+  const mapped = formatOsDisplayName(trimmed);
+  if (KNOWN_OS_COLORS[mapped]) {
+    const c = KNOWN_OS_COLORS[mapped];
+    OS_COLOR_CACHE.set(trimmed, c);
+    return c;
+  }
+
   const color = OS_PALETTE[index % OS_PALETTE.length];
   OS_COLOR_CACHE.set(trimmed, color);
   return color;
+}
+
+const KNOWN_ACRONYMS = new Set([
+  'IT',
+  'HR',
+  'QA',
+  'R&D',
+  'BI',
+  'PMO',
+  'SOC',
+  'NOC',
+  'SRE',
+  'AI',
+  'ML',
+  'UI',
+  'UX',
+  'ERP',
+  'CRM',
+]);
+
+/**
+ * Converts department names that are entirely uppercase into readable title-style capitalization,
+ * preserving meaningful acronyms (e.g. IT, HR, QA, R&D).
+ * Leaves already mixed-case department names intact.
+ * Examples:
+ * - "INFORMATION TECHNOLOGY" -> "Information Technology"
+ * - "HUMAN RESOURCES" -> "Human Resources"
+ * - "FINANCE AND ACCOUNTING" -> "Finance And Accounting"
+ * - "OPERATIONS" -> "Operations"
+ */
+export function formatDepartmentDisplayName(name: string): string {
+  if (!name) return '';
+  const trimmed = name.trim();
+  if (!trimmed) return '';
+
+  const hasLetters = /[a-zA-Z]/.test(trimmed);
+  const isAllUpper = hasLetters && trimmed === trimmed.toUpperCase();
+
+  if (!isAllUpper) {
+    return trimmed;
+  }
+
+  return trimmed
+    .split(/\s+/)
+    .map((token) => {
+      if (token.includes('/') || token.includes('-')) {
+        return token
+          .split(/([/-])/)
+          .map((sub) => {
+            if (sub === '/' || sub === '-') return sub;
+            const clean = sub.replace(/[^a-zA-Z0-9&]/g, '').toUpperCase();
+            if (KNOWN_ACRONYMS.has(clean)) return sub.toUpperCase();
+            if (sub.length <= 1) return sub.toUpperCase();
+            return sub.charAt(0).toUpperCase() + sub.slice(1).toLowerCase();
+          })
+          .join('');
+      }
+      const clean = token.replace(/[^a-zA-Z0-9&]/g, '').toUpperCase();
+      if (KNOWN_ACRONYMS.has(clean)) {
+        return token.toUpperCase();
+      }
+      if (token.length <= 1) {
+        return token.toUpperCase();
+      }
+      return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
+    })
+    .join(' ');
 }
 
 export const DEVICE_TYPE_COLORS: Record<string, string> = {
@@ -564,7 +683,11 @@ export const DashboardPage: React.FC = () => {
     const usedColors = new Set<string>();
     return topDepartments.map((dept, idx) => {
       const name = (dept.department || '').trim();
-      let color = KNOWN_DEPARTMENT_COLORS[name] || DEPARTMENT_COLOR_CACHE.get(name);
+      const formatted = formatDepartmentDisplayName(name);
+      let color =
+        KNOWN_DEPARTMENT_COLORS[name] ||
+        KNOWN_DEPARTMENT_COLORS[formatted] ||
+        DEPARTMENT_COLOR_CACHE.get(name);
       if (!color || usedColors.has(color)) {
         const available = DEPARTMENT_PALETTE.find((c) => !usedColors.has(c));
         color = available || DEPARTMENT_PALETTE[idx % DEPARTMENT_PALETTE.length];
@@ -851,7 +974,7 @@ export const DashboardPage: React.FC = () => {
                           labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
                           formatter={(value: any, name: any) => [
                             `${formatNumber(value)} assets (${formatChartPercentage(Number(value), totalOsCount)})`,
-                            String(name),
+                            formatOsDisplayName(String(name)),
                           ]}
                         />
                       </PieChart>
@@ -864,12 +987,13 @@ export const DashboardPage: React.FC = () => {
                   {osDistribution.map((item, idx) => {
                     const pct = formatChartPercentage(item.count, totalOsCount);
                     const color = getOsColor(item.name, idx);
+                    const displayName = formatOsDisplayName(item.name);
                     return (
                       <div key={item.name} className="di-hardware-legend-row">
                         <span className="di-hardware-legend-left">
                           <i style={{ background: color }} />
-                          <span className="di-hardware-legend-name" title={item.name}>
-                            {item.name}
+                          <span className="di-hardware-legend-name" title={displayName}>
+                            {displayName}
                           </span>
                         </span>
                         <span className="di-hardware-legend-right">
@@ -977,15 +1101,18 @@ export const DashboardPage: React.FC = () => {
                   <YAxis
                     type="category"
                     dataKey="department"
-                    width={110}
+                    width={125}
                     tick={{ fontSize: 11, fill: '#334155' }}
+                    tickFormatter={(dept: any) => formatDepartmentDisplayName(String(dept))}
                     axisLine={false}
                     tickLine={false}
                   />
                   <Tooltip
                     cursor={{ fill: 'rgba(241, 245, 249, 0.65)' }}
                     formatter={(value: any) => [`${formatNumber(value)} assets`, 'Asset Count']}
-                    labelFormatter={(label: any) => `Department: ${label}`}
+                    labelFormatter={(label: any) =>
+                      `Department: ${formatDepartmentDisplayName(String(label))}`
+                    }
                     contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
                     itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
                     labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}

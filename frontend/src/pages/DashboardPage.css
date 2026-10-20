@@ -555,24 +555,27 @@
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: 12px;
-  min-width: 1080px;
+  font-size: 11.5px;
+  min-width: 100%;
   font-variant-numeric: tabular-nums;
 }
 
 .di-source-table .di-col-source {
-  width: 130px;
+  width: 11%;
+  min-width: 80px;
 }
 .di-source-table .di-col-total {
-  width: 105px;
+  width: 8.5%;
+  min-width: 65px;
 }
 .di-source-table .di-col-metric {
-  width: 80px;
+  width: 7.3%;
+  min-width: 48px;
 }
 
 .di-source-table th,
 .di-source-table td {
-  padding: 12px 10px;
+  padding: 8px 4px;
   text-align: right;
   border-bottom: 1px solid var(--di-line);
   white-space: nowrap;
@@ -584,15 +587,15 @@
 }
 
 .di-source-table thead th {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
   color: var(--di-muted);
   background: #f8fafc;
   text-align: center;
   vertical-align: middle;
-  line-height: 1.35;
+  line-height: 1.25;
   white-space: normal;
-  padding: 11px 8px;
+  padding: 8px 3px;
   border-right: 1px solid #edf2f7;
 }
 
@@ -601,30 +604,32 @@
 }
 
 .di-source-table .di-group-head th {
-  height: 38px;
-  font-size: 11px;
+  height: 34px;
+  font-size: 10.5px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: #334155;
   background: #f1f5f9;
   border-bottom: 1px solid #dbe3ee;
+  padding: 6px 4px;
 }
 
 .di-source-table .di-group-head th:first-child {
   text-align: left;
-  padding-left: 14px;
+  padding-left: 10px;
 }
 
 .di-source-table .di-sub-head th {
-  height: 42px;
+  height: 38px;
   background: #f8fafc;
   border-bottom: 2px solid var(--di-line);
+  padding: 6px 3px;
 }
 
 .di-source-table tbody td {
-  height: 50px;
+  height: 44px;
   background: #ffffff;
-  padding: 10px 10px;
+  padding: 8px 4px;
   border-right: 1px solid #f8fafc;
 }
 
@@ -633,17 +638,17 @@
 }
 
 .di-source-table tbody td.di-source-name {
-  padding-left: 14px;
+  padding-left: 10px;
   font-weight: 700;
   color: #0f172a;
 }
 
 .di-source-table .di-source-name i {
   display: inline-block;
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  margin-right: 8px;
+  margin-right: 6px;
   vertical-align: middle;
 }
 
@@ -662,22 +667,28 @@
   border-top: 2px solid #cbd5e1;
   border-bottom: 0;
   color: #0f172a;
-  padding: 13px 10px;
+  padding: 10px 4px;
 }
 
 .di-source-table tfoot td:first-child {
-  padding-left: 14px;
+  padding-left: 10px;
 }
 
 /* Value Pills in Table */
 .di-value-pill {
   display: inline-block;
-  min-width: 28px;
-  padding: 2px 7px;
+  min-width: 24px;
+  padding: 2px 5px;
   border-radius: 9999px;
   font-weight: 600;
   text-align: center;
-  font-size: 11px;
+  font-size: 10.5px;
+}
+
+@media (max-width: 767px) {
+  .di-source-table {
+    min-width: 720px;
+  }
 }
 
 .di-green {
