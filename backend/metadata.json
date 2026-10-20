@@ -1,0 +1,8 @@
+{
+  "name": "Remix AssetIQ - BACKEND",
+  "description": "Production-grade Python FastAPI REST API backend for AssetIQ asset ownership intelligence, Workday correlation, and hardware lifecycle governance.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

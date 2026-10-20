@@ -1,0 +1,162 @@
+import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
+import { Menu, RefreshCw, Maximize, Minimize } from 'lucide-react';
+import { useApp } from '../../context/AppContext';
+import michaelsLogo from '../../assets/Logo.svg';
+
+interface TopNavProps {
+  onToggleMobileSidebar: () => void;
+}
+
+const getFullscreenElement = (): Element | null => {
+  if (typeof document === 'undefined') return null;
+  return (
+    document.fullscreenElement ||
+    (document as any).webkitFullscreenElement ||
+    (document as any).mozFullScreenElement ||
+    (document as any).msFullscreenElement ||
+    null
+  );
+};
+
+export const TopNav: React.FC<TopNavProps> = ({ onToggleMobileSidebar }) => {
+  const location = useLocation();
+  const { triggerDataRefresh, refreshHealth } = useApp();
+
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(() => {
+    return !!getFullscreenElement();
+  });
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!getFullscreenElement());
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (getFullscreenElement()) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        } else if ((document as any).mozCancelFullScreen) {
+          await (document as any).mozCancelFullScreen();
+        } else if ((document as any).msExitFullscreen) {
+          await (document as any).msExitFullscreen();
+        }
+      } else {
+        const docEl = (document.documentElement || document.body) as any;
+        if (docEl.requestFullscreen) {
+          await docEl.requestFullscreen();
+        } else if (docEl.webkitRequestFullscreen) {
+          await docEl.webkitRequestFullscreen();
+        } else if (docEl.mozRequestFullScreen) {
+          await docEl.mozRequestFullScreen();
+        } else if (docEl.msRequestFullscreen) {
+          await docEl.msRequestFullscreen();
+        }
+      }
+    } catch (err) {
+      console.warn('Fullscreen request failed or was not allowed by browser/host:', err);
+    }
+  };
+
+  const getPageInfo = () => {
+    const path = location.pathname;
+    if (path === '/' || path === '/dashboard') return { breadcrumb: 'Overview', title: 'Dashboard' };
+    if (path === '/assets') return { breadcrumb: 'Hardware Inventory', title: 'All Assets' };
+    if (path === '/assets/windows') return { breadcrumb: 'Hardware Inventory', title: 'Windows Assets (BigFix)' };
+    if (path === '/assets/mac') return { breadcrumb: 'Hardware Inventory', title: 'Mac Assets (Jamf)' };
+    if (path === '/ownership') return { breadcrumb: 'Ownership Management', title: 'Asset Ownership' };
+    if (path === '/eol-management' || path === '/eol') return { breadcrumb: 'Ownership Management', title: 'EOL Management' };
+    if (path === '/admin-users') return { breadcrumb: 'Ownership Management', title: 'Admin Users' };
+    if (path === '/reports') return { breadcrumb: 'Analytics', title: 'Reports' };
+    if (path === '/users' || path === '/employees') return { breadcrumb: 'Identity', title: 'Users Management' };
+    if (path === '/job-scheduler') return { breadcrumb: 'Automation', title: 'Job Scheduler' };
+    if (path === '/audit-reports') return { breadcrumb: 'Compliance', title: 'Audit Reports' };
+    if (path === '/settings' || path === '/admin') return { breadcrumb: 'System', title: 'Settings' };
+    if (path === '/unassigned') return { breadcrumb: 'Hardware Inventory', title: 'Unassigned Assets' };
+    if (path === '/exceptions') return { breadcrumb: 'Compliance', title: 'Exceptions & Flags' };
+    return { breadcrumb: 'AssetIQ', title: 'Asset Governance Console' };
+  };
+
+  const { breadcrumb, title } = getPageInfo();
+
+  const handleRefresh = async () => {
+    triggerDataRefresh();
+    await refreshHealth();
+  };
+
+  return (
+    <header className="sticky top-0 z-30 flex items-center justify-between gap-4 h-16 px-4 md:px-8 bg-white border-b border-slate-200 shadow-xs relative">
+      {/* Zone 1: Breadcrumbs & Page Title (Left) */}
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-[35%] sm:max-w-[32%] md:max-w-[35%] z-10">
+        <button
+          onClick={onToggleMobileSidebar}
+          className="p-1.5 text-slate-500 rounded-md hover:bg-slate-100 lg:hidden shrink-0 cursor-pointer"
+          aria-label="Toggle navigation"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+
+        <div className="flex flex-col min-w-0">
+          <div className="flex items-center gap-1.5 text-[11px] sm:text-xs text-slate-500 truncate font-medium">
+            <span>{breadcrumb}</span>
+          </div>
+          <h1 className="text-xs sm:text-sm md:text-base font-bold text-slate-900 tracking-tight truncate">
+            {title}
+          </h1>
+        </div>
+      </div>
+
+      {/* Zone 2: Michaels Customer Logo (Top-Center) */}
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none px-2 max-w-[30%] sm:max-w-[35%] md:max-w-[38%]">
+        <img
+          src={michaelsLogo}
+          alt="Michaels"
+          className="h-[13px] sm:h-[21px] md:h-[24px] w-auto max-w-full object-contain pointer-events-auto"
+        />
+      </div>
+
+      {/* Zone 3: Primary Action & Controls (Right) */}
+      <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 z-10">
+        <button
+          type="button"
+          onClick={handleRefresh}
+          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-xs cursor-pointer"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Refresh Data</span>
+          <span className="sm:hidden">Refresh</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+          aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+          className="inline-flex items-center justify-center h-[30px] w-[30px] text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 rounded-md transition-colors shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+        >
+          {isFullscreen ? (
+            <Minimize className="w-4 h-4 text-slate-600" />
+          ) : (
+            <Maximize className="w-4 h-4 text-slate-600" />
+          )}
+        </button>
+      </div>
+    </header>
+  );
+};
