@@ -8,11 +8,17 @@ from app.api.v1.endpoints import (
     filters,
     eol_reference,
     admin_users,
+    auth,
+    app_users,
+    audit_logs,
 )
 
 api_router = APIRouter()
 
 # API v1 routes mounted under /api
+api_router.include_router(auth.router)
+api_router.include_router(app_users.router)
+api_router.include_router(audit_logs.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(assets.router)
 api_router.include_router(employees.router)
@@ -39,4 +45,9 @@ api_router.add_api_route("/hardware-analysis", dashboard.get_hardware_asset_anal
 api_router.add_api_route("/hardware-asset-analysis", dashboard.get_hardware_asset_analysis, methods=["GET"], include_in_schema=False)
 api_router.add_api_route("/assets-by-os", dashboard.get_assets_by_operating_system, methods=["GET"], include_in_schema=False)
 api_router.add_api_route("/assets-by-device-type", dashboard.get_assets_by_device_type, methods=["GET"], include_in_schema=False)
+
+# Top-level auth and current-user aliases
+api_router.add_api_route("/me", auth.get_current_user_profile, methods=["GET"], include_in_schema=False)
+api_router.add_api_route("/current-user", auth.get_current_user_profile, methods=["GET"], include_in_schema=False)
+api_router.add_api_route("/last-login", auth.get_current_user_last_login, methods=["GET"], include_in_schema=False)
 

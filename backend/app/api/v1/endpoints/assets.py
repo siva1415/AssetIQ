@@ -3,7 +3,8 @@ from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from app.api.deps import PaginationParams, get_database, verify_admin_access
+from app.api.deps import PaginationParams, get_authenticated_actor, get_database, verify_admin_access
+from app.models.app_user import AppUser
 from app.schemas.asset import (
     AssetResponse,
     AssetDetailResponse,
@@ -501,6 +502,8 @@ def get_assets_operational_status(
 )
 def assign_asset_payload(
     payload: AssetAssignmentRequest,
+    current_admin: str = Depends(verify_admin_access),
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
@@ -513,7 +516,7 @@ def assign_asset_payload(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Asset ID is required for assignment",
         )
-    return AssetService.assign_asset(db=db, asset_id=int(target_id), payload=payload)
+    return AssetService.assign_asset(db=db, asset_id=int(target_id), payload=payload, actor=actor)
 
 
 @router.post(
@@ -555,6 +558,7 @@ def bulk_assign_assets(
     scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership, reports)"),
     report: Optional[str] = Query(None, description="Report card scope"),
     current_admin: str = Depends(verify_admin_access),
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
@@ -592,7 +596,7 @@ def bulk_assign_assets(
     if report and not payload.report:
         payload.report = report
 
-    return AssetService.bulk_assign_assets(db=db, payload=payload)
+    return AssetService.bulk_assign_assets(db=db, payload=payload, actor=actor)
 
 
 @router.get(
@@ -644,6 +648,8 @@ def get_asset_by_id(
 def assign_asset_to_employee(
     asset_id: int,
     payload: AssetAssignmentRequest,
+    current_admin: str = Depends(verify_admin_access),
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
@@ -652,7 +658,7 @@ def assign_asset_to_employee(
     assignment_type ('MANUAL'), and remarks.
     """
     return AssetService.assign_asset(
-        db=db, asset_id=asset_id, payload=payload, is_assignment_action=True
+        db=db, asset_id=asset_id, payload=payload, is_assignment_action=True, actor=actor
     )
 
 
@@ -669,6 +675,7 @@ def assign_asset_to_employee(
 def update_or_patch_asset(
     asset_id: int,
     payload: AssetAssignmentRequest,
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
@@ -676,6 +683,6 @@ def update_or_patch_asset(
     and partial updates.
     """
     return AssetService.assign_asset(
-        db=db, asset_id=asset_id, payload=payload, is_assignment_action=False
+        db=db, asset_id=asset_id, payload=payload, is_assignment_action=False, actor=actor
     )
 

@@ -11,6 +11,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  LabelList,
 } from 'recharts';
 import {
   AssetsBySourceItem,
@@ -21,9 +22,9 @@ import {
 } from '../../types';
 
 // Custom enterprise palette
-const SOURCE_COLORS = ['#2563EB', '#0D9488']; // BigFix: Royal Blue, Jamf: Teal
-const OWNERSHIP_COLORS = ['#16A34A', '#2563EB', '#64748B']; // Auto: Emerald, Manual: Blue, Unassigned: Slate
-const EOL_COLORS = ['#16A34A', '#D97706', '#DC2626', '#94A3B8']; // Active, Nearing, Expired, Unknown
+const SOURCE_COLORS = ['#4169E1', '#D9468F']; // BigFix: Royal Blue, Jamf: Pink
+const OWNERSHIP_COLORS = ['#16A34A', '#4169E1', '#64748B']; // Auto: Green, Manual: Blue, Unassigned: Slate
+const EOL_COLORS = ['#16A34A', '#F59E0B', '#DC2626', '#64748B']; // Active, EOL Soon, Expired, Unknown
 
 interface SourceChartProps {
   data?: AssetsBySourceItem[] | null;
@@ -199,7 +200,7 @@ export const OwnershipChart: React.FC<OwnershipChartProps> = ({ data }) => {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  ACTIVE: '#10B981',
+  ACTIVE: '#16A34A',
   REVIEW: '#F59E0B',
   'IN STOCK': '#3B82F6',
   RETIRED: '#64748B',
@@ -343,6 +344,77 @@ export const EOLChart: React.FC<EOLChartProps> = ({ data }) => {
   );
 };
 
+const DEPARTMENT_PALETTE: string[] = [
+  '#4169E1', // Electric Blue
+  '#14B8A6', // Teal
+  '#7C3AED', // Violet
+  '#2563EB', // Royal Blue
+  '#0D9488', // Deep Teal
+  '#6366F1', // Indigo
+  '#0284C7', // Sky Blue
+  '#8B5CF6', // Soft Violet
+  '#0891B2', // Cyan Slate
+  '#4F46E5', // Slate Indigo
+];
+
+const renderDeptTick = (props: any) => {
+  const { x, y, payload } = props;
+  const rawText = String(payload?.value || '');
+  const words = rawText.split(/\s+/).filter(Boolean);
+  let lines: string[] = [];
+
+  if (rawText.length > 14 && words.length > 1) {
+    let currentLine = words[0];
+    for (let i = 1; i < words.length; i++) {
+      if ((currentLine + ' ' + words[i]).length <= 15) {
+        currentLine += ' ' + words[i];
+      } else {
+        lines.push(currentLine);
+        currentLine = words[i];
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+  } else {
+    lines = [rawText];
+  }
+
+  const lineCount = lines.length;
+
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <title>{rawText}</title>
+      <text
+        x={-8}
+        y={0}
+        textAnchor="end"
+        fill="#334155"
+        fontSize={11}
+        fontWeight={500}
+        style={{ pointerEvents: 'none', userSelect: 'none' }}
+      >
+        {lines.map((line, idx) => {
+          let dyVal: number = 4;
+          if (lineCount === 1) {
+            dyVal = 4;
+          } else if (idx === 0) {
+            dyVal = -((lineCount - 1) * 6.5) + 3;
+          } else {
+            dyVal = 13;
+          }
+
+          return (
+            <tspan key={idx} x={-8} dy={dyVal}>
+              {line}
+            </tspan>
+          );
+        })}
+      </text>
+    </g>
+  );
+};
+
 interface DepartmentChartProps {
   data: DepartmentDistributionItem[];
   loading?: boolean;
@@ -356,18 +428,29 @@ export const DepartmentChart: React.FC<DepartmentChartProps> = ({
   error = null,
   onRetry,
 }) => {
+  const chartData = Array.isArray(data)
+    ? data
+        .filter((item) => {
+          if (!item || typeof item.department !== 'string') return false;
+          const trimmed = item.department.trim();
+          if (!trimmed) return false;
+          return trimmed.toLowerCase() !== 'unassigned';
+        })
+        .slice(0, 10)
+    : [];
+
   return (
     <div className="p-4 bg-white rounded-lg border border-slate-200">
       <h3 className="text-sm font-bold text-slate-900 mb-1">Assets by Department</h3>
       <p className="text-xs text-slate-500 mb-4">Organizational distribution across business units</p>
 
       {loading ? (
-        <div className="h-56 w-full flex flex-col items-center justify-center text-slate-500">
+        <div className="h-[360px] w-full flex flex-col items-center justify-center text-slate-500">
           <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mb-2" />
           <span className="text-xs font-medium text-slate-600">Loading department summary...</span>
         </div>
       ) : error ? (
-        <div className="h-56 w-full flex flex-col items-center justify-center p-4 text-center">
+        <div className="h-[360px] w-full flex flex-col items-center justify-center p-4 text-center">
           <div className="p-2 rounded-full bg-rose-50 text-rose-600 mb-2">
             <AlertCircle className="w-5 h-5" />
           </div>
@@ -385,8 +468,8 @@ export const DepartmentChart: React.FC<DepartmentChartProps> = ({
             </button>
           )}
         </div>
-      ) : !data || data.length === 0 ? (
-        <div className="h-56 w-full flex flex-col items-center justify-center text-slate-400 text-center p-4">
+      ) : chartData.length === 0 ? (
+        <div className="h-[360px] w-full flex flex-col items-center justify-center text-slate-400 text-center p-4">
           <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mb-2">
             <Building2 className="w-5 h-5" />
           </div>
@@ -394,22 +477,55 @@ export const DepartmentChart: React.FC<DepartmentChartProps> = ({
           <p className="text-[11px] text-slate-400">No assets have been associated with departments yet.</p>
         </div>
       ) : (
-        <div className="h-56 w-full">
+        <div className="h-[360px] w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data.slice(0, 6)} margin={{ top: 10, right: 10, left: -20, bottom: 25 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+            <BarChart
+              layout="vertical"
+              data={chartData}
+              margin={{ top: 10, right: 42, left: 8, bottom: 6 }}
+            >
+              <CartesianGrid stroke="#e8ecf2" strokeDasharray="3 3" horizontal={false} />
               <XAxis
+                type="number"
+                allowDecimals={false}
+                tick={{ fontSize: 11, fill: '#64748b' }}
+                axisLine={{ stroke: '#cbd5e1' }}
+                tickLine={false}
+              />
+              <YAxis
+                type="category"
                 dataKey="department"
-                tick={{ fontSize: 10, fill: '#64748B' }}
-                angle={-25}
-                textAnchor="end"
+                width={146}
                 interval={0}
+                tick={renderDeptTick}
+                axisLine={false}
+                tickLine={false}
               />
-              <YAxis tick={{ fontSize: 11, fill: '#64748B' }} />
               <Tooltip
-                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#fff', fontSize: '12px', borderRadius: '6px' }}
+                formatter={(value: any) => [`${value} assets`, 'Asset Count']}
+                contentStyle={{
+                  backgroundColor: '#0f172a',
+                  borderColor: '#334155',
+                  color: '#ffffff',
+                  fontSize: '12px',
+                  borderRadius: '6px',
+                }}
               />
-              <Bar dataKey="count" name="Asset Count" fill="#4F46E5" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="count" name="Asset Count" radius={[0, 4, 4, 0]} maxBarSize={16}>
+                {chartData.map((dept, index) => (
+                  <Cell
+                    key={dept.department || index}
+                    fill={DEPARTMENT_PALETTE[index % DEPARTMENT_PALETTE.length]}
+                  />
+                ))}
+                <LabelList
+                  dataKey="count"
+                  position="right"
+                  fill="#334155"
+                  fontSize={11}
+                  fontWeight={600}
+                />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>

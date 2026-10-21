@@ -1,7 +1,8 @@
 from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
-from app.api.deps import get_database, verify_admin_access
+from app.api.deps import get_authenticated_actor, get_database, verify_admin_access
+from app.models.app_user import AppUser
 from app.schemas.common import PaginatedResponse
 from app.schemas.eol_reference import (
     EolReferenceResponse,
@@ -100,6 +101,7 @@ def create_or_update_eol_reference(
     payload: EolReferenceCreate,
     response: Response,
     current_admin: str = Depends(verify_admin_access),
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
@@ -109,7 +111,7 @@ def create_or_update_eol_reference(
     Preserves existing reference_source when omitted in update.
     Requires administrative privileges.
     """
-    result, is_created = EolService.upsert_reference(db=db, data=payload)
+    result, is_created = EolService.upsert_reference(db=db, data=payload, actor=actor)
     if not is_created:
         response.status_code = status.HTTP_200_OK
     return result
@@ -124,13 +126,14 @@ def upsert_eol_reference_put(
     payload: EolReferenceCreate,
     response: Response,
     current_admin: str = Depends(verify_admin_access),
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
     Idempotent create or update for OEM hardware model lifecycle records.
     Requires administrative privileges.
     """
-    result, is_created = EolService.upsert_reference(db=db, data=payload)
+    result, is_created = EolService.upsert_reference(db=db, data=payload, actor=actor)
     if is_created:
         response.status_code = status.HTTP_201_CREATED
     else:
@@ -147,13 +150,14 @@ def update_eol_reference(
     eol_id: int,
     payload: EolReferenceUpdate,
     current_admin: str = Depends(verify_admin_access),
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
     Update an existing hardware lifecycle reference record by ID.
     Requires administrative privileges.
     """
-    updated = EolService.update_reference(db=db, eol_id=eol_id, data=payload)
+    updated = EolService.update_reference(db=db, eol_id=eol_id, data=payload, actor=actor)
     if not updated:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -169,13 +173,14 @@ def update_eol_reference(
 def delete_eol_reference(
     eol_id: int,
     current_admin: str = Depends(verify_admin_access),
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
     Remove an OEM lifecycle reference record by ID.
     Requires administrative privileges.
     """
-    deleted = EolService.delete_reference(db=db, eol_id=eol_id)
+    deleted = EolService.delete_reference(db=db, eol_id=eol_id, actor=actor)
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

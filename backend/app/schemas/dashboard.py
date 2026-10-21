@@ -19,6 +19,7 @@ class DashboardSummaryResponse(BaseModel):
 
     # CamelCase & Case variations to ensure zero empty/undefined values across any frontend card
     InStock: int = Field(0, ge=0)
+    in_stock: int = Field(0, ge=0)
     nearing_eol: int = Field(0, ge=0)
     nearingEOL: int = Field(0, ge=0)
     NearingEol: int = Field(0, ge=0)
@@ -132,6 +133,7 @@ class DashboardSummaryResponse(BaseModel):
             ) or 0
             data["inStock"] = ins
             data["InStock"] = ins
+            data["in_stock"] = ins
             data["in_stock_assets"] = ins
             data["inStockAssets"] = ins
 
@@ -689,14 +691,62 @@ class DeviceTypeItem(BaseModel):
         return data
 
 
+class DeviceTypeCategoryItem(BaseModel):
+    category: str = Field(..., description="STORE or CORPORATE")
+    deviceType: str = Field(..., description="Laptop or Desktop")
+    label: str = Field(..., description="STORE-DESKTOPS, CORPORATE-LAPTOPS, or CORPORATE-DESKTOPS")
+    count: int = Field(0, ge=0)
+
+    # Aliases
+    device_type: Optional[str] = None
+    devicetype: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            dev = data.get("deviceType") or data.get("device_type") or data.get("devicetype") or ""
+            data["deviceType"] = dev
+            data["device_type"] = dev
+            data["devicetype"] = dev
+        return data
+
+
+class DeviceTypeCategoryResponse(BaseModel):
+    byDeviceTypeAndCategory: List[DeviceTypeCategoryItem] = Field(default_factory=list)
+    by_device_type_and_category: Optional[List[DeviceTypeCategoryItem]] = None
+    items: Optional[List[DeviceTypeCategoryItem]] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            items = (
+                data.get("byDeviceTypeAndCategory")
+                or data.get("by_device_type_and_category")
+                or data.get("items")
+                or []
+            )
+            data["byDeviceTypeAndCategory"] = items
+            data["by_device_type_and_category"] = items
+            data["items"] = items
+        return data
+
+
 class HardwareAssetAnalysisResponse(BaseModel):
     """
     Live aggregated hardware asset analysis for dashboard doughnut charts:
-    1. Assets by Operating System
-    2. Assets by Device Type
+    1. Assets by Operating System (Windows 11, Windows 10, Mac)
+    2. Assets by Device Type (Laptops, Desktops)
+    3. Assets by Device Type and Category (STORE-DESKTOPS, CORPORATE-LAPTOPS, CORPORATE-DESKTOPS)
     """
     operating_systems: List[OperatingSystemItem] = Field(default_factory=list, description="Assets grouped by Operating System")
     device_types: List[DeviceTypeItem] = Field(default_factory=list, description="Assets grouped by Device Type")
+    by_device_type_and_category: List[DeviceTypeCategoryItem] = Field(default_factory=list, description="Assets grouped by Device Type and Category")
 
     total_assets: int = Field(0, ge=0, description="Total assets in evaluation scope")
     total_os_assets: int = Field(0, ge=0, description="Total assets with a non-empty OS")
@@ -705,10 +755,12 @@ class HardwareAssetAnalysisResponse(BaseModel):
     # CamelCase aliases
     operatingSystems: Optional[List[OperatingSystemItem]] = None
     deviceTypes: Optional[List[DeviceTypeItem]] = None
-    by_operating_system: Optional[List[OperatingSystemItem]] = None
     byOperatingSystem: Optional[List[OperatingSystemItem]] = None
-    by_device_type: Optional[List[DeviceTypeItem]] = None
+    by_operating_system: Optional[List[OperatingSystemItem]] = None
     byDeviceType: Optional[List[DeviceTypeItem]] = None
+    by_device_type: Optional[List[DeviceTypeItem]] = None
+    byDeviceTypeAndCategory: Optional[List[DeviceTypeCategoryItem]] = None
+    device_type_and_category: Optional[List[DeviceTypeCategoryItem]] = None
     totalAssets: Optional[int] = None
     totalOsAssets: Optional[int] = None
     totalDeviceAssets: Optional[int] = None
@@ -737,6 +789,11 @@ class HardwareAssetAnalysisResponse(BaseModel):
             data["by_device_type"] = dev_items
             data["byDeviceType"] = dev_items
 
+            cat_dev_items = data.get("by_device_type_and_category", data.get("byDeviceTypeAndCategory", data.get("device_type_and_category", []))) or []
+            data["by_device_type_and_category"] = cat_dev_items
+            data["byDeviceTypeAndCategory"] = cat_dev_items
+            data["device_type_and_category"] = cat_dev_items
+
             tot = data.get("total_assets", data.get("totalAssets", 0)) or 0
             data["total_assets"] = tot
             data["totalAssets"] = tot
@@ -756,12 +813,23 @@ class HardwareAssetAnalysisResponse(BaseModel):
             data["by_os"] = os_map
             data["byOs"] = os_map
 
-            dev_map = {
-                (it.get("name") if isinstance(it, dict) else getattr(it, "name", "")): (it.get("count") if isinstance(it, dict) else getattr(it, "count", 0))
-                for it in dev_items
-            }
+            dev_map = {}
+            for it in dev_items:
+                name = it.get("name") if isinstance(it, dict) else getattr(it, "name", "")
+                cnt = it.get("count") if isinstance(it, dict) else getattr(it, "count", 0)
+                dev_map[name] = cnt
+                # Dual-register singular and plural for bulletproof chart lookups
+                if name == "Laptops":
+                    dev_map["Laptop"] = cnt
+                elif name == "Laptop":
+                    dev_map["Laptops"] = cnt
+                elif name == "Desktops":
+                    dev_map["Desktop"] = cnt
+                elif name == "Desktop":
+                    dev_map["Desktops"] = cnt
             data["by_device"] = dev_map
             data["byDevice"] = dev_map
 
         return data
+
 

@@ -283,6 +283,7 @@ class AssetService:
         asset_id: int,
         payload: AssetAssignmentRequest,
         is_assignment_action: bool = True,
+        actor: Optional[any] = None,
     ) -> AssetDetailResponse:
         """
         Assign or reassign an asset to an employee or management group,
@@ -297,6 +298,14 @@ class AssetService:
             )
 
         fields_set = payload.model_fields_set
+
+        # Capture old values before any modification for audit trail
+        old_assigned_username = asset.assigned_username
+        old_managed_by = asset.managed_by
+        old_asset_status = asset.asset_status
+        old_assignment_type = asset.assignment_type
+        old_remarks = asset.remarks
+        asset_tag_val = asset.asset_number or f"ASSET-{asset.asset_id}"
 
         # 2. Check employee assignment fields
         user_val = (
@@ -473,6 +482,60 @@ class AssetService:
                 detail="Database error while saving asset assignment",
             )
 
+        # Record audit log event for ASSET OWNERSHIP
+        from app.services.audit_service import AuditService
+
+        old_u_clean = old_assigned_username.strip() if old_assigned_username else ""
+        new_u_clean = asset.assigned_username.strip() if asset.assigned_username else ""
+        is_reassign = bool(old_u_clean and old_u_clean.lower() != new_u_clean.lower())
+        action = "REASSIGN USER" if is_reassign else "ASSIGN USER"
+
+        old_emp = EmployeeRepository.get_by_user_id(db, old_u_clean) if old_u_clean else None
+        new_emp = emp if (emp and emp.user_id.lower() == new_u_clean.lower()) else (EmployeeRepository.get_by_user_id(db, new_u_clean) if new_u_clean else None)
+
+        def _format_user_identity(username_str: Optional[str], full_name_str: Optional[str]) -> str:
+            u = str(username_str).strip() if username_str else ""
+            fn = str(full_name_str).strip() if full_name_str else ""
+            if fn and u:
+                return f"{fn} ({u})"
+            return fn or u
+
+        old_display = _format_user_identity(old_u_clean, old_emp.full_name if old_emp else None)
+        new_display = _format_user_identity(new_u_clean, new_emp.full_name if new_emp else None)
+
+        if is_reassign:
+            finding = f"Asset {asset_tag_val} reassigned from {old_display} to {new_display}."
+        else:
+            finding = f"Asset {asset_tag_val} assigned to {new_display}."
+
+        AuditService.record_audit(
+            db=db,
+            actor=actor,
+            category="ASSET OWNERSHIP",
+            action=action,
+            entity_type="ASSET",
+            entity_id=str(asset.asset_id),
+            entity_name=asset.asset_number or asset_tag_val,
+            asset_tag=asset_tag_val,
+            audit_finding=finding,
+            old_values={
+                "assigned_username": old_assigned_username,
+                "managed_by": old_managed_by,
+                "asset_status": old_asset_status,
+                "assignment_type": old_assignment_type,
+                "remarks": old_remarks,
+            },
+            new_values={
+                "assigned_username": asset.assigned_username,
+                "managed_by": asset.managed_by,
+                "asset_status": asset.asset_status,
+                "assignment_type": asset.assignment_type,
+                "remarks": asset.remarks,
+            },
+            status="SUCCESS",
+            commit=True,
+        )
+
         return cls.get_asset_detail(db, asset.asset_id)
 
     @classmethod
@@ -480,6 +543,7 @@ class AssetService:
         cls,
         db: Session,
         payload: BulkAssetAssignmentRequest,
+        actor: Optional[any] = None,
     ) -> BulkAssetAssignmentResponse:
         """
         Bulk assign hardware assets to one active Workday employee.
@@ -603,12 +667,57 @@ class AssetService:
         now_time = datetime.now(timezone.utc)
         chunk_size = 1000
 
+        # For audit trail
+        import uuid
+        from app.models.audit_log import AuditLog
+        from app.services.audit_service import AuditService
+
+        bulk_op_id = str(uuid.uuid4())
+        audit_entries = []
+
+        portal_user_id = actor.user_id if actor else None
+        portal_username = actor.username if actor else "system"
+        portal_user_full_name = actor.full_name if actor else None
+        portal_user_role = actor.role if actor else None
+
+        new_values_payload = {
+            "assigned_username": target_user_id,
+            "managed_by": clean_managed,
+            "assignment_type": "MANUAL",
+            "asset_status": "ACTIVE",
+            "remarks": clean_remarks,
+        }
+
         # 5. Resolve assets to update and execute
         if not is_select_all:
             # 5A. ID-based selection
-            stmt = select(Asset.asset_id, Asset.asset_number).where(Asset.asset_id.in_(payload.asset_ids))
+            stmt = select(
+                Asset.asset_id,
+                Asset.asset_number,
+                Asset.assigned_username,
+                Asset.managed_by,
+                Asset.asset_status,
+                Asset.assignment_type,
+                Asset.remarks,
+            ).where(Asset.asset_id.in_(payload.asset_ids))
             existing_rows = db.execute(stmt).fetchall()
-            existing_map = {int(r[0]): (str(r[1]) if r[1] is not None else None) for r in existing_rows}
+            existing_map = {}
+            prior_details = {}
+            for r in existing_rows:
+                aid = int(r[0])
+                asset_num = str(r[1]) if r[1] is not None else f"ASSET-{aid}"
+                existing_map[aid] = asset_num
+                prior_details[aid] = {
+                    "asset_tag": asset_num,
+                    "asset_number": asset_num,
+                    "old_values": {
+                        "assigned_username": r[2],
+                        "managed_by": r[3],
+                        "asset_status": r[4],
+                        "assignment_type": r[5],
+                        "remarks": r[6],
+                    },
+                }
 
             valid_ids = [aid for aid in payload.asset_ids if aid in existing_map]
             missing_ids = [aid for aid in payload.asset_ids if aid not in existing_map]
@@ -649,6 +758,50 @@ class AssetService:
                             reason=None,
                         )
                     )
+                    detail = prior_details[aid]
+                    tag = detail["asset_tag"]
+                    old_u = detail["old_values"]["assigned_username"]
+                    old_u_clean = str(old_u).strip() if old_u else ""
+                    old_emp = EmployeeRepository.get_by_user_id(db, old_u_clean) if old_u_clean else None
+                    def _fmt_user(u_name: Optional[str], f_name: Optional[str]) -> str:
+                        u = str(u_name).strip() if u_name else ""
+                        fn = str(f_name).strip() if f_name else ""
+                        if fn and u:
+                            return f"{fn} ({u})"
+                        return fn or u
+
+                    old_display = _fmt_user(old_u_clean, old_emp.full_name if old_emp else None)
+                    target_display = _fmt_user(target_user_id, emp.full_name if emp else None)
+
+                    if old_u_clean and old_u_clean.lower() != target_user_id.lower():
+                        finding_text = f"Asset {tag} reassigned from {old_display} to {target_display} during bulk assignment."
+                    else:
+                        finding_text = f"Asset {tag} assigned to {target_display} during bulk assignment."
+
+                    audit_entries.append(
+                        AuditLog(
+                            asset_tag=tag,
+                            portal_user_id=portal_user_id,
+                            portal_username=portal_username,
+                            portal_user_full_name=portal_user_full_name,
+                            portal_user_role=portal_user_role,
+                            category="ASSET OWNERSHIP",
+                            action="BULK ASSIGN",
+                            entity_type="ASSET",
+                            entity_id=str(aid),
+                            entity_name=detail["asset_number"] or tag,
+                            audit_finding=finding_text,
+                            old_values=detail["old_values"],
+                            new_values=new_values_payload,
+                            event_metadata={
+                                "bulk_operation_id": bulk_op_id,
+                                "total_affected_assets": len(payload.asset_ids),
+                                "operation_type": "BULK_ASSIGN",
+                            },
+                            status="SUCCESS",
+                            detected_at=now_time,
+                        )
+                    )
                 else:
                     results.append(
                         BulkAssetAssignmentItemResult(
@@ -656,6 +809,31 @@ class AssetService:
                             asset_number=None,
                             status="FAILED",
                             reason=f"Asset with ID {aid} was not found",
+                        )
+                    )
+                    audit_entries.append(
+                        AuditLog(
+                            asset_tag=None,
+                            portal_user_id=portal_user_id,
+                            portal_username=portal_username,
+                            portal_user_full_name=portal_user_full_name,
+                            portal_user_role=portal_user_role,
+                            category="ASSET OWNERSHIP",
+                            action="BULK ASSIGN",
+                            entity_type="ASSET",
+                            entity_id=str(aid),
+                            entity_name=f"Asset {aid}",
+                            audit_finding=f"Failed to bulk assign asset ID {aid}: asset not found.",
+                            old_values=None,
+                            new_values=None,
+                            event_metadata={
+                                "bulk_operation_id": bulk_op_id,
+                                "total_affected_assets": len(payload.asset_ids),
+                                "error": "Asset not found",
+                                "operation_type": "BULK_ASSIGN",
+                            },
+                            status="FAILURE",
+                            detected_at=now_time,
                         )
                     )
 
@@ -721,6 +899,69 @@ class AssetService:
                     results=[],
                 )
 
+            # Query prior details before chunked update for audit trail
+            prior_stmt = select(
+                Asset.asset_id,
+                Asset.asset_number,
+                Asset.assigned_username,
+                Asset.managed_by,
+                Asset.asset_status,
+                Asset.assignment_type,
+                Asset.remarks,
+            ).where(Asset.asset_id.in_(matched_ids))
+            prior_rows = db.execute(prior_stmt).fetchall()
+            def _fmt_user_5b(u_name: Optional[str], f_name: Optional[str]) -> str:
+                u = str(u_name).strip() if u_name else ""
+                fn = str(f_name).strip() if f_name else ""
+                if fn and u:
+                    return f"{fn} ({u})"
+                return fn or u
+
+            target_display = _fmt_user_5b(target_user_id, emp.full_name if emp else None)
+            for r in prior_rows:
+                aid = int(r[0])
+                tag = str(r[1]) if r[1] is not None else f"ASSET-{aid}"
+                old_u = r[2]
+                old_u_clean = str(old_u).strip() if old_u else ""
+                old_emp = EmployeeRepository.get_by_user_id(db, old_u_clean) if old_u_clean else None
+                old_display = _fmt_user_5b(old_u_clean, old_emp.full_name if old_emp else None)
+
+                if old_u_clean and old_u_clean.lower() != target_user_id.lower():
+                    finding_text = f"Asset {tag} reassigned from {old_display} to {target_display} during bulk assignment."
+                else:
+                    finding_text = f"Asset {tag} assigned to {target_display} during bulk assignment."
+
+                audit_entries.append(
+                    AuditLog(
+                        asset_tag=tag,
+                        portal_user_id=portal_user_id,
+                        portal_username=portal_username,
+                        portal_user_full_name=portal_user_full_name,
+                        portal_user_role=portal_user_role,
+                        category="ASSET OWNERSHIP",
+                        action="BULK ASSIGN",
+                        entity_type="ASSET",
+                        entity_id=str(aid),
+                        entity_name=tag,
+                        audit_finding=finding_text,
+                        old_values={
+                            "assigned_username": r[2],
+                            "managed_by": r[3],
+                            "asset_status": r[4],
+                            "assignment_type": r[5],
+                            "remarks": r[6],
+                        },
+                        new_values=new_values_payload,
+                        event_metadata={
+                            "bulk_operation_id": bulk_op_id,
+                            "total_affected_assets": len(matched_ids),
+                            "operation_type": "BULK_ASSIGN",
+                        },
+                        status="SUCCESS",
+                        detected_at=now_time,
+                    )
+                )
+
             try:
                 for i in range(0, len(matched_ids), chunk_size):
                     chunk = matched_ids[i:i + chunk_size]
@@ -757,6 +998,13 @@ class AssetService:
             requested_count = matched_count
             success_count = matched_count
             failure_count = 0
+
+        # Persist audit entries for bulk assignment
+        if audit_entries:
+            try:
+                AuditService.record_bulk_audits(db, audit_entries, commit=True)
+            except Exception as audit_exc:
+                logger.error(f"Failed to record bulk asset assignment audit logs: {audit_exc}")
 
         # 6. Response message formatting
         if failure_count == 0:

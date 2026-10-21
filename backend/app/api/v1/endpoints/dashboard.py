@@ -15,6 +15,8 @@ from app.schemas.dashboard import (
     HardwareAssetAnalysisResponse,
     OperatingSystemItem,
     DeviceTypeItem,
+    DeviceTypeCategoryItem,
+    DeviceTypeCategoryResponse,
 )
 from app.schemas.eol import EolSummaryResponse
 from app.services.dashboard_service import DashboardService
@@ -442,119 +444,128 @@ def get_assets_by_device_type(
 
 
 @router.get(
+    "/by-device-type-and-category",
+    response_model=Union[DeviceTypeCategoryResponse, List[DeviceTypeCategoryItem]],
+    summary="Hardware Asset Analysis by Device Type and Category",
+)
+@router.get(
+    "/by-device-type-and-category/",
+    response_model=Union[DeviceTypeCategoryResponse, List[DeviceTypeCategoryItem]],
+    include_in_schema=False,
+)
+@router.get(
+    "/device-type-and-category",
+    response_model=Union[DeviceTypeCategoryResponse, List[DeviceTypeCategoryItem]],
+    include_in_schema=False,
+)
+@router.get(
+    "/device-type-and-category/",
+    response_model=Union[DeviceTypeCategoryResponse, List[DeviceTypeCategoryItem]],
+    include_in_schema=False,
+)
+def get_by_device_type_and_category(
+    source: Optional[str] = Query(None, description="Optional discovery source filter (BIGFIX or JAMF)"),
+    scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
+    asset_status: Optional[str] = Query(None, description="Filter by status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
+    manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
+    model: Optional[str] = Query(None, description="Filter by hardware model"),
+    assigned_username: Optional[str] = Query(None, description="Filter by assigned login username"),
+    assignment_type: Optional[str] = Query(None, description="Filter by assignment model (AUTO or MANUAL)"),
+    is_unassigned: Optional[bool] = Query(None, description="Filter for unassigned assets (true/false)"),
+    search: Optional[str] = Query(None, description="Text search keyword across asset identifiers"),
+    as_list: Optional[bool] = Query(None, description="Return raw list instead of wrapper object", include_in_schema=False),
+    format: Optional[str] = Query(None, description="Format ('list' or 'object')", include_in_schema=False),
+    db: Session = Depends(get_database),
+):
+    """
+    Live aggregated counts for the three canonical Device Type and Category combinations:
+    - STORE-DESKTOPS
+    - CORPORATE-LAPTOPS
+    - CORPORATE-DESKTOPS
+    Excludes Server devices, blank/null categories, and unsupported combinations.
+    Always includes all three combinations with count 0 when no matching records exist.
+    """
+    res = DashboardService.get_device_type_and_category(
+        db=db,
+        source=source,
+        scope=scope,
+        asset_status=asset_status,
+        manufacturer=manufacturer,
+        model=model,
+        assigned_username=assigned_username,
+        assignment_type=assignment_type,
+        is_unassigned=is_unassigned,
+        search=search,
+    )
+    if as_list or format == "list":
+        return res.byDeviceTypeAndCategory
+    return res
+
+
+@router.get(
+    "/eol-distribution",
+    summary="Dashboard EOL Lifecycle Status Distribution",
+)
+@router.get(
+    "/eol-distribution/",
+    include_in_schema=False,
+)
+@router.get(
+    "/eol-status-distribution",
+    include_in_schema=False,
+)
+def get_eol_distribution(
+    source: Optional[str] = Query(None, description="Optional discovery source filter"),
+    db: Session = Depends(get_database),
+):
+    """
+    Returns counts for all four canonical EOL states:
+    - ACTIVE: more than 90 days remaining
+    - EOL SOON: 0-90 days remaining, inclusive
+    - EXPIRED: EOL date before today
+    - UNKNOWN: no exact manufacturer-and-model match or no usable EOL date
+    Always returns all 4 states in stable order.
+    """
+    return DashboardService.get_eol_distribution(db=db, source=source)
+
+
+@router.get(
+    "/eol-exposure",
+    summary="Dashboard EOL Exposure by Hardware Model",
+)
+@router.get(
+    "/eol-exposure/",
+    include_in_schema=False,
+)
+@router.get(
+    "/eol-exposure-by-model",
+    include_in_schema=False,
+)
+def get_eol_exposure(
+    limit: int = Query(7, ge=1, le=50, description="Maximum number of models to return"),
+    db: Session = Depends(get_database),
+):
+    """
+    Preserves existing EOL Exposure by Hardware Model aggregation and business rules.
+    Excludes ACTIVE hardware models, groups by exact manufacturer and model,
+    and sorts by urgency (EXPIRED=0, EOL SOON=1, UNKNOWN=2), days_remaining ascending,
+    and count descending.
+    """
+    return DashboardService.get_eol_exposure(db=db, limit=limit)
+
+
+@router.get(
     "/redesign-overview",
     summary="Dashboard redesign aggregated metrics",
 )
+@router.get(
+    "/redesign-overview/",
+    include_in_schema=False,
+)
 def get_redesign_dashboard_overview(db: Session = Depends(get_database)):
     """
-    Additive endpoint used only by the redesigned dashboard. Existing API routes
-    and response contracts are intentionally left unchanged.
+    Unified dashboard redesign aggregated metrics via direct database SQL queries
+    without loading full inventory rows into Python memory.
     """
-    assets = db.query(Asset).all()
-    employees = db.query(WorkdayEmployee).all()
-    eol_refs = db.query(DeviceEolReference).all()
+    return DashboardService.get_redesign_overview(db=db)
 
-    employee_by_user = {
-        str(employee.user_id or "").strip().casefold(): employee
-        for employee in employees if str(employee.user_id or "").strip()
-    }
-    eol_by_model = {}
-    for ref in eol_refs:
-        key = (str(ref.manufacturer or "").strip().casefold(), str(ref.model or "").strip().casefold())
-        if key not in eol_by_model or (ref.eol_date and (not eol_by_model[key] or ref.eol_date > eol_by_model[key])):
-            eol_by_model[key] = ref.eol_date
-
-    today = date.today()
-    def clean_status(value):
-        raw = str(value or "").strip().upper().replace("_", " ")
-        if raw in {"NEED VALIDATION", "NEEDVALIDATION", "REVIEW"}: return "REVIEW"
-        if raw in {"INSTOCK", "IN STOCK"}: return "IN STOCK"
-        if raw == "RETIRED": return "RETIRED"
-        return "ACTIVE" if raw == "ACTIVE" else (raw or "REVIEW")
-
-    def eol_for(asset):
-        key = (str(asset.manufacturer or "").strip().casefold(), str(asset.model or "").strip().casefold())
-        eol_date = eol_by_model.get(key)
-        if not eol_date: return "UNKNOWN", None
-        days = (eol_date - today).days
-        if days < 0: return "EXPIRED", days
-        if days <= 90: return "EOL SOON", days
-        return "ACTIVE", days
-
-    source_stats = {
-        "BIGFIX": {"total": 0, "active": 0, "review": 0, "in_stock": 0, "retired": 0, "auto": 0, "manual": 0, "unassigned": 0, "eol_active": 0, "eol_soon": 0, "eol_expired": 0, "eol_unknown": 0},
-        "JAMF": {"total": 0, "active": 0, "review": 0, "in_stock": 0, "retired": 0, "auto": 0, "manual": 0, "unassigned": 0, "eol_active": 0, "eol_soon": 0, "eol_expired": 0, "eol_unknown": 0},
-    }
-    status_counts = {"ACTIVE": 0, "REVIEW": 0, "IN STOCK": 0, "RETIRED": 0}
-    eol_counts = {"ACTIVE": 0, "EOL SOON": 0, "EXPIRED": 0, "UNKNOWN": 0}
-    departments = {}
-    models = {}
-    matched_owners = set()
-
-    for asset in assets:
-        source = str(asset.source or "").strip().upper()
-        if source not in source_stats:
-            continue
-        status = clean_status(asset.asset_status)
-        assign_user = str(asset.assigned_username or "").strip()
-        assignment = str(asset.assignment_type or "").strip().upper()
-        eol_status, days_remaining = eol_for(asset)
-        stats = source_stats[source]
-        stats["total"] += 1
-        stats[{"ACTIVE":"active", "REVIEW":"review", "IN STOCK":"in_stock", "RETIRED":"retired"}.get(status, "review")] += 1
-        status_counts[status if status in status_counts else "REVIEW"] += 1
-        stats[{"ACTIVE":"eol_active", "EOL SOON":"eol_soon", "EXPIRED":"eol_expired", "UNKNOWN":"eol_unknown"}[eol_status]] += 1
-        eol_counts[eol_status] += 1
-        if not assign_user:
-            stats["unassigned"] += 1
-            assignment_label = "Unassigned"
-        elif assignment == "AUTO":
-            stats["auto"] += 1
-            assignment_label = "Auto"
-        else:
-            stats["manual"] += 1
-            assignment_label = "Manual"
-
-        employee = employee_by_user.get(assign_user.casefold()) if assign_user else None
-        department = str(getattr(employee, "department", "") or "").strip() if employee else ""
-        if employee and assign_user:
-            matched_owners.add(assign_user.casefold())
-            if department:
-                departments[department] = departments.get(department, 0) + 1
-
-        model_name = f"{asset.manufacturer or 'Unknown'} {asset.model or 'Unknown'}".strip()
-        model = models.setdefault(model_name, {"model": model_name, "eol_status": eol_status, "days_remaining": days_remaining, "count": 0})
-        model["count"] += 1
-        if model["eol_status"] == "UNKNOWN" and eol_status != "UNKNOWN":
-            model["eol_status"] = eol_status
-            model["days_remaining"] = days_remaining
-
-    urgency = {"EXPIRED": 0, "EOL SOON": 1, "UNKNOWN": 2, "ACTIVE": 3}
-    eol_exposure = sorted(
-        (item for item in models.values() if item["eol_status"] != "ACTIVE"),
-        key=lambda item: (urgency.get(item["eol_status"], 3), item["days_remaining"] if item["days_remaining"] is not None else 10**9, -item["count"]),
-    )[:7]
-    total_assets = len(assets)
-    return {
-        "kpis": {
-            "total_assets": total_assets,
-            "active_assets": status_counts["ACTIVE"],
-            "review": status_counts["REVIEW"],
-            "in_stock": status_counts["IN STOCK"],
-            "employee_count": len(employees),
-        },
-        "assets_by_source": [
-            {"source": key, "count": value["total"]} for key, value in source_stats.items()
-        ],
-        "eol_distribution": [
-            {"status": key, "count": value} for key, value in eol_counts.items()
-        ],
-        "eol_exposure": eol_exposure,
-        "assets_by_department": [
-            {"department": key, "count": value} for key, value in sorted(departments.items(), key=lambda pair: (-pair[1], pair[0]))
-        ],
-        "source_summary": [
-            {"source": key, **value, "active_share": round((value["eol_active"] / value["total"]) * 100) if value["total"] else 0}
-            for key, value in source_stats.items()
-        ],
-    }

@@ -12,6 +12,7 @@ import {
   BarChart3,
   Sliders,
   TrendingUp,
+  Loader2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import michaelsLogo from '../assets/Logo.svg';
@@ -27,7 +28,7 @@ export const LoginPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
 
@@ -38,16 +39,68 @@ export const LoginPage: React.FC = () => {
     }
 
     setIsSubmitting(true);
+    const pwdToSubmit = password;
+    // Wipe password from state immediately so plaintext credentials are never retained
+    setPassword('');
 
-    setTimeout(() => {
-      const success = login(trimmedUser, password);
-      if (success) {
-        navigate('/dashboard', { replace: true });
+    try {
+      const res = await login(trimmedUser, pwdToSubmit);
+      const mustReset = Boolean(
+        res.must_reset_password === true ||
+        res.user?.must_reset_password === true ||
+        String(res.must_reset_password).toUpperCase() === 'TRUE'
+      );
+
+      if (mustReset) {
+        navigate('/reset-password', { replace: true });
       } else {
-        setError('Invalid username or password. Please verify your credentials and try again.');
-        setIsSubmitting(false);
+        navigate('/dashboard', { replace: true });
       }
-    }, 150);
+    } catch (err: any) {
+      const status = err?.status || err?.response?.status;
+      const detail =
+        err?.detail?.detail ||
+        err?.detail?.message ||
+        err?.detail?.error ||
+        err?.message ||
+        '';
+      const detailLower = String(detail).toLowerCase();
+
+      if (
+        status === 401 ||
+        detailLower.includes('invalid credentials') ||
+        detailLower.includes('unauthorized') ||
+        detailLower.includes('incorrect password') ||
+        detailLower.includes('invalid username') ||
+        detailLower.includes('wrong password')
+      ) {
+        setError('Invalid username or password. Please verify your credentials and try again.');
+      } else if (
+        status === 403 ||
+        detailLower.includes('inactive') ||
+        detailLower.includes('disabled') ||
+        detailLower.includes('suspended') ||
+        detailLower.includes('deactivated')
+      ) {
+        setError('This account is currently inactive. Please contact your system administrator.');
+      } else if (
+        err?.type === 'NETWORK_FAILURE' ||
+        detailLower.includes('network') ||
+        detailLower.includes('refused') ||
+        err?.code === 'ERR_NETWORK' ||
+        err?.code === 'ECONNREFUSED'
+      ) {
+        setError('Unable to connect to authentication server. Please check your network connection and try again.');
+      } else if (status >= 500) {
+        setError('An internal server error occurred. Please try again shortly or contact support.');
+      } else if (detail && typeof detail === 'string') {
+        setError(detail);
+      } else {
+        setError('Authentication failure. Please verify your credentials and try again.');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -342,7 +395,10 @@ export const LoginPage: React.FC = () => {
                     className="w-full h-11 inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#135BEC] hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm transition-all cursor-pointer disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
                   >
                     {isSubmitting ? (
-                      <span>Signing in...</span>
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        <span>Signing in...</span>
+                      </>
                     ) : (
                       <>
                         <span>Sign In</span>

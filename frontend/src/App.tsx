@@ -3,11 +3,13 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { AppProvider, useApp } from './context/AppContext';
 import { AppShell } from './components/layout/AppShell';
 import { LoginPage } from './pages/LoginPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
+import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AllAssetsPage } from './pages/AllAssetsPage';
 import { WindowsAssetsPage } from './pages/WindowsAssetsPage';
 import { MacAssetsPage } from './pages/MacAssetsPage';
-import { EmployeesPage } from './pages/EmployeesPage';
+import { UsersManagementPage } from './pages/UsersManagementPage';
 import { OwnershipPage } from './pages/OwnershipPage';
 import { UnassignedAssetsPage } from './pages/UnassignedAssetsPage';
 import { ExceptionsPage } from './pages/ExceptionsPage';
@@ -17,8 +19,31 @@ import { AdminPage } from './pages/AdminPage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
 import { JobSchedulerPage } from './pages/JobSchedulerPage';
 import { AuditReportsPage } from './pages/AuditReportsPage';
+import { isRouteAllowedForRole } from './config/menuConfig';
 
 const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
+  const { isAuthenticated, currentUser } = useApp();
+  const location = useLocation();
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  // Mandatory first-login password reset enforcement
+  if (currentUser.must_reset_password) {
+    return <Navigate to="/reset-password" replace />;
+  }
+
+  // RBAC route protection: check if current route is authorized for user's role
+  const isAllowed = isRouteAllowedForRole(location.pathname, currentUser.role);
+  if (!isAllowed) {
+    return <AccessDeniedPage attemptedPath={location.pathname} />;
+  }
+
+  return children;
+};
+
+const ResetPasswordRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
   const { isAuthenticated } = useApp();
   const location = useLocation();
 
@@ -30,9 +55,12 @@ const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }
 };
 
 const PublicOnlyRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
-  const { isAuthenticated } = useApp();
+  const { isAuthenticated, currentUser } = useApp();
 
   if (isAuthenticated) {
+    if (currentUser.must_reset_password) {
+      return <Navigate to="/reset-password" replace />;
+    }
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -53,6 +81,17 @@ export default function App() {
               </PublicOnlyRoute>
             }
           />
+
+          {/* Mandatory / Dedicated Password Reset Route */}
+          <Route
+            path="/reset-password"
+            element={
+              <ResetPasswordRoute>
+                <ResetPasswordPage />
+              </ResetPasswordRoute>
+            }
+          />
+          <Route path="/force-password-reset" element={<Navigate to="/reset-password" replace />} />
 
           {/* Protected Application Routes */}
           <Route
@@ -80,15 +119,16 @@ export default function App() {
             {/* 4. Reports */}
             <Route path="reports" element={<ReportsPage />} />
 
-            {/* 5. Users Management */}
-            <Route path="users" element={<EmployeesPage />} />
+            {/* 5. User Management (replaces old static/workday view) */}
+            <Route path="users" element={<UsersManagementPage />} />
             <Route path="employees" element={<Navigate to="/users" replace />} />
 
             {/* 6. Job Scheduler */}
             <Route path="job-scheduler" element={<JobSchedulerPage />} />
 
-            {/* 7. Audit Reports */}
+            {/* 7. Audit Logs */}
             <Route path="audit-reports" element={<AuditReportsPage />} />
+            <Route path="audit-logs" element={<Navigate to="/audit-reports" replace />} />
 
             {/* 8. Settings */}
             <Route path="settings" element={<AdminPage />} />

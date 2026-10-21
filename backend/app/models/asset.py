@@ -27,6 +27,7 @@ class Asset(Base):
     macaddress = Column(String(50), nullable=True)
     computer_id = Column(String(100), nullable=True)
     devicetype = Column(String(30), nullable=True, index=True)  # Server or Desktop
+    category = Column(String(50), nullable=True, index=True)  # STORE or CORPORATE
     managed_by = Column(String(20), nullable=True)  # GROUP or INDIVIDUAL
     assigned_username = Column(String(150), nullable=True, index=True)
     lastreporttime = Column(DateTime(timezone=True), nullable=True)

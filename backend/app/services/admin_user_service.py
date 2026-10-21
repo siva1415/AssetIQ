@@ -100,7 +100,7 @@ class AdminUserService:
 
     @classmethod
     def add_admin_users(
-        cls, db: Session, payload: AdminUserCreateRequest
+        cls, db: Session, payload: AdminUserCreateRequest, actor: Optional[any] = None
     ) -> AdminUserBulkResponse:
         """
         Bulk adds authorized admin users transactionally.
@@ -198,6 +198,7 @@ class AdminUserService:
         # 3. Transactional insertion of valid users
         now_utc = datetime.now(timezone.utc)
         try:
+            from app.services.audit_service import AuditService
             for exact_user_id, emp in to_insert:
                 new_admin = AdminUser(
                     admin_user_id=exact_user_id,
@@ -213,6 +214,24 @@ class AdminUserService:
                         employee_status=emp.employee_status,
                         department=emp.department,
                     )
+                )
+                AuditService.record_audit(
+                    db=db,
+                    actor=actor,
+                    category="ADMIN USERS",
+                    action="ADD ADMIN USER",
+                    entity_type="ADMIN USER",
+                    entity_id=exact_user_id,
+                    entity_name=exact_user_id,
+                    audit_finding=f"Added admin user '{exact_user_id}' with Workday employee identity ({emp.full_name}, {emp.department}).",
+                    new_values={
+                        "admin_user_id": exact_user_id,
+                        "full_name": emp.full_name,
+                        "email": emp.email_work,
+                        "department": emp.department,
+                    },
+                    status="SUCCESS",
+                    commit=False,
                 )
             db.commit()
         except Exception as exc:
@@ -233,13 +252,41 @@ class AdminUserService:
         )
 
     @classmethod
-    def delete_admin_user(cls, db: Session, admin_user_id: str) -> dict:
+    def delete_admin_user(
+        cls, db: Session, admin_user_id: str, actor: Optional[any] = None
+    ) -> dict:
+        from app.repositories.employee_repository import EmployeeRepository
+        from app.services.audit_service import AuditService
+
+        emp = EmployeeRepository.get_by_user_id(db, admin_user_id)
+        emp_name = emp.full_name if emp else None
+        emp_email = emp.email_work if emp else None
+
         deleted = AdminUserRepository.delete_admin_user(db, admin_user_id)
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Admin user '{admin_user_id}' not found",
             )
+
+        AuditService.record_audit(
+            db=db,
+            actor=actor,
+            category="ADMIN USERS",
+            action="REMOVE ADMIN USER",
+            entity_type="ADMIN USER",
+            entity_id=admin_user_id,
+            entity_name=admin_user_id,
+            audit_finding=f"Removed admin user authorization for '{admin_user_id}'.",
+            old_values={
+                "admin_user_id": admin_user_id,
+                "full_name": emp_name,
+                "email": emp_email,
+            },
+            status="SUCCESS",
+            commit=True,
+        )
+
         return {
             "message": f"Admin user '{admin_user_id}' removed successfully",
             "admin_user_id": admin_user_id,

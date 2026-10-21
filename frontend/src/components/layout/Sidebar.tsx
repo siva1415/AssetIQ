@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -20,8 +20,11 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  KeyRound,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { isMenuVisibleForRole } from '../../config/menuConfig';
+import { ChangePasswordModal } from '../auth/ChangePasswordModal';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -89,8 +92,8 @@ const NAV_ITEMS: MenuItem[] = [
   },
   {
     type: 'link',
-    id: 'users-management',
-    label: 'Users Management',
+    id: 'user-management',
+    label: 'User Management',
     path: '/users',
     icon: Users,
   },
@@ -104,7 +107,7 @@ const NAV_ITEMS: MenuItem[] = [
   {
     type: 'link',
     id: 'audit-reports',
-    label: 'Audit Reports',
+    label: 'Audit Logs',
     path: '/audit-reports',
     icon: FileCheck2,
   },
@@ -197,9 +200,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
     };
   }, [activeFlyout]);
 
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState<boolean>(false);
+
+  // Filter navigation items based on current authenticated user's role
+  const visibleNavItems: MenuItem[] = useMemo(() => {
+    return NAV_ITEMS.filter((item: MenuItem) => isMenuVisibleForRole(item.id, currentUser.role));
+  }, [currentUser.role]);
+
   // Automatically expand parent group in expanded mode when current route belongs to it
   useEffect(() => {
-    NAV_ITEMS.forEach(item => {
+    visibleNavItems.forEach(item => {
       if (item.type === 'group') {
         const isChildActive = item.children.some(child => {
           if (child.path === '/eol-management') {
@@ -216,7 +226,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
         }
       }
     });
-  }, [currentPath]);
+  }, [currentPath, visibleNavItems]);
 
   const toggleGroup = (groupId: string) => {
     setExpandedGroups(prev => ({
@@ -338,7 +348,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
           }`}
           aria-label="Main Navigation"
         >
-          {NAV_ITEMS.map(item => {
+          {visibleNavItems.map(item => {
             if (item.type === 'link') {
               const Icon = item.icon;
               const active = isLinkActive(item.path);
@@ -513,19 +523,28 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
             {currentUser.avatarUrl ? (
               <img
                 src={currentUser.avatarUrl}
-                alt="Admin User"
+                alt={currentUser.name || currentUser.username}
                 className="w-8 h-8 rounded-full object-cover shrink-0 ring-1 ring-blue-400/40"
-                title="Admin User (Admin)"
+                title={`${currentUser.name || currentUser.username} (${currentUser.role})`}
               />
             ) : (
               <div
                 className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-xs border border-blue-400/30 select-none"
-                title="Admin User (Admin)"
+                title={`${currentUser.name || currentUser.username} (${currentUser.role})`}
                 aria-hidden="true"
               >
-                {getInitials('Admin User')}
+                {getInitials(currentUser.name || currentUser.username || 'User')}
               </div>
             )}
+            <button
+              type="button"
+              onClick={() => setIsPasswordModalOpen(true)}
+              className="p-1.5 rounded-md text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 transition-colors shrink-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+              title="Change Password"
+              aria-label="Change Password"
+            >
+              <KeyRound className="w-4 h-4" />
+            </button>
             <button
               type="button"
               onClick={handleLogout}
@@ -539,11 +558,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
         ) : (
           /* Expanded User Profile */
           <div className="p-3 border-t border-[#1C2541] bg-[#080E21] shrink-0">
-            <div className="p-2.5 rounded-lg bg-[#1C2541]/50 border border-slate-700/40 flex items-center gap-3">
+            <div className="p-2.5 rounded-lg bg-[#1C2541]/50 border border-slate-700/40 flex items-center gap-2.5">
               {currentUser.avatarUrl ? (
                 <img
                   src={currentUser.avatarUrl}
-                  alt="Admin User"
+                  alt={currentUser.name || currentUser.username}
                   className="w-8 h-8 rounded-full object-cover shrink-0 ring-1 ring-blue-400/40"
                 />
               ) : (
@@ -551,21 +570,42 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                   className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-xs border border-blue-400/30 select-none"
                   aria-hidden="true"
                 >
-                  {getInitials('Admin User')}
+                  {getInitials(currentUser.name || currentUser.username || 'User')}
                 </div>
               )}
 
               <div className="flex flex-col min-w-0 flex-1">
                 <span
                   className="text-xs font-semibold text-white truncate leading-tight"
-                  title="Admin User"
+                  title={currentUser.name || currentUser.username}
                 >
-                  Admin User
+                  {currentUser.name || currentUser.username || 'User'}
                 </span>
-                <span className="text-[10px] font-medium text-slate-400 truncate leading-tight mt-0.5">
-                  Admin
-                </span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span
+                    className={`text-[9px] font-bold px-1.5 py-0.2 rounded border uppercase tracking-wider ${
+                      currentUser.role === 'SUPERADMIN'
+                        ? 'bg-purple-950/70 text-purple-300 border-purple-500/40'
+                        : currentUser.role === 'ADMIN'
+                        ? 'bg-blue-950/70 text-blue-300 border-blue-500/40'
+                        : 'bg-slate-800 text-slate-300 border-slate-600/40'
+                    }`}
+                  >
+                    {currentUser.role}
+                  </span>
+                </div>
               </div>
+
+              {/* Action buttons: Change Password & Logout */}
+              <button
+                type="button"
+                onClick={() => setIsPasswordModalOpen(true)}
+                className="p-1.5 rounded-md text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 transition-colors shrink-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                title="Change Password"
+                aria-label="Change Password"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+              </button>
 
               <button
                 type="button"
@@ -574,7 +614,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
                 title="Logout"
                 aria-label="Logout"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
@@ -651,6 +691,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
           </div>,
           document.body
         )}
+
+      {/* Change Password Modal on demand from profile menu */}
+      <ChangePasswordModal
+        isOpen={isPasswordModalOpen}
+        onClose={() => setIsPasswordModalOpen(false)}
+      />
     </>
   );
 };

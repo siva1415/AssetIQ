@@ -45,6 +45,85 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def check_mandatory_password_reset_and_status(request: Request, call_next):
+    """
+    Global middleware enforcing mandatory first-login password reset and active account status.
+    Users with must_reset_password=True are restricted from accessing normal application APIs
+    until completing /api/auth/change-password. Stale JWT tokens cannot bypass real-time DB status.
+    """
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.strip().lower().startswith("bearer "):
+        path = request.url.path.lower()
+        exempt_paths = (
+            "/api/auth/change-password",
+            "/auth/change-password",
+            "/api/auth/login",
+            "/auth/login",
+            "/api/auth/me",
+            "/auth/me",
+            "/api/me",
+            "/api/auth/current-user",
+            "/auth/current-user",
+            "/api/current-user",
+            "/api/auth/last-login",
+            "/auth/last-login",
+            "/api/last-login",
+            "/api/health",
+            "/health",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+        )
+        if not any(path.startswith(ep) or path == ep for ep in exempt_paths):
+            parts = auth_header.strip().split()
+            if len(parts) == 2:
+                token = parts[1]
+                from app.core.security import decode_access_token
+                from app.db.session import SessionLocal
+                from app.repositories.app_user_repository import AppUserRepository
+                from app.api.deps import get_database
+
+                payload = decode_access_token(token)
+                if payload:
+                    user_id_raw = payload.get("sub") or payload.get("user_id")
+                    if user_id_raw:
+                        db = None
+                        needs_close = False
+                        if get_database in app.dependency_overrides:
+                            gen = app.dependency_overrides[get_database]()
+                            db = next(gen)
+                        else:
+                            db = SessionLocal()
+                            needs_close = True
+
+                        try:
+                            user = AppUserRepository.get_by_id(db, int(user_id_raw))
+                            if user:
+                                if user.status.upper() != "ACTIVE":
+                                    return JSONResponse(
+                                        status_code=status.HTTP_403_FORBIDDEN,
+                                        content={
+                                            "detail": "User account is inactive. Please contact your system administrator.",
+                                            "status_code": status.HTTP_403_FORBIDDEN,
+                                        },
+                                    )
+                                if user.must_reset_password:
+                                    return JSONResponse(
+                                        status_code=status.HTTP_403_FORBIDDEN,
+                                        content={
+                                            "detail": "Password change required before accessing application resources. Please update your password.",
+                                            "status_code": status.HTTP_403_FORBIDDEN,
+                                        },
+                                    )
+                        finally:
+                            if needs_close and db:
+                                db.close()
+
+    response = await call_next(request)
+    return response
+
 # ---------------------------------------------------------------------------
 # Global Exception Handlers (Security & Clean Responses)
 # ---------------------------------------------------------------------------

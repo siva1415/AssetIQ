@@ -1,7 +1,8 @@
 from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
-from app.api.deps import PaginationParams, get_database
+from app.api.deps import PaginationParams, get_authenticated_actor, get_database
+from app.models.app_user import AppUser
 from app.schemas.admin_user import (
     AdminUserResponse,
     AdminUserCreateRequest,
@@ -76,12 +77,13 @@ def get_available_users(
 )
 def add_admin_users_via_available_users_alias(
     payload: Union[AdminUserCreateRequest, List[Union[str, AdminUserCreateItem]]],
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
     Alias route ensuring POST requests sent to /available-users do not encounter HTTP 405 Method Not Allowed.
     """
-    return add_admin_users(payload=payload, db=db)
+    return add_admin_users(payload=payload, actor=actor, db=db)
 
 
 @router.get(
@@ -104,6 +106,7 @@ def list_admin_users(db: Session = Depends(get_database)):
 )
 def add_admin_users(
     payload: Union[AdminUserCreateRequest, List[Union[str, AdminUserCreateItem]]],
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
@@ -122,7 +125,7 @@ def add_admin_users(
     else:
         req = payload
 
-    return AdminUserService.add_admin_users(db, req)
+    return AdminUserService.add_admin_users(db, req, actor=actor)
 
 
 @router.delete(
@@ -131,10 +134,11 @@ def add_admin_users(
 )
 def remove_admin_user(
     admin_user_id: str,
+    actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
     Revoke administrative access for a user ID.
     """
-    return AdminUserService.delete_admin_user(db, admin_user_id)
+    return AdminUserService.delete_admin_user(db, admin_user_id, actor=actor)
 

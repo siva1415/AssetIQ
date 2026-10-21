@@ -21,6 +21,8 @@ from app.schemas.dashboard import (
     HardwareAssetAnalysisResponse,
     OperatingSystemItem,
     DeviceTypeItem,
+    DeviceTypeCategoryItem,
+    DeviceTypeCategoryResponse,
 )
 
 
@@ -609,10 +611,10 @@ class DashboardService:
             if row.division and str(row.division).strip():
                 grp["divisions"].add(str(row.division).strip())
 
-        # Sort departments alphabetically, placing 'Unassigned' at the end if present
+        # Sort departments: highest count first, with department name as stable tie-breaker
         sorted_keys = sorted(
             dept_groups.keys(),
-            key=lambda k: (1 if k == "Unassigned" else 0, k.lower()),
+            key=lambda k: (-dept_groups[k]["total_assets"], k.lower()),
         )
 
         items = []
@@ -738,18 +740,26 @@ class DashboardService:
     ) -> HardwareAssetAnalysisResponse:
         """
         Computes live, database-backed aggregated metrics for the Hardware Asset Analysis card:
-        1. Assets by Operating System
-        2. Assets by Device Type
+        1. Assets by Operating System (Windows 11, Windows 10, Mac)
+        2. Assets by Device Type (Laptops, Desktops)
+        3. Assets by Device Type and Category (STORE-DESKTOPS, CORPORATE-LAPTOPS, CORPORATE-DESKTOPS)
 
         Rules enforced:
-        - Operating systems: grouped by os_name, trimmed, case-normalized.
-          NULL, empty string, and whitespace-only records are excluded. No placeholder/unknown buckets.
-          Only groups with count >= 1 are returned.
-        - Device types: grouped by devicetype, trimmed, normalized casing (Desktop, Server, etc.).
-          NULL, empty string, and whitespace-only records are excluded. No placeholder/unknown buckets.
-          Only groups with count >= 1 are returned.
-        - Accurate counts from PostgreSQL GROUP BY without fetching full inventory into memory.
-        - Handles empty dataset gracefully by returning empty collections.
+        - Operating systems: aggregated for exactly three display groups:
+          'Windows 11', 'Windows 10', 'Mac'.
+          Case-insensitive matching, handling whitespace.
+          Excludes other operating systems (Linux, Ubuntu, Red Hat, etc.), NULL values,
+          blank values, and unrecognized OS values.
+          Always returns all three groups present, including zero counts.
+        - Device types: aggregated for 'Laptops' and 'Desktops'.
+          Normalized casing and whitespace, excluding Server and unrelated device types.
+          Always includes both categories in response even when zero.
+        - Device type and category: aggregated for:
+          'STORE-DESKTOPS', 'CORPORATE-LAPTOPS', 'CORPORATE-DESKTOPS'.
+          Normalizes case and whitespace. Excludes unsupported combinations, Server devices,
+          blank/NULL categories. Always returns all three combinations with count 0 when no match.
+          Each asset counted at most once.
+        - Accurate counts from PostgreSQL conditional aggregations without fetching full inventory into memory.
         """
         try:
             # 1. Total Assets in scope
@@ -759,6 +769,7 @@ class DashboardService:
                 source=source,
                 scope=scope,
                 asset_status=asset_status,
+                devicetype=devicetype,
                 manufacturer=manufacturer,
                 model=model,
                 assigned_username=assigned_username,
@@ -768,21 +779,24 @@ class DashboardService:
             )
             total_assets = int(db.execute(total_stmt).scalar() or 0)
 
-            # 2. Operating Systems aggregation
-            # Exclude NULL, empty string, and whitespace-only
-            clean_os = func.trim(Asset.os_name)
-            norm_os = func.lower(clean_os)
+            # 2. Operating Systems aggregation: Windows 11, Windows 10, Mac
+            clean_os = func.lower(func.trim(Asset.os_name))
+            win11_cond = or_(clean_os.like("%windows 11%"), clean_os.like("%win 11%"))
+            win10_cond = or_(clean_os.like("%windows 10%"), clean_os.like("%win 10%"))
+            mac_cond = or_(
+                clean_os.like("%macos%"),
+                clean_os.like("%mac os%"),
+                clean_os.like("%os x%"),
+                clean_os.like("%mac%"),
+            )
 
-            os_stmt = (
-                select(
-                    func.max(clean_os).label("raw_os"),
-                    func.count(Asset.asset_id).label("os_count"),
-                )
-                .select_from(Asset)
-                .where(
-                    Asset.os_name.is_not(None),
-                    clean_os != "",
-                )
+            os_stmt = select(
+                func.count(case((win11_cond, 1), else_=None)).label("win11"),
+                func.count(case((win10_cond, 1), else_=None)).label("win10"),
+                func.count(case((mac_cond, 1), else_=None)).label("mac"),
+            ).select_from(Asset).where(
+                Asset.os_name.is_not(None),
+                func.trim(Asset.os_name) != "",
             )
             os_stmt = cls._apply_scope_and_filters(
                 os_stmt,
@@ -797,42 +811,41 @@ class DashboardService:
                 is_unassigned=is_unassigned,
                 search=search,
             )
-            os_stmt = os_stmt.group_by(norm_os).order_by(
-                func.count(Asset.asset_id).desc(),
-                func.max(clean_os).asc(),
-            )
-            os_rows = db.execute(os_stmt).fetchall()
+            os_row = db.execute(os_stmt).first()
+            win11_cnt = int(os_row.win11 or 0) if os_row else 0
+            win10_cnt = int(os_row.win10 or 0) if os_row else 0
+            mac_cnt = int(os_row.mac or 0) if os_row else 0
+            total_os_assets = win11_cnt + win10_cnt + mac_cnt
 
-            total_os_assets = sum(int(r.os_count or 0) for r in os_rows)
-            operating_systems: List[OperatingSystemItem] = []
-            for r in os_rows:
-                cnt = int(r.os_count or 0)
-                if cnt > 0 and r.raw_os:
-                    pct = round((cnt / total_os_assets) * 100, 1) if total_os_assets > 0 else 0.0
-                    operating_systems.append(
-                        OperatingSystemItem(
-                            name=str(r.raw_os).strip(),
-                            count=cnt,
-                            percentage=pct,
-                        )
-                    )
+            operating_systems = [
+                OperatingSystemItem(
+                    name="Windows 11",
+                    count=win11_cnt,
+                    percentage=round((win11_cnt / total_os_assets) * 100, 1) if total_os_assets > 0 else 0.0,
+                ),
+                OperatingSystemItem(
+                    name="Windows 10",
+                    count=win10_cnt,
+                    percentage=round((win10_cnt / total_os_assets) * 100, 1) if total_os_assets > 0 else 0.0,
+                ),
+                OperatingSystemItem(
+                    name="Mac",
+                    count=mac_cnt,
+                    percentage=round((mac_cnt / total_os_assets) * 100, 1) if total_os_assets > 0 else 0.0,
+                ),
+            ]
 
-            # 3. Device Types aggregation
-            # Exclude NULL, empty string, and whitespace-only
-            clean_dev = func.trim(Asset.devicetype)
-            norm_dev = func.lower(clean_dev)
+            # 3. Device Types aggregation: Laptops, Desktops
+            clean_dev = func.lower(func.trim(Asset.devicetype))
+            desktop_cond = clean_dev.in_(["desktop", "desktops"])
+            laptop_cond = clean_dev.in_(["laptop", "laptops"])
 
-            dev_stmt = (
-                select(
-                    func.max(clean_dev).label("raw_dev"),
-                    norm_dev.label("norm_dev"),
-                    func.count(Asset.asset_id).label("dev_count"),
-                )
-                .select_from(Asset)
-                .where(
-                    Asset.devicetype.is_not(None),
-                    clean_dev != "",
-                )
+            dev_stmt = select(
+                func.count(case((laptop_cond, 1), else_=None)).label("laptops"),
+                func.count(case((desktop_cond, 1), else_=None)).label("desktops"),
+            ).select_from(Asset).where(
+                Asset.devicetype.is_not(None),
+                func.trim(Asset.devicetype) != "",
             )
             dev_stmt = cls._apply_scope_and_filters(
                 dev_stmt,
@@ -846,49 +859,383 @@ class DashboardService:
                 is_unassigned=is_unassigned,
                 search=search,
             )
-            dev_stmt = dev_stmt.group_by(norm_dev).order_by(
-                func.count(Asset.asset_id).desc(),
-                norm_dev.asc(),
+            dev_row = db.execute(dev_stmt).first()
+            laptop_cnt = int(dev_row.laptops or 0) if dev_row else 0
+            desktop_cnt = int(dev_row.desktops or 0) if dev_row else 0
+            total_device_assets = laptop_cnt + desktop_cnt
+
+            device_types = [
+                DeviceTypeItem(
+                    name="Laptops",
+                    count=laptop_cnt,
+                    percentage=round((laptop_cnt / total_device_assets) * 100, 1) if total_device_assets > 0 else 0.0,
+                ),
+                DeviceTypeItem(
+                    name="Desktops",
+                    count=desktop_cnt,
+                    percentage=round((desktop_cnt / total_device_assets) * 100, 1) if total_device_assets > 0 else 0.0,
+                ),
+            ]
+
+            # 4. Device Type and Category aggregation: STORE-DESKTOPS, CORPORATE-LAPTOPS, CORPORATE-DESKTOPS
+            clean_cat = func.upper(func.trim(Asset.category))
+            store_desktop_cond = (clean_cat == "STORE") & desktop_cond
+            corp_laptop_cond = (clean_cat == "CORPORATE") & laptop_cond
+            corp_desktop_cond = (clean_cat == "CORPORATE") & desktop_cond
+
+            cat_dev_stmt = select(
+                func.count(case((store_desktop_cond, 1), else_=None)).label("store_desktops"),
+                func.count(case((corp_laptop_cond, 1), else_=None)).label("corp_laptops"),
+                func.count(case((corp_desktop_cond, 1), else_=None)).label("corp_desktops"),
+            ).select_from(Asset).where(
+                Asset.category.is_not(None),
+                func.trim(Asset.category) != "",
+                Asset.devicetype.is_not(None),
+                func.trim(Asset.devicetype) != "",
             )
-            dev_rows = db.execute(dev_stmt).fetchall()
-
-            total_device_assets = sum(int(r.dev_count or 0) for r in dev_rows)
-            device_types: List[DeviceTypeItem] = []
-            for r in dev_rows:
-                cnt = int(r.dev_count or 0)
-                if cnt > 0 and r.norm_dev:
-                    norm_str = str(r.norm_dev).strip()
-                    if norm_str == "desktop":
-                        canon_name = "Desktop"
-                    elif norm_str == "server":
-                        canon_name = "Server"
-                    elif norm_str == "laptop":
-                        canon_name = "Laptop"
-                    elif norm_str == "mobile":
-                        canon_name = "Mobile"
-                    else:
-                        canon_name = str(r.raw_dev).strip().title()
-
-                    pct = round((cnt / total_device_assets) * 100, 1) if total_device_assets > 0 else 0.0
-                    device_types.append(
-                        DeviceTypeItem(
-                            name=canon_name,
-                            count=cnt,
-                            percentage=pct,
-                        )
-                    )
-
-            return HardwareAssetAnalysisResponse(
-                operating_systems=operating_systems,
-                device_types=device_types,
-                total_assets=total_assets,
-                total_os_assets=total_os_assets,
-                total_device_assets=total_device_assets,
+            cat_dev_stmt = cls._apply_scope_and_filters(
+                cat_dev_stmt,
+                source=source,
+                scope=scope,
+                asset_status=asset_status,
+                manufacturer=manufacturer,
+                model=model,
+                assigned_username=assigned_username,
+                assignment_type=assignment_type,
+                is_unassigned=is_unassigned,
+                search=search,
             )
+            cat_row = db.execute(cat_dev_stmt).first()
+            store_desktops_cnt = int(cat_row.store_desktops or 0) if cat_row else 0
+            corp_laptops_cnt = int(cat_row.corp_laptops or 0) if cat_row else 0
+            corp_desktops_cnt = int(cat_row.corp_desktops or 0) if cat_row else 0
+
+            by_device_type_and_category = [
+                DeviceTypeCategoryItem(
+                    category="STORE",
+                    deviceType="Desktop",
+                    label="STORE-DESKTOPS",
+                    count=store_desktops_cnt,
+                ),
+                DeviceTypeCategoryItem(
+                    category="CORPORATE",
+                    deviceType="Laptop",
+                    label="CORPORATE-LAPTOPS",
+                    count=corp_laptops_cnt,
+                ),
+                DeviceTypeCategoryItem(
+                    category="CORPORATE",
+                    deviceType="Desktop",
+                    label="CORPORATE-DESKTOPS",
+                    count=corp_desktops_cnt,
+                ),
+            ]
+
+            return HardwareAssetAnalysisResponse.model_validate({
+                "operating_systems": operating_systems,
+                "device_types": device_types,
+                "by_device_type_and_category": by_device_type_and_category,
+                "total_assets": total_assets,
+                "total_os_assets": total_os_assets,
+                "total_device_assets": total_device_assets,
+            })
         except Exception as e:
             logger.error(f"Error calculating hardware asset analysis: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Database error executing hardware asset analysis: {str(e)}",
             )
+
+    @classmethod
+    def get_device_type_and_category(
+        cls,
+        db: Session,
+        source: Optional[str] = None,
+        scope: Optional[str] = None,
+        asset_status: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        model: Optional[str] = None,
+        assigned_username: Optional[str] = None,
+        assignment_type: Optional[str] = None,
+        is_unassigned: Optional[bool] = None,
+        search: Optional[str] = None,
+    ) -> DeviceTypeCategoryResponse:
+        """
+        Direct endpoint method for Hardware Asset Analysis by Device Type and Category:
+        - STORE-DESKTOPS
+        - CORPORATE-LAPTOPS
+        - CORPORATE-DESKTOPS
+        """
+        clean_dev = func.lower(func.trim(Asset.devicetype))
+        desktop_cond = clean_dev.in_(["desktop", "desktops"])
+        laptop_cond = clean_dev.in_(["laptop", "laptops"])
+
+        clean_cat = func.upper(func.trim(Asset.category))
+        store_desktop_cond = (clean_cat == "STORE") & desktop_cond
+        corp_laptop_cond = (clean_cat == "CORPORATE") & laptop_cond
+        corp_desktop_cond = (clean_cat == "CORPORATE") & desktop_cond
+
+        cat_dev_stmt = select(
+            func.count(case((store_desktop_cond, 1), else_=None)).label("store_desktops"),
+            func.count(case((corp_laptop_cond, 1), else_=None)).label("corp_laptops"),
+            func.count(case((corp_desktop_cond, 1), else_=None)).label("corp_desktops"),
+        ).select_from(Asset).where(
+            Asset.category.is_not(None),
+            func.trim(Asset.category) != "",
+            Asset.devicetype.is_not(None),
+            func.trim(Asset.devicetype) != "",
+        )
+        cat_dev_stmt = cls._apply_scope_and_filters(
+            cat_dev_stmt,
+            source=source,
+            scope=scope,
+            asset_status=asset_status,
+            manufacturer=manufacturer,
+            model=model,
+            assigned_username=assigned_username,
+            assignment_type=assignment_type,
+            is_unassigned=is_unassigned,
+            search=search,
+        )
+        cat_row = db.execute(cat_dev_stmt).first()
+        store_desktops_cnt = int(cat_row.store_desktops or 0) if cat_row else 0
+        corp_laptops_cnt = int(cat_row.corp_laptops or 0) if cat_row else 0
+        corp_desktops_cnt = int(cat_row.corp_desktops or 0) if cat_row else 0
+
+        items = [
+            DeviceTypeCategoryItem(
+                category="STORE",
+                deviceType="Desktop",
+                label="STORE-DESKTOPS",
+                count=store_desktops_cnt,
+            ),
+            DeviceTypeCategoryItem(
+                category="CORPORATE",
+                deviceType="Laptop",
+                label="CORPORATE-LAPTOPS",
+                count=corp_laptops_cnt,
+            ),
+            DeviceTypeCategoryItem(
+                category="CORPORATE",
+                deviceType="Desktop",
+                label="CORPORATE-DESKTOPS",
+                count=corp_desktops_cnt,
+            ),
+        ]
+        return DeviceTypeCategoryResponse(byDeviceTypeAndCategory=items)
+
+    @classmethod
+    def get_eol_distribution(cls, db: Session, source: Optional[str] = None) -> List[dict]:
+        """
+        Calculates counts for all four EOL states via efficient SQL aggregation:
+        - ACTIVE: more than 90 days remaining
+        - EOL SOON: 0-90 days remaining, inclusive
+        - EXPIRED: EOL date before today
+        - UNKNOWN: no exact manufacturer-and-model EOL match or no usable EOL date
+        Returns stable ordering: ACTIVE, EOL SOON, EXPIRED, UNKNOWN.
+        Every asset belongs to exactly one state.
+        """
+        today = date.today()
+        warning_days = settings.EOL_WARNING_DAYS
+        threshold = today + timedelta(days=warning_days)
+        eol_sub = cls._get_deduplicated_eol_subquery()
+
+        active_cond = eol_sub.c.eol_date.is_not(None) & (eol_sub.c.eol_date > threshold)
+        soon_cond = eol_sub.c.eol_date.is_not(None) & (eol_sub.c.eol_date >= today) & (eol_sub.c.eol_date <= threshold)
+        expired_cond = eol_sub.c.eol_date.is_not(None) & (eol_sub.c.eol_date < today)
+        unknown_cond = eol_sub.c.eol_date.is_(None)
+
+        stmt = (
+            select(
+                func.count(case((active_cond, 1), else_=None)).label("active_count"),
+                func.count(case((soon_cond, 1), else_=None)).label("soon_count"),
+                func.count(case((expired_cond, 1), else_=None)).label("expired_count"),
+                func.count(case((unknown_cond, 1), else_=None)).label("unknown_count"),
+            )
+            .select_from(Asset)
+            .outerjoin(eol_sub, EolRepository.get_eol_join_condition(eol_sub))
+        )
+        stmt = cls._apply_scope_and_filters(stmt, source=source)
+        row = db.execute(stmt).first()
+
+        active_cnt = int(row.active_count or 0) if row else 0
+        soon_cnt = int(row.soon_count or 0) if row else 0
+        expired_cnt = int(row.expired_count or 0) if row else 0
+        unknown_cnt = int(row.unknown_count or 0) if row else 0
+
+        return [
+            {"status": "ACTIVE", "count": active_cnt},
+            {"status": "EOL SOON", "count": soon_cnt},
+            {"status": "EXPIRED", "count": expired_cnt},
+            {"status": "UNKNOWN", "count": unknown_cnt},
+        ]
+
+    @classmethod
+    def get_eol_exposure(cls, db: Session, limit: int = 7) -> List[dict]:
+        """
+        Preserves existing EOL Exposure by Hardware Model aggregation and business rules.
+        Excludes ACTIVE hardware models, groups by exact manufacturer and model,
+        and sorts by urgency (EXPIRED=0, EOL SOON=1, UNKNOWN=2), days_remaining ascending,
+        and count descending.
+        """
+        today = date.today()
+        warning_days = settings.EOL_WARNING_DAYS
+        threshold = today + timedelta(days=warning_days)
+        eol_sub = cls._get_deduplicated_eol_subquery()
+
+        mfg_clean = func.coalesce(func.nullif(func.trim(Asset.manufacturer), ""), "Unknown")
+        model_clean = func.coalesce(func.nullif(func.trim(Asset.model), ""), "Unknown")
+
+        stmt = (
+            select(
+                mfg_clean.label("mfg"),
+                model_clean.label("model"),
+                eol_sub.c.eol_date.label("eol_date"),
+                func.count(Asset.asset_id).label("model_count"),
+            )
+            .select_from(Asset)
+            .outerjoin(eol_sub, EolRepository.get_eol_join_condition(eol_sub))
+            .group_by(mfg_clean, model_clean, eol_sub.c.eol_date)
+        )
+        rows = db.execute(stmt).fetchall()
+
+        urgency_order = {"EXPIRED": 0, "EOL SOON": 1, "UNKNOWN": 2, "ACTIVE": 3}
+        exposure_list = []
+
+        for r in rows:
+            eol_date = r.eol_date
+            if eol_date is None:
+                status = "UNKNOWN"
+                days = None
+            else:
+                days = (eol_date - today).days
+                if days < 0:
+                    status = "EXPIRED"
+                elif days <= warning_days:
+                    status = "EOL SOON"
+                else:
+                    status = "ACTIVE"
+
+            if status != "ACTIVE":
+                model_name = f"{r.mfg} {r.model}".strip()
+                exposure_list.append({
+                    "model": model_name,
+                    "eol_status": status,
+                    "days_remaining": days,
+                    "count": int(r.model_count or 0),
+                })
+
+        exposure_list.sort(
+            key=lambda item: (
+                urgency_order.get(item["eol_status"], 3),
+                item["days_remaining"] if item["days_remaining"] is not None else 10**9,
+                -item["count"],
+            )
+        )
+        return exposure_list[:limit]
+
+    @classmethod
+    def get_redesign_overview(cls, db: Session) -> dict:
+        """
+        Provides unified dashboard redesign aggregated metrics via direct PostgreSQL queries
+        without loading individual asset records into Python memory.
+        """
+        today = date.today()
+        warning_days = settings.EOL_WARNING_DAYS
+        threshold = today + timedelta(days=warning_days)
+        eol_sub = cls._get_deduplicated_eol_subquery()
+
+        summary = cls.get_summary(db=db)
+        src_res = cls.get_assets_by_source(db=db)
+        eol_dist = cls.get_eol_distribution(db=db)
+        eol_exp = cls.get_eol_exposure(db=db, limit=7)
+        dept_res = cls.get_department_summary(db=db)
+        hw_analysis = cls.get_hardware_asset_analysis(db=db)
+
+        # Source breakdown details (BIGFIX & JAMF)
+        clean_status = func.lower(func.trim(Asset.asset_status))
+        clean_source = func.upper(func.trim(Asset.source))
+        clean_assign = func.upper(func.trim(Asset.assignment_type))
+
+        source_summary_stmt = (
+            select(
+                clean_source.label("source"),
+                func.count(Asset.asset_id).label("total"),
+                func.count(case((clean_status == "active", 1), else_=None)).label("active"),
+                func.count(case((clean_status.in_(["review", "need validation", "needvalidation", "need_validation"]), 1), else_=None)).label("review"),
+                func.count(case((clean_status.in_(["instock", "in stock", "in_stock"]), 1), else_=None)).label("in_stock"),
+                func.count(case((clean_status == "retired", 1), else_=None)).label("retired"),
+                func.count(case((clean_assign == "AUTO", 1), else_=None)).label("auto"),
+                func.count(case((clean_assign == "MANUAL", 1), else_=None)).label("manual"),
+                func.count(case((or_(Asset.assigned_username.is_(None), func.trim(Asset.assigned_username) == ""), 1), else_=None)).label("unassigned"),
+            )
+            .select_from(Asset)
+            .where(clean_source.in_(["BIGFIX", "JAMF"]))
+            .group_by(clean_source)
+        )
+        src_rows = {r.source: r for r in db.execute(source_summary_stmt).fetchall()}
+
+        # EOL counts per source
+        eol_src_stmt = (
+            select(
+                clean_source.label("source"),
+                func.count(case((eol_sub.c.eol_date.is_not(None) & (eol_sub.c.eol_date > threshold), 1), else_=None)).label("eol_active"),
+                func.count(case((eol_sub.c.eol_date.is_not(None) & (eol_sub.c.eol_date >= today) & (eol_sub.c.eol_date <= threshold), 1), else_=None)).label("eol_soon"),
+                func.count(case((eol_sub.c.eol_date.is_not(None) & (eol_sub.c.eol_date < today), 1), else_=None)).label("eol_expired"),
+                func.count(case((eol_sub.c.eol_date.is_(None), 1), else_=None)).label("eol_unknown"),
+            )
+            .select_from(Asset)
+            .outerjoin(eol_sub, EolRepository.get_eol_join_condition(eol_sub))
+            .where(clean_source.in_(["BIGFIX", "JAMF"]))
+            .group_by(clean_source)
+        )
+        eol_src_rows = {r.source: r for r in db.execute(eol_src_stmt).fetchall()}
+
+        source_summary_list = []
+        for src_name in ["BIGFIX", "JAMF"]:
+            r = src_rows.get(src_name)
+            e = eol_src_rows.get(src_name)
+            total = int(r.total or 0) if r else 0
+            eol_act = int(e.eol_active or 0) if e else 0
+            source_summary_list.append({
+                "source": src_name,
+                "total": total,
+                "active": int(r.active or 0) if r else 0,
+                "review": int(r.review or 0) if r else 0,
+                "in_stock": int(r.in_stock or 0) if r else 0,
+                "retired": int(r.retired or 0) if r else 0,
+                "auto": int(r.auto or 0) if r else 0,
+                "manual": int(r.manual or 0) if r else 0,
+                "unassigned": int(r.unassigned or 0) if r else 0,
+                "eol_active": eol_act,
+                "eol_soon": int(e.eol_soon or 0) if e else 0,
+                "eol_expired": int(e.eol_expired or 0) if e else 0,
+                "eol_unknown": int(e.eol_unknown or 0) if e else 0,
+                "active_share": round((eol_act / total) * 100) if total > 0 else 0,
+            })
+
+        return {
+            "kpis": {
+                "total_assets": summary.total_assets,
+                "active_assets": summary.active_assets,
+                "review": summary.review,
+                "in_stock": summary.in_stock,
+                "employee_count": summary.employee_count,
+            },
+            "assets_by_source": [
+                {"source": "BIGFIX", "count": src_res.bigfix_count},
+                {"source": "JAMF", "count": src_res.jamf_count},
+            ],
+            "eol_distribution": eol_dist,
+            "eol_exposure": eol_exp,
+            "assets_by_department": [
+                {"department": d.department, "count": d.total_assets}
+                for d in dept_res.items[:10]
+            ],
+            "source_summary": source_summary_list,
+            "hardware_analysis": hw_analysis,
+            "by_device_type_and_category": hw_analysis.by_device_type_and_category,
+            "byDeviceTypeAndCategory": hw_analysis.by_device_type_and_category,
+        }
+
 

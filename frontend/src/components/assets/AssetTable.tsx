@@ -18,7 +18,6 @@ import {
   Info,
   Package,
   Clock,
-  Server as ServerIcon,
   CalendarPlus,
   Download,
   Loader2,
@@ -347,18 +346,18 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   }, [dataRefreshKey]);
 
   // Supported standard device types
-  const SUPPORTED_DEVICE_TYPES = ['Laptop', 'Desktop', 'Server'];
+  const SUPPORTED_DEVICE_TYPES = ['Laptop', 'Desktop'];
 
-  // Populate dropdown options from real asset data and supported option list
+  // Populate dropdown options from real asset data and supported option list (excluding Server)
   const deviceTypeOptions = useMemo(() => {
     const map = new Map<string, string>();
-    SUPPORTED_DEVICE_TYPES.forEach(dt => map.set(dt.toLowerCase(), dt));
+    SUPPORTED_DEVICE_TYPES.filter(dt => dt.toLowerCase() !== 'server').forEach(dt => map.set(dt.toLowerCase(), dt));
 
     if (filterOptions?.device_types) {
       filterOptions.device_types.forEach(dt => {
         if (typeof dt === 'string' && dt.trim()) {
           const trimmed = dt.trim();
-          if (!map.has(trimmed.toLowerCase())) {
+          if (trimmed.toLowerCase() !== 'server' && !map.has(trimmed.toLowerCase())) {
             map.set(trimmed.toLowerCase(), trimmed);
           }
         }
@@ -367,7 +366,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
 
     assets.forEach(a => {
       const dt = (a.devicetype || '').trim();
-      if (dt && !map.has(dt.toLowerCase())) {
+      if (dt && dt.toLowerCase() !== 'server' && !map.has(dt.toLowerCase())) {
         map.set(dt.toLowerCase(), dt);
       }
     });
@@ -957,7 +956,6 @@ export const AssetTable: React.FC<AssetTableProps> = ({
               const lower = dt.toLowerCase();
               if (lower === 'laptop') label = 'Laptops';
               else if (lower === 'desktop') label = 'Desktops';
-              else if (lower === 'server') label = 'Servers';
               return (
                 <option key={dt} value={dt}>
                   {label}

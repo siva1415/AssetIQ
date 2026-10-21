@@ -392,16 +392,6 @@ export const EOLPage: React.FC = () => {
           <div className="h-4 w-px bg-slate-200 mx-1 hidden sm:block" />
 
           <button
-            onClick={() => loadRecords()}
-            disabled={loading}
-            className="p-1.5 border border-slate-200 rounded-md text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50"
-            title="Refresh Table Data"
-            aria-label="Refresh Data"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-
-          <button
             onClick={handleOpenCreateModal}
             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md shadow-xs transition-colors whitespace-nowrap"
           >

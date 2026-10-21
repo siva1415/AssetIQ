@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { api, getApiBaseUrl, getInitialMockMode, setStoredApiBaseUrl, setStoredMockMode } from '../services/api';
-import { HealthResponse } from '../types';
+import { HealthResponse, PortalRole, LoginResponse } from '../types';
+import { normalizeRole } from '../config/menuConfig';
 
 interface HealthState {
   status: 'checking' | 'connected' | 'disconnected' | 'mock';
@@ -11,13 +12,26 @@ interface HealthState {
 }
 
 export interface LoggedInUser {
+  id?: string | number;
+  username: string;
   name: string;
   email?: string;
-  role?: string;
+  role: PortalRole;
   avatarUrl?: string;
+  must_reset_password?: boolean;
+  last_login_at?: string | null;
+  last_login?: string | null;
 }
 
-const AUTH_SESSION_KEY = 'asset_iq_auth_session';
+export const AUTH_SESSION_KEY = 'asset_iq_auth_session';
+
+const DEFAULT_GUEST_USER: LoggedInUser = {
+  username: '',
+  name: '',
+  email: '',
+  role: 'VIEWER',
+  must_reset_password: false,
+};
 
 export function resolveCurrentUser(): LoggedInUser {
   if (typeof window !== 'undefined') {
@@ -25,12 +39,18 @@ export function resolveCurrentUser(): LoggedInUser {
       const sessionRaw = sessionStorage.getItem(AUTH_SESSION_KEY) || localStorage.getItem(AUTH_SESSION_KEY);
       if (sessionRaw) {
         const parsed = JSON.parse(sessionRaw);
-        if (parsed && parsed.user && parsed.user.name) {
+        if (parsed && parsed.authenticated && parsed.user) {
+          const u = parsed.user;
           return {
-            name: parsed.user.name,
-            email: parsed.user.email || 'siva.sankaran.it@gmail.com',
-            role: parsed.user.role || 'Admin',
-            avatarUrl: parsed.user.avatarUrl,
+            id: u.id || u.user_id,
+            username: u.username || '',
+            name: u.full_name || u.name || u.username || 'User',
+            email: u.email || '',
+            role: normalizeRole(u.role),
+            avatarUrl: u.avatarUrl,
+            must_reset_password: Boolean(u.must_reset_password || parsed.must_reset_password),
+            last_login_at: u.last_login_at || u.last_login || null,
+            last_login: u.last_login || u.last_login_at || null,
           };
         }
       }
@@ -39,11 +59,7 @@ export function resolveCurrentUser(): LoggedInUser {
     }
   }
 
-  return {
-    name: 'Siva',
-    email: 'siva.sankaran.it@gmail.com',
-    role: 'Admin',
-  };
+  return DEFAULT_GUEST_USER;
 }
 
 function getInitialAuthState(): boolean {
@@ -83,8 +99,9 @@ interface AppContextType {
   currentUser: LoggedInUser;
   setCurrentUser: (user: LoggedInUser) => void;
   isAuthenticated: boolean;
-  login: (username: string, password: string) => boolean;
+  login: (username: string, password: string) => Promise<LoginResponse>;
   logout: () => void;
+  markPasswordResetComplete: () => void;
   sidebarCollapsed: boolean;
   setSidebarCollapsed: (val: boolean) => void;
   toggleSidebarCollapse: () => void;
@@ -137,30 +154,58 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const login = useCallback((username: string, password: string): boolean => {
-    if (username.trim() === 'admin' && password === 'admin') {
-      const authenticatedUser: LoggedInUser = {
-        name: 'Siva',
-        email: 'siva.sankaran.it@gmail.com',
-        role: 'Admin',
-      };
-      const sessionPayload = JSON.stringify({
-        authenticated: true,
-        user: authenticatedUser,
-        timestamp: Date.now(),
-      });
-      try {
-        sessionStorage.setItem(AUTH_SESSION_KEY, sessionPayload);
-        localStorage.setItem(AUTH_SESSION_KEY, sessionPayload);
-        localStorage.setItem('currentUser', JSON.stringify(authenticatedUser));
-      } catch {
-        // ignore storage errors
-      }
-      setCurrentUserState(authenticatedUser);
-      setIsAuthenticated(true);
-      return true;
+  const login = useCallback(async (username: string, password: string): Promise<LoginResponse> => {
+    const res = await api.login({ username, password });
+
+    // Normalize user data and role from login response
+    const roleRaw = res.role || res.user?.role;
+    const role = normalizeRole(roleRaw);
+    const mustReset = Boolean(
+      res.must_reset_password === true ||
+      res.user?.must_reset_password === true ||
+      String(res.must_reset_password).toUpperCase() === 'TRUE'
+    );
+    const fullName = res.full_name || res.name || res.user?.full_name || res.username || username;
+    const email = res.email || res.user?.email || '';
+
+    const lastLoginAt =
+      res.last_login_at ||
+      res.user?.last_login_at ||
+      (res.user as any)?.last_login ||
+      (res as any)?.last_login ||
+      null;
+
+    const authenticatedUser: LoggedInUser = {
+      id: res.user?.id || res.user?.user_id,
+      username: res.username || res.user?.username || username,
+      name: fullName,
+      email,
+      role,
+      must_reset_password: mustReset,
+      avatarUrl: res.user?.avatarUrl,
+      last_login_at: lastLoginAt,
+      last_login: lastLoginAt,
+    };
+
+    const sessionPayload = JSON.stringify({
+      authenticated: true,
+      user: authenticatedUser,
+      token: res.token || res.access_token,
+      must_reset_password: mustReset,
+      session_created_at: Date.now(),
+    });
+
+    try {
+      sessionStorage.setItem(AUTH_SESSION_KEY, sessionPayload);
+      localStorage.setItem(AUTH_SESSION_KEY, sessionPayload);
+      localStorage.setItem('currentUser', JSON.stringify(authenticatedUser));
+    } catch {
+      // ignore storage errors
     }
-    return false;
+
+    setCurrentUserState(authenticatedUser);
+    setIsAuthenticated(true);
+    return res;
   }, []);
 
   const logout = useCallback(() => {
@@ -169,10 +214,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       localStorage.removeItem(AUTH_SESSION_KEY);
       localStorage.removeItem('currentUser');
       sessionStorage.removeItem('currentUser');
+      localStorage.removeItem('asset_iq_auth_token');
+      sessionStorage.removeItem('asset_iq_auth_token');
     } catch {
       // ignore storage errors
     }
+    setCurrentUserState(DEFAULT_GUEST_USER);
     setIsAuthenticated(false);
+  }, []);
+
+  const markPasswordResetComplete = useCallback(() => {
+    setCurrentUserState(prev => {
+      const updated: LoggedInUser = { ...prev, must_reset_password: false };
+      try {
+        const sessionRaw = sessionStorage.getItem(AUTH_SESSION_KEY) || localStorage.getItem(AUTH_SESSION_KEY);
+        if (sessionRaw) {
+          const parsed = JSON.parse(sessionRaw);
+          parsed.must_reset_password = false;
+          if (parsed.user) parsed.user.must_reset_password = false;
+          sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(parsed));
+          localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(parsed));
+        }
+        localStorage.setItem('currentUser', JSON.stringify(updated));
+      } catch {
+        // ignore storage errors
+      }
+      return updated;
+    });
   }, []);
 
   const setMockMode = (val: boolean) => {
@@ -259,6 +327,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isAuthenticated,
         login,
         logout,
+        markPasswordResetComplete,
         sidebarCollapsed,
         setSidebarCollapsed,
         toggleSidebarCollapse,

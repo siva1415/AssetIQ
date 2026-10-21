@@ -24,6 +24,7 @@ class AssetResponse(BaseModel):
     computer_id: Optional[str] = None
     computerId: Optional[str] = None
     devicetype: Optional[str] = None
+    category: Optional[str] = None
     managed_by: Optional[str] = None
 
     # Reporting & Fleet Status

@@ -1,6 +1,8 @@
 {
-  "name": "AssetIQ",
-  "description": "Asset Ownership Intelligence & Governance enterprise web application.",
+  "name": "Remix Remix AssetIQ - FRONTEND",
+  "description": "Asset Ownership Intelligence \u0026 Governance enterprise web application.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

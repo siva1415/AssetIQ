@@ -12,6 +12,9 @@ from app.models.asset import Asset
 from app.models.admin_user import AdminUser
 from app.models.device_eol_reference import DeviceEolReference
 from app.models.workday_employee import WorkdayEmployee
+from app.models.app_user import AppUser
+from app.models.audit_log import AuditLog
+from app.core.security import hash_password
 
 # In-memory SQLite engine configured for unit and integration testing
 SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///:memory:"
@@ -45,6 +48,8 @@ def db_session() -> Session:
     session.query(AdminUser).delete()
     session.query(WorkdayEmployee).delete()
     session.query(DeviceEolReference).delete()
+    session.query(AppUser).delete()
+    session.query(AuditLog).delete()
     session.commit()
 
     today = date.today()
@@ -101,6 +106,69 @@ def db_session() -> Session:
         created_at=now_utc,
     )
     session.add(admin1)
+
+    # 2b. Seed App Users for Dynamic Authentication & RBAC
+    u_super = AppUser(
+        user_id=1,
+        username="superadmin",
+        password_hash=hash_password("SuperAdmin@123"),
+        full_name="System SuperAdmin",
+        email="superadmin@assetiq.internal",
+        role="SUPERADMIN",
+        status="ACTIVE",
+        must_reset_password=False,
+        created_at=now_utc,
+        updated_at=now_utc,
+    )
+    u_admin = AppUser(
+        user_id=2,
+        username="admin",
+        password_hash=hash_password("Admin@123"),
+        full_name="Corporate Admin",
+        email="admin@assetiq.internal",
+        role="ADMIN",
+        status="ACTIVE",
+        must_reset_password=False,
+        created_at=now_utc,
+        updated_at=now_utc,
+    )
+    u_viewer = AppUser(
+        user_id=3,
+        username="viewer",
+        password_hash=hash_password("Viewer@123"),
+        full_name="Readonly Viewer",
+        email="viewer@assetiq.internal",
+        role="VIEWER",
+        status="ACTIVE",
+        must_reset_password=False,
+        created_at=now_utc,
+        updated_at=now_utc,
+    )
+    u_newhire = AppUser(
+        user_id=4,
+        username="newhire",
+        password_hash=hash_password("test@123"),
+        full_name="New Hire",
+        email="newhire@assetiq.internal",
+        role="VIEWER",
+        status="ACTIVE",
+        must_reset_password=True,
+        created_at=now_utc,
+        updated_at=now_utc,
+    )
+    u_inactive = AppUser(
+        user_id=5,
+        username="inactive_user",
+        password_hash=hash_password("Inactive@123"),
+        full_name="Inactive User",
+        email="inactive@assetiq.internal",
+        role="VIEWER",
+        status="INACTIVE",
+        must_reset_password=False,
+        created_at=now_utc,
+        updated_at=now_utc,
+    )
+    session.add_all([u_super, u_admin, u_viewer, u_newhire, u_inactive])
 
     # 3. Seed EOL Reference Table
     eol1 = DeviceEolReference(

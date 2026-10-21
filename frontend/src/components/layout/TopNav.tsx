@@ -84,9 +84,9 @@ export const TopNav: React.FC<TopNavProps> = ({ onToggleMobileSidebar }) => {
     if (path === '/eol-management' || path === '/eol') return { breadcrumb: 'Ownership Management', title: 'EOL Management' };
     if (path === '/admin-users') return { breadcrumb: 'Ownership Management', title: 'Admin Users' };
     if (path === '/reports') return { breadcrumb: 'Analytics', title: 'Reports' };
-    if (path === '/users' || path === '/employees') return { breadcrumb: 'Identity', title: 'Users Management' };
+    if (path === '/users' || path === '/employees') return { breadcrumb: 'Identity', title: 'User Management' };
     if (path === '/job-scheduler') return { breadcrumb: 'Automation', title: 'Job Scheduler' };
-    if (path === '/audit-reports') return { breadcrumb: 'Compliance', title: 'Audit Reports' };
+    if (path === '/audit-reports' || path === '/audit-logs') return { breadcrumb: 'Compliance', title: 'Audit Logs' };
     if (path === '/settings' || path === '/admin') return { breadcrumb: 'System', title: 'Settings' };
     if (path === '/unassigned') return { breadcrumb: 'Hardware Inventory', title: 'Unassigned Assets' };
     if (path === '/exceptions') return { breadcrumb: 'Compliance', title: 'Exceptions & Flags' };
@@ -101,9 +101,9 @@ export const TopNav: React.FC<TopNavProps> = ({ onToggleMobileSidebar }) => {
   };
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between gap-4 h-16 px-4 md:px-8 bg-white border-b border-slate-200 shadow-xs relative">
+    <header className="sticky top-0 z-30 flex items-center justify-between gap-2 sm:gap-4 h-16 px-3 sm:px-6 md:px-8 bg-white border-b border-slate-200 shadow-xs relative">
       {/* Zone 1: Breadcrumbs & Page Title (Left) */}
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-[35%] sm:max-w-[32%] md:max-w-[35%] z-10">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-[28%] sm:max-w-[32%] md:max-w-[35%] z-10">
         <button
           onClick={onToggleMobileSidebar}
           className="p-1.5 text-slate-500 rounded-md hover:bg-slate-100 lg:hidden shrink-0 cursor-pointer"
@@ -123,32 +123,34 @@ export const TopNav: React.FC<TopNavProps> = ({ onToggleMobileSidebar }) => {
       </div>
 
       {/* Zone 2: Michaels Customer Logo (Top-Center) */}
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none px-2 max-w-[30%] sm:max-w-[35%] md:max-w-[38%]">
+      <div className="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 items-center justify-center pointer-events-none px-2 max-w-[25%] md:max-w-[30%]">
         <img
           src={michaelsLogo}
           alt="Michaels"
-          className="h-[13px] sm:h-[21px] md:h-[24px] w-auto max-w-full object-contain pointer-events-auto"
+          className="h-[18px] md:h-[24px] w-auto max-w-full object-contain pointer-events-auto"
         />
       </div>
 
-      {/* Zone 3: Primary Action & Controls (Right) */}
+      {/* Zone 3: Top-Right Controls (Refresh Data | Full Screen) */}
       <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 z-10">
+        {/* 1. Refresh Data button */}
         <button
           type="button"
           onClick={handleRefresh}
-          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-xs cursor-pointer"
+          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-xs cursor-pointer shrink-0"
         >
           <RefreshCw className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">Refresh Data</span>
           <span className="sm:hidden">Refresh</span>
         </button>
 
+        {/* 2. Full Screen icon */}
         <button
           type="button"
           onClick={toggleFullscreen}
           title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
           aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-          className="inline-flex items-center justify-center h-[30px] w-[30px] text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 rounded-md transition-colors shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+          className="inline-flex items-center justify-center h-[30px] w-[30px] text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 rounded-md transition-colors shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/20 shrink-0"
         >
           {isFullscreen ? (
             <Minimize className="w-4 h-4 text-slate-600" />

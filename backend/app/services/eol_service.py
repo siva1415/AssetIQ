@@ -101,8 +101,19 @@ class EolService:
 
     @classmethod
     def upsert_reference(
-        cls, db: Session, data: EolReferenceCreate
+        cls, db: Session, data: EolReferenceCreate, actor: Optional[any] = None
     ) -> Tuple[EolReferenceResponse, bool]:
+        from app.services.audit_service import AuditService
+        existing = EolRepository.get_eol_for_device(db, data.manufacturer, data.model)
+        old_values = None
+        if existing:
+            old_values = {
+                "manufacturer": existing.manufacturer,
+                "model": existing.model,
+                "eol_date": str(existing.eol_date) if existing.eol_date else None,
+                "reference_source": existing.reference_source,
+            }
+
         record, is_created = EolRepository.upsert_reference(
             db=db,
             manufacturer=data.manufacturer,
@@ -110,15 +121,69 @@ class EolService:
             eol_date=data.eol_date,
             reference_source=data.reference_source,
         )
+
+        new_values = {
+            "manufacturer": record.manufacturer,
+            "model": record.model,
+            "eol_date": str(record.eol_date) if record.eol_date else None,
+            "reference_source": record.reference_source,
+        }
+
+        if is_created:
+            AuditService.record_audit(
+                db=db,
+                actor=actor,
+                category="EOL MANAGEMENT",
+                action="CREATE MODEL",
+                entity_type="EOL MODEL",
+                entity_id=str(record.eol_id),
+                entity_name=f"{record.manufacturer} {record.model}",
+                audit_finding=f"Created EOL reference model '{record.manufacturer} {record.model}' with EOL date {record.eol_date}.",
+                new_values=new_values,
+                status="SUCCESS",
+                commit=True,
+            )
+        else:
+            AuditService.record_audit(
+                db=db,
+                actor=actor,
+                category="EOL MANAGEMENT",
+                action="EDIT MODEL",
+                entity_type="EOL MODEL",
+                entity_id=str(record.eol_id),
+                entity_name=f"{record.manufacturer} {record.model}",
+                audit_finding=f"Updated EOL reference model '{record.manufacturer} {record.model}' (EOL date: {record.eol_date}).",
+                old_values=old_values,
+                new_values=new_values,
+                status="SUCCESS",
+                commit=True,
+            )
+
         return EolReferenceResponse.model_validate(record), is_created
 
     @classmethod
-    def create_reference(cls, db: Session, data: EolReferenceCreate) -> EolReferenceResponse:
-        response, _ = cls.upsert_reference(db=db, data=data)
+    def create_reference(
+        cls, db: Session, data: EolReferenceCreate, actor: Optional[any] = None
+    ) -> EolReferenceResponse:
+        response, _ = cls.upsert_reference(db=db, data=data, actor=actor)
         return response
 
     @classmethod
-    def update_reference(cls, db: Session, eol_id: int, data: EolReferenceUpdate) -> Optional[EolReferenceResponse]:
+    def update_reference(
+        cls, db: Session, eol_id: int, data: EolReferenceUpdate, actor: Optional[any] = None
+    ) -> Optional[EolReferenceResponse]:
+        from app.services.audit_service import AuditService
+        existing = EolRepository.get_reference_by_id(db, eol_id)
+        if not existing:
+            return None
+
+        old_values = {
+            "manufacturer": existing.manufacturer,
+            "model": existing.model,
+            "eol_date": str(existing.eol_date) if existing.eol_date else None,
+            "reference_source": existing.reference_source,
+        }
+
         record = EolRepository.update_reference(
             db=db,
             eol_id=eol_id,
@@ -129,11 +194,64 @@ class EolService:
         )
         if not record:
             return None
+
+        new_values = {
+            "manufacturer": record.manufacturer,
+            "model": record.model,
+            "eol_date": str(record.eol_date) if record.eol_date else None,
+            "reference_source": record.reference_source,
+        }
+
+        AuditService.record_audit(
+            db=db,
+            actor=actor,
+            category="EOL MANAGEMENT",
+            action="EDIT MODEL",
+            entity_type="EOL MODEL",
+            entity_id=str(record.eol_id),
+            entity_name=f"{record.manufacturer} {record.model}",
+            audit_finding=f"Updated EOL reference model '{record.manufacturer} {record.model}' (EOL date: {record.eol_date}).",
+            old_values=old_values,
+            new_values=new_values,
+            status="SUCCESS",
+            commit=True,
+        )
         return EolReferenceResponse.model_validate(record)
 
     @classmethod
-    def delete_reference(cls, db: Session, eol_id: int) -> bool:
-        return EolRepository.delete_reference(db=db, eol_id=eol_id)
+    def delete_reference(
+        cls, db: Session, eol_id: int, actor: Optional[any] = None
+    ) -> bool:
+        from app.services.audit_service import AuditService
+        existing = EolRepository.get_reference_by_id(db, eol_id)
+        if not existing:
+            return False
+
+        old_values = {
+            "manufacturer": existing.manufacturer,
+            "model": existing.model,
+            "eol_date": str(existing.eol_date) if existing.eol_date else None,
+            "reference_source": existing.reference_source,
+        }
+        mfg = existing.manufacturer
+        mdl = existing.model
+
+        deleted = EolRepository.delete_reference(db=db, eol_id=eol_id)
+        if deleted:
+            AuditService.record_audit(
+                db=db,
+                actor=actor,
+                category="EOL MANAGEMENT",
+                action="DELETE MODEL",
+                entity_type="EOL MODEL",
+                entity_id=str(eol_id),
+                entity_name=f"{mfg} {mdl}",
+                audit_finding=f"Deleted EOL reference model '{mfg} {mdl}'.",
+                old_values=old_values,
+                status="SUCCESS",
+                commit=True,
+            )
+        return deleted
 
     @classmethod
     def get_paginated_eol_assets(

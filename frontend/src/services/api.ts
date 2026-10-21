@@ -43,6 +43,20 @@ import {
   BulkAssignAssetsResponse,
   AssetExportParams,
   AssetExportResponse,
+  AppUser,
+  AppUsersQueryParams,
+  PaginatedAppUsersResponse,
+  CreateAppUserPayload,
+  UpdateAppUserPayload,
+  LoginPayload,
+  LoginResponse,
+  ChangePasswordPayload,
+  PortalRole,
+  PortalUserStatus,
+  AuditLogItem,
+  AuditLogsQueryParams,
+  PaginatedAuditLogsResponse,
+  AuditSummaryData,
 } from '../types';
 import {
   MOCK_ASSETS,
@@ -711,6 +725,22 @@ export function normalizeFleetKpi(raw: any, fallbackItems?: Asset[]): FleetKpiMe
   };
 }
 
+export function getStoredAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const directToken = localStorage.getItem('asset_iq_auth_token') || sessionStorage.getItem('asset_iq_auth_token');
+    if (directToken) return directToken;
+    const sessionRaw = sessionStorage.getItem('asset_iq_auth_session') || localStorage.getItem('asset_iq_auth_session');
+    if (sessionRaw) {
+      const parsed = JSON.parse(sessionRaw);
+      return parsed?.token || parsed?.access_token || null;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return null;
+}
+
 // Axios instance creation with error discrimination interceptor
 export function createAxiosClient(): AxiosInstance {
   const baseURL = getApiBaseUrl();
@@ -721,6 +751,15 @@ export function createAxiosClient(): AxiosInstance {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
+  });
+
+  // Attach auth bearer token if present
+  client.interceptors.request.use(config => {
+    const token = getStoredAuthToken();
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
   });
 
   client.interceptors.response.use(
@@ -937,6 +976,41 @@ class ApiService {
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count);
 
+    const dtCatCounts: Record<string, number> = {
+      'STORE-DESKTOPS': 0,
+      'CORPORATE-LAPTOPS': 0,
+      'CORPORATE-DESKTOPS': 0,
+    };
+    const categoryCounts: Record<string, number> = {
+      STORE: 0,
+      CORPORATE: 0,
+    };
+    for (const asset of MOCK_ASSETS) {
+      const dtLower = String(asset.devicetype || asset.device_type || asset.deviceType || '').toLowerCase();
+      const rawCategory = (asset.category || (asset.department?.toLowerCase().includes('operations') || asset.department?.toLowerCase().includes('retail') ? 'STORE' : 'CORPORATE')).toUpperCase();
+      if (rawCategory === 'STORE') {
+        categoryCounts.STORE += 1;
+      } else if (rawCategory === 'CORPORATE') {
+        categoryCounts.CORPORATE += 1;
+      }
+      if (rawCategory === 'STORE' && dtLower.includes('desktop')) {
+        dtCatCounts['STORE-DESKTOPS'] += 1;
+      } else if (rawCategory === 'CORPORATE' && (dtLower.includes('laptop') || dtLower.includes('notebook'))) {
+        dtCatCounts['CORPORATE-LAPTOPS'] += 1;
+      } else if (rawCategory === 'CORPORATE' && (dtLower.includes('desktop') || dtLower.includes('workstation'))) {
+        dtCatCounts['CORPORATE-DESKTOPS'] += 1;
+      }
+    }
+    const by_device_type_and_category = [
+      { name: 'STORE-DESKTOPS', count: dtCatCounts['STORE-DESKTOPS'] },
+      { name: 'CORPORATE-LAPTOPS', count: dtCatCounts['CORPORATE-LAPTOPS'] },
+      { name: 'CORPORATE-DESKTOPS', count: dtCatCounts['CORPORATE-DESKTOPS'] },
+    ];
+    const by_category = [
+      { name: 'STORE', count: categoryCounts.STORE },
+      { name: 'CORPORATE', count: categoryCounts.CORPORATE },
+    ];
+
     return {
       kpis: { total_assets: MOCK_ASSETS.length, active_assets: statusCounts.ACTIVE, review: statusCounts.REVIEW, in_stock: statusCounts['IN STOCK'], employee_count: owners.size },
       assets_by_source: sourceSummary.map(({ source, total }) => ({ source, count: total })),
@@ -946,6 +1020,10 @@ class ApiService {
       source_summary: sourceSummary,
       by_operating_system,
       by_device_type,
+      by_device_type_and_category,
+      byDeviceTypeAndCategory: dtCatCounts,
+      by_category,
+      byCategory: categoryCounts,
       hardware_analysis: {
         by_operating_system,
         by_device_type,
@@ -954,7 +1032,7 @@ class ApiService {
   }
 
   /**
-   * Hardware Asset Analysis endpoint returning byOs and byDevice maps.
+   * Hardware Asset Analysis endpoint returning byOs, byDevice, and byCategory maps.
    * GET /api/dashboard/hardware-analysis
    */
   public async getHardwareAnalysis(): Promise<HardwareAnalysisResponse> {
@@ -967,6 +1045,15 @@ class ApiService {
     await this.simulateLatency();
     const byOs: Record<string, number> = {};
     const byDevice: Record<string, number> = {};
+    const byCategory: Record<string, number> = {
+      STORE: 0,
+      CORPORATE: 0,
+    };
+    const byDeviceTypeAndCategory: Record<string, number> = {
+      'STORE-DESKTOPS': 0,
+      'CORPORATE-LAPTOPS': 0,
+      'CORPORATE-DESKTOPS': 0,
+    };
     for (const asset of MOCK_ASSETS) {
       const os = String(asset.os_name || asset.osName || '').trim();
       if (os && os !== '—' && os !== '-' && os.toLowerCase() !== 'unknown') {
@@ -977,8 +1064,29 @@ class ApiService {
         const titleCase = dt.charAt(0).toUpperCase() + dt.slice(1);
         byDevice[titleCase] = (byDevice[titleCase] || 0) + 1;
       }
+      const dtLower = dt.toLowerCase();
+      const rawCategory = (asset.category || (asset.department?.toLowerCase().includes('operations') || asset.department?.toLowerCase().includes('retail') ? 'STORE' : 'CORPORATE')).toUpperCase();
+      if (rawCategory === 'STORE') {
+        byCategory.STORE += 1;
+      } else if (rawCategory === 'CORPORATE') {
+        byCategory.CORPORATE += 1;
+      }
+      if (rawCategory === 'STORE' && dtLower.includes('desktop')) {
+        byDeviceTypeAndCategory['STORE-DESKTOPS'] += 1;
+      } else if (rawCategory === 'CORPORATE' && (dtLower.includes('laptop') || dtLower.includes('notebook'))) {
+        byDeviceTypeAndCategory['CORPORATE-LAPTOPS'] += 1;
+      } else if (rawCategory === 'CORPORATE' && (dtLower.includes('desktop') || dtLower.includes('workstation'))) {
+        byDeviceTypeAndCategory['CORPORATE-DESKTOPS'] += 1;
+      }
     }
-    return { byOs, byDevice };
+    return {
+      byOs,
+      byDevice,
+      byCategory,
+      by_category: byCategory,
+      byDeviceTypeAndCategory,
+      byDeviceCategory: byDeviceTypeAndCategory,
+    };
   }
 
   // Assets by source
@@ -2964,9 +3072,461 @@ class ApiService {
     await this.requestWithRouteFallback<void>(client, 'DELETE', routes);
   }
 
+  // ==========================================
+  // AssetIQ Portal Authentication & User Management
+  // ==========================================
+
+  /**
+   * Submit credentials to POST /api/auth/login.
+   */
+  public async login(credentials: LoginPayload): Promise<LoginResponse> {
+    const client = createAxiosClient();
+    const payload = {
+      username: credentials.username.trim(),
+      password: credentials.password,
+    };
+    const routes = ['/api/auth/login', '/api/login', '/auth/login'];
+    const res = await this.requestWithRouteFallback<LoginResponse>(client, 'POST', routes, undefined, payload);
+
+    // If response carries a token, store it
+    const token = res.token || res.access_token;
+    if (token && typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('asset_iq_auth_token', token);
+        sessionStorage.setItem('asset_iq_auth_token', token);
+      } catch {
+        // ignore storage errors
+      }
+    }
+    return res;
+  }
+
+  /**
+   * Submit password change to backend endpoint.
+   */
+  public async changePassword(payload: ChangePasswordPayload): Promise<{ message?: string; success?: boolean }> {
+    const client = createAxiosClient();
+    const requestData = {
+      current_password: payload.current_password,
+      old_password: payload.current_password,
+      new_password: payload.new_password,
+      confirm_password: payload.confirm_password || payload.new_password,
+    };
+    const routes = [
+      '/api/auth/change-password',
+      '/api/auth/password',
+      '/api/auth/reset-password',
+      '/api/users/change-password',
+    ];
+    return this.requestWithRouteFallback<{ message?: string; success?: boolean }>(
+      client,
+      'POST',
+      routes,
+      undefined,
+      requestData
+    );
+  }
+
+  /**
+   * Fetch paginated portal users: GET /api/app-users
+   */
+  public async getAppUsers(params?: AppUsersQueryParams): Promise<PaginatedAppUsersResponse> {
+    const client = createAxiosClient();
+    const queryParams: Record<string, any> = {};
+    if (params?.search) queryParams.search = params.search.trim();
+    if (params?.page) queryParams.page = params.page;
+    if (params?.page_size) {
+      queryParams.page_size = params.page_size;
+      queryParams.limit = params.page_size;
+    }
+
+    const routes = ['/api/app-users', '/api/app_users', '/api/users'];
+    const raw: any = await this.requestWithRouteFallback<any>(
+      client,
+      'GET',
+      routes,
+      { params: queryParams }
+    );
+
+    // Normalize response if returned as array or enveloped
+    if (Array.isArray(raw)) {
+      const page = params?.page || 1;
+      const pageSize = params?.page_size || 10;
+      const total = raw.length;
+      return {
+        items: raw,
+        total,
+        page,
+        page_size: pageSize,
+        total_pages: Math.max(1, Math.ceil(total / pageSize)),
+      };
+    }
+
+    const items: AppUser[] = Array.isArray(raw?.items)
+      ? raw.items
+      : Array.isArray(raw?.users)
+      ? raw.users
+      : Array.isArray(raw?.data)
+      ? raw.data
+      : [];
+    const total = typeof raw?.total === 'number' ? raw.total : items.length;
+    const page = typeof raw?.page === 'number' ? raw.page : params?.page || 1;
+    const pageSize = typeof raw?.page_size === 'number' ? raw.page_size : params?.page_size || 10;
+    const totalPages = typeof raw?.total_pages === 'number' ? raw.total_pages : Math.max(1, Math.ceil(total / pageSize));
+
+    return {
+      items,
+      total,
+      page,
+      page_size: pageSize,
+      total_pages: totalPages,
+    };
+  }
+
+  /**
+   * Fetch single portal user details from app_users: GET /api/app-users/:id
+   */
+  public async getAppUser(id: string | number): Promise<AppUser> {
+    const client = createAxiosClient();
+    const encodedId = encodeURIComponent(String(id));
+    const routes = [
+      `/api/app-users/${encodedId}`,
+      `/api/app_users/${encodedId}`,
+      `/api/users/${encodedId}`,
+    ];
+    return this.requestWithRouteFallback<AppUser>(client, 'GET', routes);
+  }
+
+  /**
+   * Fetch current authenticated portal user profile: GET /api/auth/me or /api/users/me
+   */
+  public async getCurrentUser(): Promise<AppUser | null> {
+    const client = createAxiosClient();
+    const routes = [
+      '/api/auth/me',
+      '/api/users/me',
+      '/api/app-users/me',
+      '/api/me',
+    ];
+    try {
+      return await this.requestWithRouteFallback<AppUser>(client, 'GET', routes);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Create a new portal user: POST /api/app-users
+   */
+  public async createAppUser(data: CreateAppUserPayload): Promise<AppUser> {
+    const client = createAxiosClient();
+    const payload = {
+      username: data.username.trim(),
+      full_name: data.full_name.trim(),
+      email: data.email.trim(),
+      role: data.role,
+    };
+    const routes = ['/api/app-users', '/api/app_users'];
+    return this.requestWithRouteFallback<AppUser>(client, 'POST', routes, undefined, payload);
+  }
+
+  /**
+   * Update portal user details/role: PUT /api/app-users/:id
+   */
+  public async updateAppUser(id: string | number, data: UpdateAppUserPayload): Promise<AppUser> {
+    const client = createAxiosClient();
+    const encodedId = encodeURIComponent(String(id));
+    const payload: Record<string, any> = {};
+    if (data.username !== undefined) payload.username = data.username.trim();
+    if (data.full_name !== undefined) payload.full_name = data.full_name.trim();
+    if (data.email !== undefined) payload.email = data.email.trim();
+    if (data.role !== undefined) payload.role = data.role;
+    if (data.status !== undefined) {
+      payload.status = data.status;
+      payload.is_active = data.status === 'ACTIVE';
+    }
+
+    const routes = [
+      `/api/app-users/${encodedId}`,
+      `/api/app_users/${encodedId}`,
+      `/api/users/${encodedId}`,
+    ];
+    return this.requestWithRouteFallback<AppUser>(client, 'PUT', routes, undefined, payload);
+  }
+
+  /**
+   * Activate or deactivate a user: PATCH /api/app-users/:id/status
+   */
+  public async setUserStatus(id: string | number, status: PortalUserStatus): Promise<AppUser> {
+    const client = createAxiosClient();
+    const encodedId = encodeURIComponent(String(id));
+    const payload = {
+      status,
+      is_active: status === 'ACTIVE',
+    };
+    const routes = [
+      `/api/app-users/${encodedId}/status`,
+      `/api/app-users/${encodedId}`,
+      `/api/app_users/${encodedId}/status`,
+      `/api/app_users/${encodedId}`,
+    ];
+    return this.requestWithRouteFallback<AppUser>(client, 'PATCH', routes, undefined, payload);
+  }
+
+  /**
+   * Reset user password to default temporary test@123: POST /api/app-users/:id/reset-password
+   */
+  public async resetAppUserPassword(id: string | number): Promise<{ message: string; temporary_password?: string }> {
+    const client = createAxiosClient();
+    const encodedId = encodeURIComponent(String(id));
+    const routes = [
+      `/api/app-users/${encodedId}/reset-password`,
+      `/api/app-users/${encodedId}/reset`,
+      `/api/app_users/${encodedId}/reset-password`,
+      `/api/app-users/reset-password`,
+    ];
+    return this.requestWithRouteFallback<{ message: string; temporary_password?: string }>(
+      client,
+      'POST',
+      routes,
+      undefined,
+      { user_id: id, id }
+    );
+  }
+
+  // ==========================================
+  // AssetIQ Audit Logs
+  // ==========================================
+
+  /**
+   * Fetch paginated audit logs: GET /api/audit-logs (aliased at /api/v1/audit-logs)
+   */
+  public async getAuditLogs(params?: AuditLogsQueryParams): Promise<PaginatedAuditLogsResponse> {
+    const client = createAxiosClient();
+    const queryParams: Record<string, any> = {};
+    if (params?.search) queryParams.search = params.search.trim();
+    if (params?.category) queryParams.category = params.category;
+    if (params?.action) queryParams.action = params.action;
+    if (params?.portal_user) {
+      queryParams.portal_user = params.portal_user.trim();
+      queryParams.user = params.portal_user.trim();
+      queryParams.username = params.portal_user.trim();
+    }
+    if (params?.status) queryParams.status = params.status;
+    if (params?.start_date) queryParams.start_date = params.start_date;
+    if (params?.end_date) queryParams.end_date = params.end_date;
+    if (params?.page) queryParams.page = params.page;
+    if (params?.page_size) {
+      queryParams.page_size = params.page_size;
+      queryParams.limit = params.page_size;
+    }
+    if (params?.sort_by) queryParams.sort_by = params.sort_by;
+    if (params?.order) queryParams.order = params.order;
+
+    const routes = ['/api/audit-logs', '/api/v1/audit-logs', '/api/audit_logs'];
+    const raw: any = await this.requestWithRouteFallback<any>(
+      client,
+      'GET',
+      routes,
+      { params: queryParams }
+    );
+
+    return this.normalizeAuditLogsResponse(raw, params);
+  }
+
+  /**
+   * Optional helper to fetch audit summary counts if supported by backend: GET /api/audit-logs/summary
+   */
+  public async getAuditSummary(): Promise<AuditSummaryData | null> {
+    const client = createAxiosClient();
+    const routes = ['/api/audit-logs/summary', '/api/v1/audit-logs/summary', '/api/audit_logs/summary'];
+    try {
+      const raw: any = await this.requestWithRouteFallback<any>(client, 'GET', routes);
+      const data = raw?.data ?? raw;
+      if (data && typeof data === 'object') {
+        return {
+          total: data.total ?? data.total_events ?? data.count,
+          total_events: data.total_events ?? data.total ?? data.count,
+          asset_ownership: data.asset_ownership ?? data.categories?.ASSET_OWNERSHIP ?? data.category_counts?.ASSET_OWNERSHIP,
+          eol_management: data.eol_management ?? data.categories?.EOL_MANAGEMENT ?? data.category_counts?.EOL_MANAGEMENT,
+          admin_users: data.admin_users ?? data.categories?.ADMIN_USERS ?? data.category_counts?.ADMIN_USERS,
+          user_management: data.user_management ?? data.user_administration ?? data.categories?.USER_MANAGEMENT ?? data.category_counts?.USER_MANAGEMENT,
+          user_administration: data.user_administration ?? data.user_management ?? data.categories?.USER_MANAGEMENT ?? data.category_counts?.USER_MANAGEMENT,
+          category_counts: data.category_counts ?? data.categories,
+        };
+      }
+      return null;
+    } catch {
+      // Summary endpoint not implemented or supported; return null as instructed
+      return null;
+    }
+  }
+
+  public normalizeAuditLogItem(raw: any): AuditLogItem {
+    if (!raw) return raw;
+
+    const id = raw.id ?? raw.audit_id ?? raw.auditId ?? raw.event_id ?? String(Math.random());
+    const assetTag =
+      raw.asset_tag ??
+      raw.asset_number ??
+      raw.assetTag ??
+      raw.assetNumber ??
+      raw.asset ??
+      null;
+
+    // Actor / Portal User details
+    const portalUserFullName =
+      raw.portal_user_full_name ??
+      raw.portalUserFullName ??
+      raw.actor?.full_name ??
+      raw.actor?.name ??
+      raw.actor_full_name ??
+      raw.actor_name ??
+      raw.portal_user_name ??
+      raw.user_full_name ??
+      null;
+
+    const portalUsername =
+      raw.portal_username ??
+      raw.portalUsername ??
+      raw.actor?.username ??
+      raw.actor_username ??
+      raw.portal_user ??
+      raw.username ??
+      (typeof raw.actor === 'string' && raw.actor !== 'null' ? raw.actor : null);
+
+    const actorRole = raw.actor?.role ?? raw.actor_role ?? null;
+
+    const actor = {
+      id: raw.actor?.id ?? raw.actor_id,
+      username: portalUsername || (raw.actor === 'system' ? 'System' : ''),
+      full_name: portalUserFullName,
+      name: portalUserFullName || portalUsername,
+      role: actorRole,
+    };
+
+    // Category
+    const category = (raw.category || raw.audit_category || 'ASSET_OWNERSHIP').toUpperCase();
+
+    // Action
+    const action = raw.action || raw.audit_action || raw.operation || 'AUDIT_EVENT';
+
+    // Finding
+    const auditFinding =
+      raw.audit_finding ??
+      raw.finding ??
+      raw.description ??
+      raw.message ??
+      raw.details ??
+      '—';
+
+    // Detected At
+    const detectedAt =
+      raw.detected_at ??
+      raw.timestamp ??
+      raw.created_at ??
+      raw.date ??
+      new Date().toISOString();
+
+    // Status
+    const status = (raw.status || raw.operation_status || 'SUCCESS').toUpperCase();
+
+    return {
+      id,
+      audit_id: raw.audit_id ?? id,
+      asset_tag: assetTag,
+      asset_number: assetTag,
+      actor,
+      actor_name: portalUserFullName,
+      actor_full_name: portalUserFullName,
+      actor_username: portalUsername,
+      actor_role: actorRole,
+      portal_user: portalUsername,
+      portal_user_name: portalUserFullName,
+      portal_user_full_name: portalUserFullName,
+      portal_username: portalUsername,
+      username: portalUsername,
+      category,
+      action,
+      audit_finding: auditFinding,
+      finding: auditFinding,
+      description: auditFinding,
+      detected_at: detectedAt,
+      timestamp: detectedAt,
+      created_at: detectedAt,
+      status,
+      entity_type: raw.entity_type ?? raw.entityType ?? null,
+      entity_id: raw.entity_id ?? raw.entityId ?? null,
+      entity_name: raw.entity_name ?? raw.entityName ?? null,
+      old_values: raw.old_values ?? raw.before_values ?? raw.oldValues ?? raw.before ?? null,
+      new_values: raw.new_values ?? raw.after_values ?? raw.newValues ?? raw.after ?? null,
+      metadata: raw.metadata ?? raw.context ?? raw.extra ?? null,
+    };
+  }
+
+  private normalizeAuditLogsResponse(raw: any, params?: AuditLogsQueryParams): PaginatedAuditLogsResponse {
+    if (!raw) {
+      return {
+        items: [],
+        total: 0,
+        page: params?.page || 1,
+        page_size: params?.page_size || 25,
+        total_pages: 1,
+      };
+    }
+
+    // Direct array response
+    if (Array.isArray(raw)) {
+      const page = params?.page || 1;
+      const pageSize = params?.page_size || 25;
+      const total = raw.length;
+      return {
+        items: raw.map(item => this.normalizeAuditLogItem(item)),
+        total,
+        page,
+        page_size: pageSize,
+        total_pages: Math.max(1, Math.ceil(total / pageSize)),
+      };
+    }
+
+    // Enveloped or object response
+    const rawList = raw.items || raw.data || raw.events || raw.logs || raw.results || [];
+    const items = Array.isArray(rawList) ? rawList.map(item => this.normalizeAuditLogItem(item)) : [];
+
+    const page = typeof raw.page === 'number' ? raw.page : params?.page || 1;
+    const pageSize = typeof raw.page_size === 'number' ? raw.page_size : (typeof raw.limit === 'number' ? raw.limit : params?.page_size || 25);
+    const total = typeof raw.total === 'number' ? raw.total : (typeof raw.total_count === 'number' ? raw.total_count : (typeof raw.count === 'number' ? raw.count : items.length));
+    const totalPages = typeof raw.total_pages === 'number' ? raw.total_pages : (typeof raw.totalPages === 'number' ? raw.totalPages : Math.max(1, Math.ceil(total / pageSize)));
+
+    // Extract summary metadata if provided by backend in response
+    let summary: AuditSummaryData | undefined = undefined;
+    const rawSummary = raw.summary || raw.summary_cards || raw.category_counts || raw.stats;
+    if (rawSummary && typeof rawSummary === 'object') {
+      summary = {
+        total: rawSummary.total ?? rawSummary.total_events ?? total,
+        total_events: rawSummary.total_events ?? rawSummary.total ?? total,
+        asset_ownership: rawSummary.asset_ownership ?? rawSummary.categories?.ASSET_OWNERSHIP ?? rawSummary.category_counts?.ASSET_OWNERSHIP,
+        eol_management: rawSummary.eol_management ?? rawSummary.categories?.EOL_MANAGEMENT ?? rawSummary.category_counts?.EOL_MANAGEMENT,
+        admin_users: rawSummary.admin_users ?? rawSummary.categories?.ADMIN_USERS ?? rawSummary.category_counts?.ADMIN_USERS,
+        user_management: rawSummary.user_management ?? rawSummary.user_administration ?? rawSummary.categories?.USER_MANAGEMENT ?? rawSummary.category_counts?.USER_MANAGEMENT,
+        user_administration: rawSummary.user_administration ?? rawSummary.user_management ?? rawSummary.categories?.USER_MANAGEMENT ?? rawSummary.category_counts?.USER_MANAGEMENT,
+        category_counts: rawSummary.category_counts ?? rawSummary.categories,
+      };
+    }
+
+    return {
+      items,
+      total,
+      page,
+      page_size: pageSize,
+      total_pages: totalPages,
+      summary,
+    };
+  }
+
   private async requestWithRouteFallback<T>(
     client: AxiosInstance,
-    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     routes: string[],
     config?: any,
     data?: any
@@ -2981,6 +3541,8 @@ class ApiService {
           resp = await client.post<T>(route, data, config);
         } else if (method === 'PUT') {
           resp = await client.put<T>(route, data, config);
+        } else if (method === 'PATCH') {
+          resp = await client.patch<T>(route, data, config);
         } else if (method === 'DELETE') {
           resp = await client.delete<T>(route, config);
         }

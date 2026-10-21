@@ -1,256 +1,379 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 from app.models.asset import Asset
+from app.models.device_eol_reference import DeviceEolReference
+from app.models.workday_employee import WorkdayEmployee
 
 
 def test_hardware_asset_analysis_standard_counts(client: TestClient):
     """
     Verify live database aggregation for the Hardware Asset Analysis card on default seeded database:
-    - 6 seeded assets
-    - 5 operating systems:
-        - 'Windows 11 Pro': 2 (AST-1002, AST-1004)
-        - 'macOS 14 Sonoma': 1 (AST-1001)
-        - 'Red Hat Enterprise Linux 9': 1 (AST-1003)
-        - 'Windows 10 Enterprise': 1 (AST-1005)
-        - 'Ubuntu 22.04 LTS': 1 (AST-1006)
-    - 2 device types:
-        - 'Desktop': 4 (AST-1001, AST-1002, AST-1004, AST-1005)
-        - 'Server': 2 (AST-1003, AST-1006)
+    - 6 seeded assets total
+    - Operating systems: exactly 3 display groups:
+        - 'Windows 11': 2 (AST-1002, AST-1004)
+        - 'Windows 10': 1 (AST-1005)
+        - 'Mac': 1 (AST-1001)
+        (AST-1003 Red Hat and AST-1006 Ubuntu are excluded)
+        Total matching OS assets: 4
+    - Device types: exactly 2 groups:
+        - 'Laptops': 0 (zero count group present)
+        - 'Desktops': 4 (AST-1001, AST-1002, AST-1004, AST-1005)
+        (AST-1003 and AST-1006 Server devices are excluded)
+        Total matching device assets: 4
+    - Device type and category:
+        - STORE-DESKTOPS: 0
+        - CORPORATE-LAPTOPS: 0
+        - CORPORATE-DESKTOPS: 0
     """
     response = client.get("/api/dashboard/hardware-analysis")
     assert response.status_code == 200
     data = response.json()
 
     assert data["total_assets"] == 6
-    assert data["total_os_assets"] == 6
-    assert data["total_device_assets"] == 6
+    assert data["total_os_assets"] == 4
+    assert data["total_device_assets"] == 4
 
-    # Operating Systems verification
+    # 1. Operating Systems verification: exactly 3 display groups
     os_list = data["operating_systems"]
-    assert len(os_list) == 5
-    os_map = {item["name"]: item["count"] for item in os_list}
-    assert os_map["Windows 11 Pro"] == 2
-    assert os_map["macOS 14 Sonoma"] == 1
-    assert os_map["Red Hat Enterprise Linux 9"] == 1
-    assert os_map["Windows 10 Enterprise"] == 1
-    assert os_map["Ubuntu 22.04 LTS"] == 1
+    assert len(os_list) == 3
+    os_names = [item["name"] for item in os_list]
+    assert os_names == ["Windows 11", "Windows 10", "Mac"]
 
-    # Device Types verification
+    os_map = {item["name"]: item["count"] for item in os_list}
+    assert os_map["Windows 11"] == 2
+    assert os_map["Windows 10"] == 1
+    assert os_map["Mac"] == 1
+
+    # Check percentages
+    os_pct_map = {item["name"]: item["percentage"] for item in os_list}
+    assert os_pct_map["Windows 11"] == 50.0
+    assert os_pct_map["Windows 10"] == 25.0
+    assert os_pct_map["Mac"] == 25.0
+
+    # 2. Device Types verification: exactly Laptops and Desktops
     dev_list = data["device_types"]
     assert len(dev_list) == 2
     dev_map = {item["name"]: item["count"] for item in dev_list}
-    assert dev_map["Desktop"] == 4
-    assert dev_map["Server"] == 2
+    assert dev_map["Desktops"] == 4
+    assert dev_map["Laptops"] == 0
+
+    # Server must NOT be in dev_map
+    assert "Server" not in [item["name"] for item in dev_list]
 
     # Percentage checks
-    for item in os_list:
-        assert item["percentage"] is not None
-        assert 0.0 <= item["percentage"] <= 100.0
-        assert item["label"] == item["name"]
-        assert item["os_name"] == item["name"]
+    dev_pct_map = {item["name"]: item["percentage"] for item in dev_list}
+    assert dev_pct_map["Desktops"] == 100.0
+    assert dev_pct_map["Laptops"] == 0.0
 
-    for item in dev_list:
-        assert item["percentage"] is not None
-        assert 0.0 <= item["percentage"] <= 100.0
-        assert item["label"] == item["name"]
-        assert item["devicetype"] == item["name"]
+    # 3. Device Type and Category verification
+    assert "by_device_type_and_category" in data
+    cat_dev_list = data["by_device_type_and_category"]
+    assert len(cat_dev_list) == 3
+    cat_labels = [item["label"] for item in cat_dev_list]
+    assert cat_labels == ["STORE-DESKTOPS", "CORPORATE-LAPTOPS", "CORPORATE-DESKTOPS"]
+    for item in cat_dev_list:
+        assert item["count"] == 0
 
     # Verify camelCase and map aliases
     assert "operatingSystems" in data
     assert "deviceTypes" in data
+    assert "byDeviceTypeAndCategory" in data
     assert "by_os" in data
     assert "by_device" in data
-    assert data["by_os"]["Windows 11 Pro"] == 2
+    assert data["by_os"]["Windows 11"] == 2
+    assert data["by_device"]["Desktops"] == 4
+    assert data["by_device"]["Laptops"] == 0
     assert data["by_device"]["Desktop"] == 4
+    assert data["by_device"]["Laptop"] == 0
 
 
-def test_exclude_null_empty_and_whitespace_os_and_devicetype(client: TestClient, db_session: Session):
+def test_device_type_and_category_aggregation(client: TestClient, db_session: Session):
     """
-    Verify that records with NULL, empty string, or whitespace-only OS and device-type
-    are strictly excluded from the chart collections, and no placeholder categories
-    (such as 'Unknown', 'N/A', or '') are fabricated.
+    Verify Section 5: Hardware Asset Analysis – Device Type and Category:
+    Combinations:
+    - STORE-DESKTOPS
+    - CORPORATE-LAPTOPS
+    - CORPORATE-DESKTOPS
+    Requirements:
+    - Case & whitespace normalization
+    - Exclude unsupported combinations (STORE + Laptop, etc.)
+    - Exclude Server devices
+    - Exclude blank/NULL categories
+    - Each asset counted at most once
     """
     now = datetime.now(timezone.utc)
 
-    # Asset with None OS and whitespace devicetype
+    # Valid matches:
+    # 1. STORE-DESKTOPS
     a1 = Asset(
-        asset_id=901,
-        asset_number="AST-NO-OS-1",
+        asset_id=801,
+        asset_number="AST-CAT-1",
         source="BIGFIX",
-        os_name=None,
-        devicetype="   ",
+        devicetype="Desktop",
+        category="STORE",
         asset_status="ACTIVE",
         created_at=now,
     )
-    # Asset with empty string OS and empty string devicetype
     a2 = Asset(
-        asset_id=902,
-        asset_number="AST-NO-OS-2",
-        source="JAMF",
-        os_name="",
-        devicetype="",
+        asset_id=802,
+        asset_number="AST-CAT-2",
+        source="BIGFIX",
+        devicetype="  desktop  ",  # whitespace
+        category="store",          # lowercase
         asset_status="ACTIVE",
         created_at=now,
     )
-    # Asset with whitespace-only OS and valid devicetype
+
+    # 2. CORPORATE-LAPTOPS
     a3 = Asset(
-        asset_id=903,
-        asset_number="AST-NO-OS-3",
-        source="BIGFIX",
-        os_name="     ",
-        devicetype="Server",
+        asset_id=803,
+        asset_number="AST-CAT-3",
+        source="JAMF",
+        devicetype="Laptop",
+        category="CORPORATE",
         asset_status="ACTIVE",
         created_at=now,
     )
-    # Asset with valid OS and None devicetype
     a4 = Asset(
-        asset_id=904,
-        asset_number="AST-NO-DEV-4",
-        source="BIGFIX",
-        os_name="Debian 12",
-        devicetype=None,
+        asset_id=804,
+        asset_number="AST-CAT-4",
+        source="JAMF",
+        devicetype="LAPTOP",
+        category="corporate",
         asset_status="ACTIVE",
         created_at=now,
     )
-    db_session.add_all([a1, a2, a3, a4])
+
+    # 3. CORPORATE-DESKTOPS
+    a5 = Asset(
+        asset_id=805,
+        asset_number="AST-CAT-5",
+        source="BIGFIX",
+        devicetype="DESKTOP",
+        category="CORPORATE",
+        asset_status="ACTIVE",
+        created_at=now,
+    )
+
+    # Disallowed/Excluded records:
+    # - STORE + Server (Server excluded)
+    e1 = Asset(
+        asset_id=806,
+        asset_number="AST-CAT-EX-1",
+        source="BIGFIX",
+        devicetype="Server",
+        category="STORE",
+        asset_status="ACTIVE",
+        created_at=now,
+    )
+    # - CORPORATE + Server (Server excluded)
+    e2 = Asset(
+        asset_id=807,
+        asset_number="AST-CAT-EX-2",
+        source="BIGFIX",
+        devicetype="Server",
+        category="CORPORATE",
+        asset_status="ACTIVE",
+        created_at=now,
+    )
+    # - STORE + Laptop (unsupported combination)
+    e3 = Asset(
+        asset_id=808,
+        asset_number="AST-CAT-EX-3",
+        source="JAMF",
+        devicetype="Laptop",
+        category="STORE",
+        asset_status="ACTIVE",
+        created_at=now,
+    )
+    # - NULL category
+    e4 = Asset(
+        asset_id=809,
+        asset_number="AST-CAT-EX-4",
+        source="BIGFIX",
+        devicetype="Desktop",
+        category=None,
+        asset_status="ACTIVE",
+        created_at=now,
+    )
+    # - Empty string category
+    e5 = Asset(
+        asset_id=810,
+        asset_number="AST-CAT-EX-5",
+        source="BIGFIX",
+        devicetype="Desktop",
+        category="   ",
+        asset_status="ACTIVE",
+        created_at=now,
+    )
+    # - Unrelated category
+    e6 = Asset(
+        asset_id=811,
+        asset_number="AST-CAT-EX-6",
+        source="BIGFIX",
+        devicetype="Desktop",
+        category="WAREHOUSE",
+        asset_status="ACTIVE",
+        created_at=now,
+    )
+
+    db_session.add_all([a1, a2, a3, a4, a5, e1, e2, e3, e4, e5, e6])
     db_session.commit()
 
+    # Test via /api/dashboard/hardware-analysis
     res = client.get("/api/dashboard/hardware-analysis")
     assert res.status_code == 200
     data = res.json()
+    cat_items = {it["label"]: it["count"] for it in data["by_device_type_and_category"]}
+    assert cat_items["STORE-DESKTOPS"] == 2
+    assert cat_items["CORPORATE-LAPTOPS"] == 2
+    assert cat_items["CORPORATE-DESKTOPS"] == 1
 
-    # Total assets increased by 4
-    assert data["total_assets"] == 10
-
-    # OS list: only a4 added ('Debian 12'), a1, a2, a3 must NOT be present
-    os_names = [item["name"] for item in data["operating_systems"]]
-    assert "Debian 12" in os_names
-    for disallowed in ["Unknown", "N/A", "None", "", "   ", "null", "NULL"]:
-        assert disallowed not in os_names
-
-    # Check that no item has an empty or whitespace name
-    for item in data["operating_systems"]:
-        assert item["name"].strip() != ""
-        assert item["count"] >= 1
-
-    # Device type list: only a3 added ('Server' count incremented by 1), a1, a2, a4 must NOT add empty/None
-    dev_names = [item["name"] for item in data["device_types"]]
-    for disallowed in ["Unknown", "N/A", "None", "", "   ", "null", "NULL"]:
-        assert disallowed not in dev_names
-
-    for item in data["device_types"]:
-        assert item["name"].strip() != ""
-        assert item["count"] >= 1
-
-    dev_map = {item["name"]: item["count"] for item in data["device_types"]}
-    assert dev_map["Server"] == 3  # 2 original + 1 from a3
+    # Test via dedicated /api/dashboard/by-device-type-and-category
+    res_direct = client.get("/api/dashboard/by-device-type-and-category")
+    assert res_direct.status_code == 200
+    direct_data = res_direct.json()
+    items = direct_data.get("byDeviceTypeAndCategory", direct_data)
+    d_map = {it["label"]: it["count"] for it in items}
+    assert d_map["STORE-DESKTOPS"] == 2
+    assert d_map["CORPORATE-LAPTOPS"] == 2
+    assert d_map["CORPORATE-DESKTOPS"] == 1
 
 
-def test_whitespace_trimming_and_case_normalization(client: TestClient, db_session: Session):
+def test_os_grouping_classification_and_exclusion(client: TestClient, db_session: Session):
     """
-    Verify grouping rules:
-    - OS values with leading/trailing whitespace or case differences group together.
-    - Device types with inconsistent whitespace and casing (e.g. '  desktop  ', 'DESKTOP')
-      normalize to 'Desktop'.
+    Verify Section 3: Operating System Groups:
+    - Classify Windows 11 editions into Windows 11
+    - Classify Windows 10 editions into Windows 10
+    - Classify macOS versions into Mac
+    - Case-insensitive, whitespace handling
+    - Exclude other OS (Linux, Ubuntu, Android, etc.), NULL, blank
+    - Stable 3 groups with zero counts
     """
     now = datetime.now(timezone.utc)
 
-    # Inconsistent OS names that should match 'Ubuntu 22.04 LTS'
-    extra1 = Asset(
-        asset_id=911,
-        asset_number="AST-NORM-1",
-        source="BIGFIX",
-        os_name="  Ubuntu 22.04 LTS  ",
-        devicetype="  desktop  ",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    extra2 = Asset(
-        asset_id=912,
-        asset_number="AST-NORM-2",
-        source="BIGFIX",
-        os_name="ubuntu 22.04 lts",
-        devicetype="DESKTOP",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    extra3 = Asset(
-        asset_id=913,
-        asset_number="AST-NORM-3",
-        source="BIGFIX",
-        os_name="UBUNTU 22.04 LTS",
-        devicetype="SERVER",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    db_session.add_all([extra1, extra2, extra3])
+    # Clear and insert controlled assets
+    db_session.query(Asset).delete()
+    db_session.commit()
+
+    assets = [
+        # Windows 11 variants
+        Asset(asset_id=1, asset_number="A1", source="BIGFIX", os_name="Windows 11 Enterprise 23H2", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=2, asset_number="A2", source="JAMF", os_name="  windows 11 pro  ", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=3, asset_number="A3", source="BIGFIX", os_name="WINDOWS 11 EDUCATION", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+
+        # Windows 10 variants
+        Asset(asset_id=4, asset_number="A4", source="BIGFIX", os_name="Windows 10 Enterprise", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=5, asset_number="A5", source="BIGFIX", os_name="windows 10 pro 22h2", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+
+        # Mac variants
+        Asset(asset_id=6, asset_number="A6", source="JAMF", os_name="macOS 15 Sequoia", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=7, asset_number="A7", source="JAMF", os_name="Mac OS X 10.15 Catalina", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=8, asset_number="A8", source="JAMF", os_name="  macos 14.5 sonoma  ", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+
+        # Excluded OS values
+        Asset(asset_id=9, asset_number="A9", source="BIGFIX", os_name="Red Hat Enterprise Linux 9", devicetype="Server", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=10, asset_number="A10", source="BIGFIX", os_name="Ubuntu 22.04 LTS", devicetype="Server", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=11, asset_number="A11", source="BIGFIX", os_name="Android 14", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=12, asset_number="A12", source="BIGFIX", os_name=None, devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=13, asset_number="A13", source="BIGFIX", os_name="   ", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+    ]
+    db_session.add_all(assets)
     db_session.commit()
 
     res = client.get("/api/dashboard/hardware-analysis")
     assert res.status_code == 200
     data = res.json()
 
-    # All Ubuntu variants must be consolidated into one bucket
+    assert data["total_assets"] == 13
+    assert data["total_os_assets"] == 8  # 3 Win11 + 2 Win10 + 3 Mac
+
     os_map = {item["name"]: item["count"] for item in data["operating_systems"]}
-    # AST-1006 had 1 + 3 new = 4 total for Ubuntu 22.04 LTS
-    ubuntu_count = sum(cnt for name, cnt in os_map.items() if "ubuntu 22.04" in name.lower())
-    assert ubuntu_count == 4
-    # Ensure there is only 1 Ubuntu 22.04 bucket
-    ubuntu_buckets = [name for name in os_map.keys() if "ubuntu 22.04" in name.lower()]
-    assert len(ubuntu_buckets) == 1
+    assert os_map["Windows 11"] == 3
+    assert os_map["Windows 10"] == 2
+    assert os_map["Mac"] == 3
 
-    # Device types: 'desktop' and 'DESKTOP' grouped into 'Desktop', 'SERVER' into 'Server'
+    # Check percentages: 3/8 = 37.5%, 2/8 = 25.0%, 3/8 = 37.5%
+    os_pct_map = {item["name"]: item["percentage"] for item in data["operating_systems"]}
+    assert os_pct_map["Windows 11"] == 37.5
+    assert os_pct_map["Windows 10"] == 25.0
+    assert os_pct_map["Mac"] == 37.5
+
+    # Check direct array endpoint /api/dashboard/assets-by-os
+    res_os = client.get("/api/dashboard/assets-by-os")
+    assert res_os.status_code == 200
+    direct_os = res_os.json()
+    assert len(direct_os) == 3
+    d_map = {it["name"]: it["count"] for it in direct_os}
+    assert d_map["Windows 11"] == 3
+    assert d_map["Windows 10"] == 2
+    assert d_map["Mac"] == 3
+
+
+def test_device_type_normalization_and_server_exclusion(client: TestClient, db_session: Session):
+    """
+    Verify Section 4: Hardware Asset Analysis – Device Type:
+    - Aggregate Laptops and Desktops
+    - Casing and whitespace normalized
+    - Server and unrelated types excluded
+    - Both categories included even when zero
+    """
+    now = datetime.now(timezone.utc)
+
+    db_session.query(Asset).delete()
+    db_session.commit()
+
+    assets = [
+        Asset(asset_id=1, asset_number="D1", source="BIGFIX", devicetype="Desktop", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=2, asset_number="D2", source="BIGFIX", devicetype="  desktop  ", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=3, asset_number="D3", source="BIGFIX", devicetype="DESKTOP", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=4, asset_number="L1", source="JAMF", devicetype="Laptop", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=5, asset_number="L2", source="JAMF", devicetype="  LAPTOP  ", asset_status="ACTIVE", created_at=now),
+        # Excluded types
+        Asset(asset_id=6, asset_number="S1", source="BIGFIX", devicetype="Server", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=7, asset_number="S2", source="BIGFIX", devicetype="SERVER", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=8, asset_number="M1", source="BIGFIX", devicetype="Mobile", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=9, asset_number="N1", source="BIGFIX", devicetype=None, asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=10, asset_number="E1", source="BIGFIX", devicetype="   ", asset_status="ACTIVE", created_at=now),
+    ]
+    db_session.add_all(assets)
+    db_session.commit()
+
+    res = client.get("/api/dashboard/hardware-analysis")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["total_assets"] == 10
+    assert data["total_device_assets"] == 5  # 3 Desktops + 2 Laptops
+
     dev_map = {item["name"]: item["count"] for item in data["device_types"]}
-    assert "Desktop" in dev_map
-    assert "Server" in dev_map
-    assert "desktop" not in dev_map
-    assert "DESKTOP" not in dev_map
-    assert "SERVER" not in dev_map
-    assert dev_map["Desktop"] == 6  # 4 original + 2 new
-    assert dev_map["Server"] == 3   # 2 original + 1 new
+    assert dev_map["Desktops"] == 3
+    assert dev_map["Laptops"] == 2
+    assert "Server" not in dev_map
+
+    # Check percentages: 3/5 = 60.0%, 2/5 = 40.0%
+    pct_map = {item["name"]: item["percentage"] for item in data["device_types"]}
+    assert pct_map["Desktops"] == 60.0
+    assert pct_map["Laptops"] == 40.0
+
+    # Direct array endpoint /api/dashboard/assets-by-device-type
+    res_dev = client.get("/api/dashboard/assets-by-device-type")
+    assert res_dev.status_code == 200
+    direct_dev = res_dev.json()
+    assert len(direct_dev) == 2
+    d_map = {it["name"]: it["count"] for it in direct_dev}
+    assert d_map["Desktops"] == 3
+    assert d_map["Laptops"] == 2
 
 
-def test_filtering_by_source_and_scope(client: TestClient):
+def test_zero_count_groups_stable_response(client: TestClient, db_session: Session):
     """
-    Verify filtering support:
-    - ?source=BIGFIX: only 4 BigFix assets
-        - OS: Apple MacBook Pro 16 (1), Red Hat (1), Windows 10 (1), Ubuntu (1)
-        - DeviceType: Desktop (2), Server (2)
-    - ?source=JAMF: only 2 Jamf assets
-        - OS: Windows 11 Pro (2)
-        - DeviceType: Desktop (2)
-    """
-    # BIGFIX
-    res_bf = client.get("/api/dashboard/hardware-analysis?source=BIGFIX")
-    assert res_bf.status_code == 200
-    data_bf = res_bf.json()
-    assert data_bf["total_assets"] == 4
-    os_bf = {item["name"]: item["count"] for item in data_bf["operating_systems"]}
-    assert "Windows 11 Pro" not in os_bf
-    assert os_bf["macOS 14 Sonoma"] == 1
-    assert os_bf["Red Hat Enterprise Linux 9"] == 1
-    dev_bf = {item["name"]: item["count"] for item in data_bf["device_types"]}
-    assert dev_bf["Desktop"] == 2
-    assert dev_bf["Server"] == 2
-
-    # JAMF
-    res_jf = client.get("/api/dashboard/hardware-analysis?source=JAMF")
-    assert res_jf.status_code == 200
-    data_jf = res_jf.json()
-    assert data_jf["total_assets"] == 2
-    os_jf = {item["name"]: item["count"] for item in data_jf["operating_systems"]}
-    assert len(os_jf) == 1
-    assert os_jf["Windows 11 Pro"] == 2
-    dev_jf = {item["name"]: item["count"] for item in data_jf["device_types"]}
-    assert len(dev_jf) == 1
-    assert dev_jf["Desktop"] == 2
-
-
-def test_empty_dataset_handling(client: TestClient, db_session: Session):
-    """
-    Verify that an empty database returns empty collections rather than fabricated categories.
+    Verify that when no assets exist:
+    - All three OS groups are present with count 0
+    - Both device type groups are present with count 0
+    - All three device type and category combinations are present with count 0
     """
     db_session.query(Asset).delete()
     db_session.commit()
@@ -262,68 +385,139 @@ def test_empty_dataset_handling(client: TestClient, db_session: Session):
     assert data["total_assets"] == 0
     assert data["total_os_assets"] == 0
     assert data["total_device_assets"] == 0
-    assert data["operating_systems"] == []
-    assert data["device_types"] == []
-    assert data["by_os"] == {}
-    assert data["by_device"] == {}
+
+    os_map = {item["name"]: item["count"] for item in data["operating_systems"]}
+    assert os_map == {"Windows 11": 0, "Windows 10": 0, "Mac": 0}
+
+    dev_map = {item["name"]: item["count"] for item in data["device_types"]}
+    assert dev_map == {"Laptops": 0, "Desktops": 0}
+
+    cat_map = {item["label"]: item["count"] for item in data["by_device_type_and_category"]}
+    assert cat_map == {"STORE-DESKTOPS": 0, "CORPORATE-LAPTOPS": 0, "CORPORATE-DESKTOPS": 0}
 
 
-def test_direct_array_endpoints_and_aliases(client: TestClient):
+def test_eol_distribution_all_four_states(client: TestClient, db_session: Session):
     """
-    Verify dedicated array endpoints and aliases:
-    - /api/dashboard/assets-by-os
-    - /api/dashboard/assets-by-device-type
-    - /api/assets-by-os
-    - /api/assets-by-device-type
-    - /api/hardware-analysis
+    Verify Section 7: EOL Status Distribution:
+    - ACTIVE: > 90 days remaining
+    - EOL SOON: 0-90 days remaining, inclusive
+    - EXPIRED: before today
+    - UNKNOWN: no exact match or no usable date
+    Always returns all 4 states in stable order.
+    Every asset belongs to exactly one state.
     """
-    # 1. /api/dashboard/assets-by-os
-    res_os = client.get("/api/dashboard/assets-by-os")
-    assert res_os.status_code == 200
-    data_os = res_os.json()
-    assert isinstance(data_os, list)
-    assert len(data_os) == 5
-    assert all("name" in item and "count" in item for item in data_os)
+    res = client.get("/api/dashboard/eol-distribution")
+    assert res.status_code == 200
+    data = res.json()
 
-    # 2. /api/dashboard/assets-by-device-type
-    res_dev = client.get("/api/dashboard/assets-by-device-type")
-    assert res_dev.status_code == 200
-    data_dev = res_dev.json()
-    assert isinstance(data_dev, list)
-    assert len(data_dev) == 2
-    assert all("name" in item and "count" in item for item in data_dev)
+    assert isinstance(data, list)
+    assert len(data) == 4
+    statuses = [it["status"] for it in data]
+    assert statuses == ["ACTIVE", "EOL SOON", "EXPIRED", "UNKNOWN"]
 
-    # 3. Top-level aliases
-    res_top = client.get("/api/hardware-analysis")
-    assert res_top.status_code == 200
-    assert "operating_systems" in res_top.json()
-
-    res_top_os = client.get("/api/assets-by-os")
-    assert res_top_os.status_code == 200
-    assert isinstance(res_top_os.json(), list)
-
-    res_top_dev = client.get("/api/assets-by-device-type")
-    assert res_top_dev.status_code == 200
-    assert isinstance(res_top_dev.json(), list)
+    # In default seeded database (6 assets):
+    # - AST-1001 (Apple MacBook Pro 16): expired (-30 days) -> EXPIRED (1)
+    # - AST-1002 (Lenovo ThinkPad T14): in 45 days -> EOL SOON (1)
+    # - AST-1003 (Dell PowerEdge R750): in 365 days -> ACTIVE (1)
+    # - AST-1004 (Lenovo ThinkPad T14): in 45 days -> EOL SOON (1)
+    # - AST-1005 (HP EliteBook 840): no reference -> UNKNOWN (1)
+    # - AST-1006 (Dell PowerEdge R750): in 365 days -> ACTIVE (1)
+    # Totals: ACTIVE: 2, EOL SOON: 2, EXPIRED: 1, UNKNOWN: 1 = 6 total
+    dist_map = {it["status"]: it["count"] for it in data}
+    assert dist_map["ACTIVE"] == 2
+    assert dist_map["EOL SOON"] == 2
+    assert dist_map["EXPIRED"] == 1
+    assert dist_map["UNKNOWN"] == 1
+    assert sum(dist_map.values()) == 6
 
 
-def test_existing_dashboard_endpoints_remain_unmodified(client: TestClient):
+def test_eol_exposure_by_hardware_model(client: TestClient):
     """
-    Ensure existing dashboard endpoints (summary, assets-by-source, ownership, eol, etc.)
-    remain completely intact and functioning identically.
+    Verify Section 8: EOL Exposure by Hardware Model:
+    - Excludes ACTIVE hardware models
+    - Groups by exact manufacturer and model
+    - Sorts by urgency (EXPIRED=0, EOL SOON=1, UNKNOWN=2), days remaining, count
     """
-    res1 = client.get("/api/dashboard/summary")
-    assert res1.status_code == 200
-    assert res1.json()["totalAssets"] == 6
+    res = client.get("/api/dashboard/eol-exposure")
+    assert res.status_code == 200
+    data = res.json()
 
-    res2 = client.get("/api/dashboard/assets-by-source")
-    assert res2.status_code == 200
-    assert res2.json()["total_count"] == 6
+    assert isinstance(data, list)
+    # Non-active models in seeded data:
+    # 1. Apple MacBook Pro 16 (EXPIRED, -30 days, count=1)
+    # 2. Lenovo ThinkPad T14 (EOL SOON, 45 days, count=2)
+    # 3. HP EliteBook 840 (UNKNOWN, count=1)
+    assert len(data) == 3
+    models = [it["model"] for it in data]
+    assert models[0] == "Apple MacBook Pro 16"
+    assert models[1] == "Lenovo ThinkPad T14"
+    assert models[2] == "HP EliteBook 840"
 
-    res3 = client.get("/api/dashboard/ownership-summary")
-    assert res3.status_code == 200
-    assert res3.json()["total_count"] == 6
+    assert data[0]["eol_status"] == "EXPIRED"
+    assert data[1]["eol_status"] == "EOL SOON"
+    assert data[2]["eol_status"] == "UNKNOWN"
+    assert data[1]["count"] == 2
 
-    res4 = client.get("/api/dashboard/operational-status")
-    assert res4.status_code == 200
-    assert isinstance(res4.json(), list)
+
+def test_department_summary_sorting_highest_first_with_tie_breaker(client: TestClient):
+    """
+    Verify Section 6: Assets by Department:
+    - Aggregate asset counts by assigned employee's department
+    - Return highest-count departments first, with stable tie-breaker
+    - Prevent duplicate asset counting
+    """
+    res = client.get("/api/dashboard/department-summary")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert isinstance(data, list)
+    # In seeded data:
+    # Unassigned has 3 assets (AST-1003, AST-1004, AST-1006)
+    # Engineering has 1 asset (AST-1001)
+    # Marketing has 1 asset (AST-1005)
+    # Security has 1 asset (AST-1002)
+    # First item must be Unassigned (highest count: 3)
+    assert data[0]["department"] == "Unassigned"
+    assert data[0]["total_assets"] == 3
+
+    # The remaining 3 all have count 1, so tie-breaker is alphabetical: Engineering, Marketing, Security
+    assert data[1]["department"] == "Engineering"
+    assert data[2]["department"] == "Marketing"
+    assert data[3]["department"] == "Security"
+
+
+def test_redesign_overview_consistency(client: TestClient):
+    """
+    Verify Section 9 & 10: Redesign Overview endpoint consistency:
+    - Accurate database counts for all metrics
+    - Zero discrepancies between Assets by Source and Source Summary
+    """
+    res = client.get("/api/dashboard/redesign-overview")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["kpis"]["total_assets"] == 6
+    assert data["kpis"]["active_assets"] == 3
+    assert data["kpis"]["review"] == 1
+    assert data["kpis"]["in_stock"] == 2
+
+    # Assets by source
+    src_map = {it["source"]: it["count"] for it in data["assets_by_source"]}
+    assert src_map["BIGFIX"] == 4
+    assert src_map["JAMF"] == 2
+
+    # Source summary
+    sum_map = {it["source"]: it["total"] for it in data["source_summary"]}
+    assert sum_map["BIGFIX"] == 4
+    assert sum_map["JAMF"] == 2
+
+    # Hardware analysis included in overview
+    hw = data["hardware_analysis"]
+    os_map = {it["name"]: it["count"] for it in hw["operating_systems"]}
+    assert os_map["Windows 11"] == 2
+    assert os_map["Windows 10"] == 1
+    assert os_map["Mac"] == 1
+
+    dev_map = {it["name"]: it["count"] for it in hw["device_types"]}
+    assert dev_map["Desktops"] == 4
+    assert dev_map["Laptops"] == 0

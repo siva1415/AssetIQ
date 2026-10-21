@@ -1,5 +1,5 @@
 import React from 'react';
-import { Laptop, Monitor, Server as ServerIcon } from 'lucide-react';
+import { Laptop, Monitor } from 'lucide-react';
 
 export interface DeviceTypeIconProps {
   type?: string | null;
@@ -10,7 +10,6 @@ export interface DeviceTypeIconProps {
  * Normalizes device type values using safe, case-insensitive comparison:
  * - Laptop, LAPTOP, laptop -> Laptop icon
  * - Desktop, DESKTOP, desktop -> Desktop icon
- * - Server, SERVER, server -> Server icon
  * Safely handles null, undefined, empty strings, and unexpected values.
  */
 export const DeviceTypeIcon: React.FC<DeviceTypeIconProps> = ({
@@ -19,9 +18,6 @@ export const DeviceTypeIcon: React.FC<DeviceTypeIconProps> = ({
 }) => {
   const norm = (type ?? '').toString().trim().toLowerCase();
 
-  if (norm === 'server') {
-    return <ServerIcon className={`${className} text-indigo-500`} />;
-  }
   if (norm === 'desktop') {
     return <Monitor className={`${className} text-blue-500`} />;
   }

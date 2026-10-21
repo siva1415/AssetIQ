@@ -227,6 +227,7 @@ export interface Asset {
   storage_gb?: number;
   notes?: string;
   remarks?: string;
+  category?: string;
 }
 
 export interface Employee {
@@ -311,6 +312,12 @@ export interface HardwareAnalysisResponse {
   byDevice?: Record<string, number | null | undefined>;
   by_os?: Record<string, number | null | undefined>;
   by_device?: Record<string, number | null | undefined>;
+  byDeviceTypeAndCategory?: Record<string, number | null | undefined> | { name: string; count: number }[];
+  by_device_type_and_category?: Record<string, number | null | undefined> | { name: string; count: number }[];
+  byDeviceCategory?: Record<string, number | null | undefined> | { name: string; count: number }[];
+  by_device_category?: Record<string, number | null | undefined> | { name: string; count: number }[];
+  byCategory?: Record<string, number | null | undefined> | { name: string; count: number }[];
+  by_category?: Record<string, number | null | undefined> | { name: string; count: number }[];
 }
 
 export interface DashboardRedesignOverview {
@@ -327,6 +334,10 @@ export interface DashboardRedesignOverview {
   hardware_analysis?: DashboardHardwareAnalysis;
   by_operating_system?: DashboardHardwareAnalysisItem[];
   by_device_type?: DashboardHardwareAnalysisItem[];
+  by_device_type_and_category?: DashboardHardwareAnalysisItem[] | Record<string, number>;
+  byDeviceTypeAndCategory?: DashboardHardwareAnalysisItem[] | Record<string, number>;
+  by_category?: DashboardHardwareAnalysisItem[] | Record<string, number>;
+  byCategory?: DashboardHardwareAnalysisItem[] | Record<string, number>;
 }
 
 export interface FilterOptions {
@@ -535,5 +546,174 @@ export interface BulkAssignAssetsResponse {
   failed_count?: number;
   failures?: { asset_id: string | number; reason?: string }[];
   message: string;
+}
+
+// ==========================================
+// AssetIQ Portal User Management & Auth Types
+// ==========================================
+export type PortalRole = 'SUPERADMIN' | 'ADMIN' | 'VIEWER';
+export type PortalUserStatus = 'ACTIVE' | 'INACTIVE';
+
+export interface AppUser {
+  id: string | number;
+  user_id?: string;
+  username: string;
+  full_name: string;
+  email: string;
+  role: PortalRole;
+  status: PortalUserStatus;
+  created_at: string;
+  updated_at?: string | null;
+  last_login_at?: string | null;
+  last_login?: string | null;
+  must_reset_password?: boolean;
+  is_active?: boolean;
+  avatarUrl?: string;
+}
+
+export interface AppUsersQueryParams {
+  search?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface PaginatedAppUsersResponse {
+  items: AppUser[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface CreateAppUserPayload {
+  username: string;
+  full_name: string;
+  email: string;
+  role: PortalRole;
+}
+
+export interface UpdateAppUserPayload {
+  username?: string;
+  full_name?: string;
+  email?: string;
+  role?: PortalRole;
+  status?: PortalUserStatus;
+}
+
+export interface LoginPayload {
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  token?: string;
+  access_token?: string;
+  token_type?: string;
+  must_reset_password?: boolean;
+  user?: AppUser;
+  username?: string;
+  full_name?: string;
+  name?: string;
+  email?: string;
+  role?: PortalRole | string;
+  status?: string;
+  last_login_at?: string | null;
+  last_login?: string | null;
+  message?: string;
+}
+
+export interface ChangePasswordPayload {
+  current_password: string;
+  new_password: string;
+  confirm_password?: string;
+  old_password?: string;
+}
+
+// ==========================================
+// AssetIQ Audit Logs
+// ==========================================
+
+export type AuditCategory =
+  | 'ASSET_OWNERSHIP'
+  | 'EOL_MANAGEMENT'
+  | 'ADMIN_USERS'
+  | 'USER_MANAGEMENT'
+  | string;
+
+export type AuditStatus = 'SUCCESS' | 'FAILURE' | string;
+
+export interface AuditActor {
+  id?: string | number;
+  username: string;
+  full_name?: string | null;
+  name?: string | null;
+  role?: string | null;
+}
+
+export interface AuditLogItem {
+  id: string | number;
+  audit_id?: string | number;
+  asset_tag?: string | null;
+  asset_number?: string | null;
+  actor?: AuditActor;
+  actor_name?: string | null;
+  actor_full_name?: string | null;
+  actor_username?: string | null;
+  actor_role?: string | null;
+  portal_user?: string | null;
+  portal_user_name?: string | null;
+  portal_user_full_name?: string | null;
+  portal_username?: string | null;
+  username?: string | null;
+  category: AuditCategory;
+  action: string;
+  audit_finding: string;
+  finding?: string;
+  description?: string;
+  detected_at: string;
+  timestamp?: string;
+  created_at?: string;
+  status: AuditStatus;
+  entity_type?: string | null;
+  entity_id?: string | number | null;
+  entity_name?: string | null;
+  old_values?: Record<string, any> | null;
+  new_values?: Record<string, any> | null;
+  metadata?: Record<string, any> | null;
+}
+
+export interface AuditSummaryData {
+  total?: number;
+  total_events?: number;
+  asset_ownership?: number;
+  eol_management?: number;
+  admin_users?: number;
+  user_management?: number;
+  user_administration?: number;
+  category_counts?: Record<string, number>;
+}
+
+export interface AuditLogsQueryParams {
+  search?: string;
+  category?: string;
+  action?: string;
+  portal_user?: string;
+  status?: string;
+  start_date?: string;
+  end_date?: string;
+  page?: number;
+  page_size?: number;
+  limit?: number;
+  sort_by?: string;
+  order?: 'asc' | 'desc';
+}
+
+export interface PaginatedAuditLogsResponse {
+  items: AuditLogItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  summary?: AuditSummaryData;
 }
 

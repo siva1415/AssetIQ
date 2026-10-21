@@ -25,36 +25,59 @@ import {
 } from 'lucide-react';
 import './DashboardPage.css';
 
+/* ==========================================================================
+   AssetIQ Color System
+   Midnight Navy: #14213D | Electric Blue: #4169E1 | Teal: #14B8A6
+   Violet: #7C3AED | Amber: #F59E0B | Slate: #64748B
+   ========================================================================== */
+
 export const SOURCE_COLORS: Record<string, string> = {
-  BIGFIX: '#4169E1', // Royal Blue
+  BIGFIX: '#4169E1', // Electric / Royal Blue
   BigFix: '#4169E1',
   bigfix: '#4169E1',
-  JAMF: '#C2185B',   // Dark Pink
-  Jamf: '#C2185B',
-  jamf: '#C2185B',
+  JAMF: '#D9468F',   // Pink
+  Jamf: '#D9468F',
+  jamf: '#D9468F',
 };
 
 export function getSourceColor(source: string): string {
   const normalized = (source || '').trim().toUpperCase();
   if (normalized === 'BIGFIX') return '#4169E1';
-  if (normalized === 'JAMF') return '#C2185B';
+  if (normalized === 'JAMF') return '#D9468F';
   return SOURCE_COLORS[normalized] || '#4169E1';
 }
 
+/**
+ * Consistent asset status colors:
+ * ACTIVE: #16A34A, NEED REVIEW: #F59E0B, IN STOCK: #3B82F6, RETIRED: #64748B, EXPIRED EOL: #DC2626
+ */
+export const ASSET_STATUS_COLORS: Record<string, string> = {
+  ACTIVE: '#16A34A',
+  REVIEW: '#F59E0B',
+  'NEED REVIEW': '#F59E0B',
+  'IN STOCK': '#3B82F6',
+  RETIRED: '#64748B',
+  EXPIRED: '#DC2626',
+};
+
+/**
+ * Consistent EOL status colors:
+ * ACTIVE: #16A34A, EOL SOON: #F59E0B, EXPIRED: #DC2626, UNKNOWN: #64748B
+ */
 export const EOL_COLORS: Record<string, string> = {
-  ACTIVE: '#22C55E',      // Green (≥90 days)
-  'EOL SOON': '#F97316',  // Orange (≤90 days)
-  EXPIRED: '#EF4444',     // Red
-  UNKNOWN: '#9CA3AF',     // Grey
+  ACTIVE: '#16A34A',     // Green (>90 days)
+  'EOL SOON': '#F59E0B', // Amber (0–90 days)
+  EXPIRED: '#DC2626',    // Red
+  UNKNOWN: '#64748B',    // Slate
 };
 
 export function getEolColor(status: string): string {
   const s = (status || '').trim().toUpperCase();
-  if (s === 'ACTIVE' || s.startsWith('ACTIVE')) return '#22C55E';
-  if (s === 'EOL SOON' || s === 'EOL_SOON' || s.includes('SOON')) return '#F97316';
-  if (s === 'EXPIRED') return '#EF4444';
-  if (s === 'UNKNOWN') return '#9CA3AF';
-  return EOL_COLORS[s] || '#9CA3AF';
+  if (s === 'ACTIVE' || s.startsWith('ACTIVE')) return '#16A34A';
+  if (s === 'EOL SOON' || s === 'EOL_SOON' || s.includes('SOON')) return '#F59E0B';
+  if (s === 'EXPIRED') return '#DC2626';
+  if (s === 'UNKNOWN') return '#64748B';
+  return EOL_COLORS[s] || '#64748B';
 }
 
 export interface ChartItem {
@@ -63,16 +86,27 @@ export interface ChartItem {
 }
 
 /**
- * Transforms category-to-count map into a sorted ChartItem array.
- * Validates numeric values, excludes null, empty, whitespace-only labels,
- * negative/zero counts, and missing/unknown values.
- * Preserves distinct categories returned by the API.
+ * Transforms category-to-count map or array into a sorted ChartItem array.
  */
 export function parseCategoryMap(
   dataMap: unknown,
   options?: { filterUnknown?: boolean }
 ): ChartItem[] {
-  if (!dataMap || typeof dataMap !== 'object' || Array.isArray(dataMap)) {
+  if (!dataMap) return [];
+
+  if (Array.isArray(dataMap)) {
+    return dataMap
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => {
+        const name = String(item.name || item.source || item.category || item.status || '').trim();
+        const count = Number(item.count || item.total || 0);
+        return { name, count: isNaN(count) ? 0 : Math.max(0, Math.round(count)) };
+      })
+      .filter((item) => item.name && item.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }
+
+  if (typeof dataMap !== 'object') {
     return [];
   }
 
@@ -110,111 +144,22 @@ export function parseCategoryMap(
   return items.sort((a, b) => b.count - a.count);
 }
 
-export const OS_PALETTE: string[] = [
-  '#4169E1', // Royal Blue
-  '#8b5cf6', // Vivid Purple
-  '#0d9488', // Teal
-  '#f97316', // Orange
-  '#ef4444', // Red
-  '#ec4899', // Pink
-  '#eab308', // Yellow
-  '#06b6d4', // Cyan
-  '#10b981', // Emerald
-  '#7c3aed', // Deep Violet
-  '#f43f5e', // Rose
-  '#4f46e5', // Indigo
-  '#0284c7', // Sky Blue
-  '#ea580c', // Tangerine
-  '#14b8a6', // Bright Teal
-  '#d946ef', // Fuchsia
-];
-
-export const KNOWN_OS_COLORS: Record<string, string> = {
-  // Windows: royal blue, sky blue, vivid blue
-  'Windows 11 Pro': '#4169E1',
-  'Windows 10 Enterprise': '#0284c7',
-  'Windows 11 Enterprise': '#0ea5e9',
-  'Windows 10 Professional': '#3b82f6',
-  'Windows 11 Professional': '#4169E1',
-  'Windows 11': '#4169E1',
-  'Windows 10': '#0284c7',
-  Windows: '#4169E1',
-
-  // macOS / Mac: vibrant purple / violet
-  macOS: '#8b5cf6',
-  Mac: '#8b5cf6',
-  'macOS Sequoia': '#7c3aed',
-  'macOS Sonoma': '#8b5cf6',
-  'macOS Ventura': '#a855f7',
-  'macOS Monterey': '#6366f1',
-
-  // Red Hat / RHEL: vivid red
-  'Red Hat': '#ef4444',
-  RHEL: '#ef4444',
-  'RED HAT ENTERPRISE LINUX': '#ef4444',
-  'Red Hat Enterprise Linux': '#ef4444',
-
-  // Linux / Ubuntu: vivid orange / tangerine / pink / yellow / teal
-  Ubuntu: '#f97316',
-  Linux: '#ea580c',
-  'Debian GNU/Linux': '#ec4899',
-  Debian: '#ec4899',
-  AIX: '#eab308',
-  'VMware ESXi': '#0d9488',
-};
-
-const OS_COLOR_CACHE = new Map<string, string>();
-
 /**
- * Formats OS names for display according to short-form mapping rules:
- * - "RED HAT ENTERPRISE LINUX" / "Red Hat Enterprise Linux" -> "RHEL"
- * - "Red Hat Enterprise Linux 8.10 (Ootpa)" -> "RHEL 8.10 (Ootpa)"
- * - "RED HAT ENTERPRISE LINUX 9.8 (PLOW)" -> "RHEL 9.8 (PLOW)"
- * - "macOS" -> "Mac"
- * - "macOS 27.0.1" -> "Mac 27.0.1"
- * - "Windows" remains "Windows", "Windows 11 Professional" remains "Windows 11 Professional"
- * - Unrelated names (Debian GNU/Linux, Ubuntu, AIX, RHEL) remain unchanged.
+ * Coordinated palette for Top 10 Departments:
+ * Professional blue, teal, violet, and slate shades.
  */
-export function formatOsDisplayName(name: string): string {
-  if (!name) return '';
-  const trimmed = name.trim();
-
-  // Red Hat Enterprise Linux prefix replacement (case-insensitive)
-  const rhelRegex = /^red\s+hat\s+enterprise\s+linux(\b|$)/i;
-  if (rhelRegex.test(trimmed)) {
-    return trimmed.replace(rhelRegex, 'RHEL');
-  }
-
-  // macOS prefix replacement (case-insensitive)
-  const macRegex = /^macos(\b|$)/i;
-  if (macRegex.test(trimmed)) {
-    return trimmed.replace(macRegex, 'Mac');
-  }
-
-  return trimmed;
-}
-
-export function getOsColor(name: string, index: number): string {
-  const trimmed = (name || '').trim();
-  if (OS_COLOR_CACHE.has(trimmed)) {
-    return OS_COLOR_CACHE.get(trimmed)!;
-  }
-  if (KNOWN_OS_COLORS[trimmed]) {
-    const c = KNOWN_OS_COLORS[trimmed];
-    OS_COLOR_CACHE.set(trimmed, c);
-    return c;
-  }
-  const mapped = formatOsDisplayName(trimmed);
-  if (KNOWN_OS_COLORS[mapped]) {
-    const c = KNOWN_OS_COLORS[mapped];
-    OS_COLOR_CACHE.set(trimmed, c);
-    return c;
-  }
-
-  const color = OS_PALETTE[index % OS_PALETTE.length];
-  OS_COLOR_CACHE.set(trimmed, color);
-  return color;
-}
+export const DEPARTMENT_PALETTE: string[] = [
+  '#4169E1', // Electric Blue
+  '#14B8A6', // Teal
+  '#7C3AED', // Violet
+  '#2563EB', // Royal Blue
+  '#0D9488', // Deep Teal
+  '#6366F1', // Indigo
+  '#0284C7', // Sky Blue
+  '#8B5CF6', // Soft Violet
+  '#0891B2', // Cyan Slate
+  '#4F46E5', // Slate Indigo
+];
 
 const KNOWN_ACRONYMS = new Set([
   'IT',
@@ -235,14 +180,8 @@ const KNOWN_ACRONYMS = new Set([
 ]);
 
 /**
- * Converts department names that are entirely uppercase into readable title-style capitalization,
+ * Converts uppercase department names into readable title-style capitalization,
  * preserving meaningful acronyms (e.g. IT, HR, QA, R&D).
- * Leaves already mixed-case department names intact.
- * Examples:
- * - "INFORMATION TECHNOLOGY" -> "Information Technology"
- * - "HUMAN RESOURCES" -> "Human Resources"
- * - "FINANCE AND ACCOUNTING" -> "Finance And Accounting"
- * - "OPERATIONS" -> "Operations"
  */
 export function formatDepartmentDisplayName(name: string): string {
   if (!name) return '';
@@ -283,138 +222,19 @@ export function formatDepartmentDisplayName(name: string): string {
     .join(' ');
 }
 
-export const DEVICE_TYPE_COLORS: Record<string, string> = {
-  Laptop: '#4F46E5',    // Vivid Indigo
-  Desktop: '#0D9488',   // Bright Teal
-  Server: '#EA580C',    // Vibrant Orange
-  Tablet: '#8B5CF6',    // Vivid Purple
-  Mobile: '#EC4899',    // Vivid Pink
-  Virtual: '#06B6D4',   // Cyan
-  Network: '#7C3AED',   // Deep Violet
-  Other: '#64748B',     // Slate
-};
-
-export const DEVICE_TYPE_PALETTE: string[] = [
-  '#4F46E5', // Indigo
-  '#0D9488', // Teal
-  '#EA580C', // Orange
-  '#8B5CF6', // Purple
-  '#EC4899', // Pink
-  '#06B6D4', // Cyan
-  '#EAB308', // Yellow
-  '#10B981', // Emerald
-  '#7C3AED', // Violet
-  '#F43F5E', // Rose
-];
-
-const DEVICE_COLOR_CACHE = new Map<string, string>();
-
-export function getDeviceTypeColor(name: string, index: number): string {
-  const trimmed = (name || '').trim();
-  if (DEVICE_COLOR_CACHE.has(trimmed)) {
-    return DEVICE_COLOR_CACHE.get(trimmed)!;
-  }
-
-  // Exact match
-  if (DEVICE_TYPE_COLORS[trimmed]) {
-    const c = DEVICE_TYPE_COLORS[trimmed];
-    DEVICE_COLOR_CACHE.set(trimmed, c);
-    return c;
-  }
-
-  // Case-insensitive match
-  const lower = trimmed.toLowerCase();
-  for (const [key, val] of Object.entries(DEVICE_TYPE_COLORS)) {
-    if (key.toLowerCase() === lower) {
-      DEVICE_COLOR_CACHE.set(trimmed, val);
-      return val;
-    }
-  }
-
-  // Substring/category matching
-  if (lower.includes('laptop') || lower.includes('notebook')) {
-    const c = DEVICE_TYPE_COLORS.Laptop;
-    DEVICE_COLOR_CACHE.set(trimmed, c);
-    return c;
-  }
-  if (lower.includes('desktop') || lower.includes('workstation')) {
-    const c = DEVICE_TYPE_COLORS.Desktop;
-    DEVICE_COLOR_CACHE.set(trimmed, c);
-    return c;
-  }
-  if (lower.includes('server')) {
-    const c = DEVICE_TYPE_COLORS.Server;
-    DEVICE_COLOR_CACHE.set(trimmed, c);
-    return c;
-  }
-  if (lower.includes('tablet') || lower.includes('ipad')) {
-    const c = DEVICE_TYPE_COLORS.Tablet;
-    DEVICE_COLOR_CACHE.set(trimmed, c);
-    return c;
-  }
-  if (lower.includes('phone') || lower.includes('mobile')) {
-    const c = DEVICE_TYPE_COLORS.Mobile;
-    DEVICE_COLOR_CACHE.set(trimmed, c);
-    return c;
-  }
-
-  const color = DEVICE_TYPE_PALETTE[index % DEVICE_TYPE_PALETTE.length];
-  DEVICE_COLOR_CACHE.set(trimmed, color);
-  return color;
-}
-
-/**
- * Tasteful, production-grade enterprise palette for Top 10 Departments:
- * Coordinated set of professional colors (blue, teal, indigo, violet, muted green)
- * Visually distinguishable, balanced contrast, restrained saturation, non-status-implying.
- */
-export const DEPARTMENT_PALETTE: string[] = [
-  '#4f46e5', // Indigo
-  '#0d9488', // Teal
-  '#2563eb', // Royal Blue
-  '#7c3aed', // Violet
-  '#059669', // Muted Emerald Green
-  '#0284c7', // Sky Blue
-  '#6366f1', // Slate Indigo
-  '#0891b2', // Cyan Slate
-  '#8b5cf6', // Soft Violet
-  '#0f766e', // Deep Teal
-];
-
-export const KNOWN_DEPARTMENT_COLORS: Record<string, string> = {
-  Engineering: '#4f46e5',
-  Sales: '#0d9488',
-  Marketing: '#2563eb',
-  Operations: '#7c3aed',
-  Finance: '#059669',
-  Support: '#0284c7',
-  Product: '#6366f1',
-  'Human Resources': '#0891b2',
-  HR: '#0891b2',
-  IT: '#0f766e',
-  Legal: '#8b5cf6',
-};
-
-const DEPARTMENT_COLOR_CACHE = new Map<string, string>();
-
-const formatNumber = (value: number | null | undefined): string => {
+export const formatNumber = (value: number | null | undefined): string => {
   if (value === null || value === undefined || isNaN(value)) return '0';
   return new Intl.NumberFormat('en-US').format(value);
 };
 
 /**
- * Consistent percentage formatting for dashboard charts & legends:
- * - Displays with one decimal place when the percentage is fractional (e.g. 12.5%, 8.3%, 0.4%)
- * - Displays whole numbers without unnecessary decimal places (e.g. 25%, 100%)
- * - Small non-zero percentages are never displayed as 0% (e.g. displays 0.4% or 0.1% instead of 0%)
- * - Avoids floating point precision errors
+ * Consistent percentage formatting for dashboard charts & legends.
  */
 export function formatChartPercentage(count: number, total: number): string {
   if (!total || total <= 0 || !count || count <= 0) {
     return '0%';
   }
   const rawPct = (count / total) * 100;
-  // If non-zero but rounds to 0.0 at 1 decimal place, display '0.1%' so it is never 0%
   if (rawPct > 0 && rawPct < 0.05) {
     return '0.1%';
   }
@@ -426,7 +246,7 @@ export function formatChartPercentage(count: number, total: number): string {
 }
 
 /**
- * Shared tooltip style for Recharts ensuring 100% white (#FFFFFF) hover text
+ * Shared dark tooltip style for Recharts ensuring 100% white (#FFFFFF) text
  * across all titles, labels, values, and list items.
  */
 export const DASHBOARD_TOOLTIP_STYLE = {
@@ -436,7 +256,7 @@ export const DASHBOARD_TOOLTIP_STYLE = {
     color: '#ffffff',
     fontSize: '12px',
     borderRadius: '8px',
-    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.35)',
     padding: '8px 12px',
   },
   itemStyle: {
@@ -461,79 +281,15 @@ const labelForSource = (source: string) => {
 const formatEolStatusLabel = (status: string) => {
   const s = (status || '').toUpperCase();
   if (s === 'ACTIVE') return 'Active (> 90 days)';
-  if (s === 'EOL SOON') return 'EOL soon (< 90 days)';
+  if (s === 'EOL SOON') return 'EOL soon (0–90 days)';
   if (s === 'EXPIRED') return 'Expired';
   if (s === 'UNKNOWN') return 'Unknown';
   return status;
 };
 
 /**
- * Normalizes raw OS strings into clean, distinct categories for chart readability.
- * Excludes NULL, empty strings, and whitespace.
- */
-export function normalizeOperatingSystemCategory(rawOs: any): string | null {
-  if (!rawOs) return null;
-  const s = String(rawOs).trim();
-  if (
-    !s ||
-    s === '—' ||
-    s === '-' ||
-    s.toLowerCase() === 'null' ||
-    s.toLowerCase() === 'undefined' ||
-    s.toLowerCase() === 'unknown' ||
-    s.toLowerCase() === 'n/a' ||
-    s.toLowerCase() === 'none'
-  ) {
-    return null;
-  }
-  const lower = s.toLowerCase();
-  if (lower.startsWith('windows') || lower.includes('win')) return 'Windows';
-  if (lower.includes('macos') || lower.includes('mac os') || lower.includes('os x')) return 'macOS';
-  if (
-    lower.includes('red hat') ||
-    lower.includes('ubuntu') ||
-    lower.includes('linux') ||
-    lower.includes('centos') ||
-    lower.includes('debian') ||
-    lower.includes('suse')
-  ) {
-    return 'Linux';
-  }
-  if (lower.includes('vmware') || lower.includes('esxi')) return 'VMware ESXi';
-  return s;
-}
-
-/**
- * Normalizes raw device type strings into standardized capitalized forms.
- * Excludes NULL, empty strings, and whitespace.
- */
-export function normalizeDeviceTypeCategory(rawDt: any): string | null {
-  if (!rawDt) return null;
-  const s = String(rawDt).trim();
-  if (
-    !s ||
-    s === '—' ||
-    s === '-' ||
-    s.toLowerCase() === 'null' ||
-    s.toLowerCase() === 'undefined' ||
-    s.toLowerCase() === 'unknown' ||
-    s.toLowerCase() === 'n/a' ||
-    s.toLowerCase() === 'none'
-  ) {
-    return null;
-  }
-  const lower = s.toLowerCase();
-  if (lower === 'laptop') return 'Laptop';
-  if (lower === 'desktop') return 'Desktop';
-  if (lower === 'server') return 'Server';
-  if (lower === 'tablet') return 'Tablet';
-  if (lower === 'mobile' || lower === 'phone') return 'Mobile';
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-/**
- * Shorten lengthy hardware model labels for chart readability while preserving
- * vital identifying details (manufacturer, product family, model number, generation).
+ * Shortens lengthy hardware model labels for chart readability while preserving
+ * vital identifying details.
  */
 export function shortenHardwareModel(rawModel: string): string {
   if (!rawModel) return '';
@@ -551,34 +307,31 @@ export function shortenHardwareModel(rawModel: string): string {
   s = s.replace(/\bMicrosoft\s+Corporation(?=\s|$)/gi, 'Microsoft');
   s = s.replace(/\bCisco\s+(?:Systems,?\s+Inc\.?|Systems)(?=\s|$)/gi, 'Cisco');
 
-  // 3. Remove duplicate adjacent manufacturer names (e.g. "HP HP", "Dell Dell")
+  // 3. Remove duplicate adjacent manufacturer names
   s = s.replace(/\b(Dell|HP|Lenovo|Apple|Cisco|Microsoft)\s+\1\b/gi, '$1');
 
   // 4. Compact Apple display size specifications: (16-inch, 2021) -> 16" 2021
   s = s.replace(/\((\d+)-inch(?:,\s*(\d{4}))?\)/gi, (_, size, yr) => yr ? `${size}" ${yr}` : `${size}"`);
 
-  // 5. Remove redundant manufacturer prefix when the product family name is inherently distinctive
+  // 5. Remove redundant manufacturer prefix when product family name is inherently distinctive
   s = s.replace(/\bApple\s+(MacBook|Mac\s+Studio|Mac\s+mini|iMac|Mac\s+Pro)\b/gi, '$1');
   s = s.replace(/\bLenovo\s+(ThinkPad|ThinkStation|ThinkCentre|IdeaPad|Legion)\b/gi, '$1');
   s = s.replace(/\bMicrosoft\s+(Surface(?:\s+Pro|\s+Laptop|\s+Book|\s+Go|\s+Studio|\s+Hub)?)\b/gi, '$1');
 
-  // 6. Remove redundant generic device type words (without stripping product lines like Surface Laptop)
+  // 6. Remove redundant generic device type words
   s = s.replace(/\b(?:Notebook\s+PC|Desktop\s+PC|Laptop\s+PC|Personal\s+Computer|Computer\s+System)\b/gi, '');
   s = s.replace(/\b(?:Workstation|Notebook|Blade\s+Server|Blade)\b/gi, '');
   s = s.replace(/(?<!Surface\s)\bLaptop\b/gi, '');
   s = s.replace(/(?<!Surface\s)\bDesktop\b/gi, '');
 
-  // 7. If model name is long, compress "Gen X" to "G{X}" or clean brand if family is prominent
   if (s.length > 20) {
     s = s.replace(/\bGen\s*(\d+)\b/gi, 'G$1');
     s = s.replace(/^Dell\s+(OptiPlex|Latitude|Precision|PowerEdge)\b/gi, '$1');
     s = s.replace(/^Cisco\s+(UCS)\b/gi, '$1');
   }
 
-  // 8. Clean consecutive whitespace
   s = s.replace(/\s{2,}/g, ' ').trim();
 
-  // 9. If still excessively long, truncate with ellipsis
   const MAX_DISPLAY_LEN = 24;
   if (s.length > MAX_DISPLAY_LEN) {
     s = s.slice(0, MAX_DISPLAY_LEN - 1).trim() + '…';
@@ -587,10 +340,6 @@ export function shortenHardwareModel(rawModel: string): string {
   return s;
 }
 
-/**
- * Format model labels across the exposure dataset with collision detection.
- * If two different models produce the same shortened label, preserves distinguishing tokens.
- */
 export function formatExposureModels<T extends { model: string }>(
   items: T[]
 ): (T & { shortModel: string; originalModel: string })[] {
@@ -600,7 +349,6 @@ export function formatExposureModels<T extends { model: string }>(
     shortModel: shortenHardwareModel(item.model),
   }));
 
-  // Detect collisions
   const countByShort = new Map<string, number>();
   for (const { shortModel } of initial) {
     countByShort.set(shortModel, (countByShort.get(shortModel) || 0) + 1);
@@ -620,6 +368,156 @@ export function formatExposureModels<T extends { model: string }>(
     };
   });
 }
+
+/**
+ * Custom YAxis tick renderer for Assets by Department that wraps lengthy
+ * department names onto multiple lines without clipping or truncation,
+ * ensuring each department label is perfectly aligned with its corresponding bar.
+ */
+export const renderDepartmentTick = (props: any) => {
+  const { x, y, payload } = props;
+  const rawText = String(payload?.value || '');
+  const displayName = formatDepartmentDisplayName(rawText);
+
+  // Wrap department names exceeding 14 characters onto multiple lines
+  const words = displayName.split(/\s+/).filter(Boolean);
+  let lines: string[] = [];
+  if (displayName.length > 14 && words.length > 1) {
+    let currentLine = words[0];
+    for (let i = 1; i < words.length; i++) {
+      if ((currentLine + ' ' + words[i]).length <= 15) {
+        currentLine += ' ' + words[i];
+      } else {
+        lines.push(currentLine);
+        currentLine = words[i];
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+  } else {
+    lines = [displayName];
+  }
+
+  const lineCount = lines.length;
+
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <title>{displayName}</title>
+      <text
+        x={-8}
+        y={0}
+        textAnchor="end"
+        fill="#334155"
+        fontSize={11}
+        fontWeight={500}
+        style={{ pointerEvents: 'none', userSelect: 'none' }}
+      >
+        {lines.map((line, idx) => {
+          let dyVal: number = 4;
+          if (lineCount === 1) {
+            dyVal = 4;
+          } else if (idx === 0) {
+            dyVal = -((lineCount - 1) * 6.5) + 3;
+          } else {
+            dyVal = 13;
+          }
+
+          return (
+            <tspan key={idx} x={-8} dy={dyVal}>
+              {line}
+            </tspan>
+          );
+        })}
+      </text>
+    </g>
+  );
+};
+
+/**
+ * Custom YAxis tick renderer for EOL Exposure by Hardware Model that wraps
+ * lengthy hardware model names onto multiple lines without clipping or truncation.
+ */
+export const renderModelTick = (props: any) => {
+  const { x, y, payload } = props;
+  const rawText = String(payload?.value || '');
+  const words = rawText.split(' ');
+  let lines: string[] = [];
+  if (rawText.length > 16 && words.length > 1) {
+    let currentLine = words[0];
+    for (let i = 1; i < words.length; i++) {
+      if ((currentLine + ' ' + words[i]).length <= 16) {
+        currentLine += ' ' + words[i];
+      } else {
+        lines.push(currentLine);
+        currentLine = words[i];
+      }
+    }
+    lines.push(currentLine);
+  } else {
+    lines = [rawText];
+  }
+
+  if (lines.length > 2) {
+    lines = [lines[0], lines.slice(1).join(' ')];
+    if (lines[1].length > 18) {
+      lines[1] = lines[1].slice(0, 17).trim() + '…';
+    }
+  }
+
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text x={-6} y={0} textAnchor="end" fill="#334155" fontSize={10.5} fontWeight={500}>
+        {lines.map((line, idx) => (
+          <tspan key={idx} x={-6} dy={idx === 0 ? (lines.length > 1 ? -4 : 4) : 12}>
+            {line}
+          </tspan>
+        ))}
+      </text>
+    </g>
+  );
+};
+
+/**
+ * Custom XAxis tick renderer for EOL Status Distribution vertical column chart.
+ * Displays readable status labels centered below each column without overlapping or clipping.
+ */
+export const renderEolColumnTick = (props: any) => {
+  const { x, y, payload } = props;
+  const raw = String(payload?.value || '');
+  const key = raw.toUpperCase();
+
+  let title = raw;
+  let subtitle = '';
+  if (key.includes('ACTIVE')) {
+    title = 'Active';
+    subtitle = '> 90 days';
+  } else if (key.includes('SOON')) {
+    title = 'EOL Soon';
+    subtitle = '0–90 days';
+  } else if (key.includes('EXPIRED')) {
+    title = 'Expired';
+    subtitle = 'Past date';
+  } else if (key.includes('UNKNOWN')) {
+    title = 'Unknown';
+    subtitle = 'No record';
+  }
+
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text textAnchor="middle" fill="#334155" fontSize={11} fontWeight={600}>
+        <tspan x={0} dy={12}>
+          {title}
+        </tspan>
+        {subtitle && (
+          <tspan x={0} dy={13} fill="#64748b" fontSize={9.5} fontWeight={400}>
+            {subtitle}
+          </tspan>
+        )}
+      </text>
+    </g>
+  );
+};
 
 interface KpiTileProps {
   label: string;
@@ -680,16 +578,15 @@ const ChartCard: React.FC<{
 );
 
 export const DashboardPage: React.FC = () => {
-  const { dataRefreshKey } = useApp();
+  const { dataRefreshKey, triggerDataRefresh } = useApp();
   const [data, setData] = useState<DashboardRedesignOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Dedicated Hardware Asset Analysis state populated from GET /api/dashboard/hardware-analysis
+  // Dedicated Hardware Asset Analysis state
   const [hardwareData, setHardwareData] = useState<HardwareAnalysisResponse | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState<boolean>(true);
   const [hardwareError, setHardwareError] = useState<string | null>(null);
-
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -729,49 +626,310 @@ export const DashboardPage: React.FC = () => {
     void loadHardwareAnalysis();
   }, [loadDashboard, loadHardwareAnalysis, dataRefreshKey]);
 
-  const sourceData = useMemo(
-    () => data?.assets_by_source.filter((item) => item.count > 0) ?? [],
-    [data]
-  );
+  /* --------------------------------------------------------------------------
+     Row 1 Data Processing: Assets by Source
+     -------------------------------------------------------------------------- */
+  const sourceData = useMemo(() => {
+    const list = data?.assets_by_source ?? [];
+    // Ensure both BigFix and Jamf are tracked, with live counts
+    const bigfixItem = list.find((item) => (item.source || '').toUpperCase() === 'BIGFIX');
+    const jamfItem = list.find((item) => (item.source || '').toUpperCase() === 'JAMF');
+
+    const bigfixCount = bigfixItem ? bigfixItem.count : 0;
+    const jamfCount = jamfItem ? jamfItem.count : 0;
+
+    return [
+      { source: 'BigFix', count: bigfixCount, color: '#4169E1' },
+      { source: 'Jamf', count: jamfCount, color: '#D9468F' },
+    ];
+  }, [data]);
+
   const totalSourceCount = useMemo(
     () => sourceData.reduce((acc, curr) => acc + curr.count, 0),
     [sourceData]
   );
 
+  /* --------------------------------------------------------------------------
+     Row 1 Data Processing: Hardware Asset Analysis (3 Distinct Sections)
+     -------------------------------------------------------------------------- */
+
+  // Section A: By Operating System (Horizontal Bar Chart)
+  // Exactly 3 categories: Windows 11, Windows 10, Mac
+  const osChartData = useMemo(() => {
+    const rawMap = hardwareData?.byOs ?? hardwareData?.by_os ?? data?.by_operating_system;
+    let win11Count = 0;
+    let win10Count = 0;
+    let macCount = 0;
+
+    if (rawMap && typeof rawMap === 'object') {
+      const entries = Array.isArray(rawMap)
+        ? rawMap.map((item: any) => [String(item.name || item.os || ''), Number(item.count || 0)])
+        : Object.entries(rawMap);
+
+      for (const [key, val] of entries) {
+        if (!key) continue;
+        const count = typeof val === 'number' ? val : Number(val) || 0;
+        if (count <= 0) continue;
+
+        const k = String(key).trim();
+        const lower = k.toLowerCase();
+
+        // Exact pre-grouped checks from backend
+        if (k === 'Windows 11' || lower === 'windows 11') {
+          win11Count += count;
+        } else if (k === 'Windows 10' || lower === 'windows 10') {
+          win10Count += count;
+        } else if (k === 'Mac' || lower === 'mac') {
+          macCount += count;
+        }
+        // Substring / version normalization grouping
+        else if (lower.includes('windows 11') || lower.includes('win 11') || lower.includes('win11')) {
+          win11Count += count;
+        } else if (lower.includes('windows 10') || lower.includes('win 10') || lower.includes('win10')) {
+          win10Count += count;
+        } else if (
+          lower.includes('macos') ||
+          lower.includes('mac os') ||
+          lower.includes('os x') ||
+          lower.startsWith('mac') ||
+          lower.includes('apple')
+        ) {
+          // Exclude Windows / Server
+          if (!lower.includes('win') && !lower.includes('server')) {
+            macCount += count;
+          }
+        }
+      }
+    }
+
+    const items = [
+      { name: 'Windows 11', count: win11Count, color: '#4169E1' }, // Electric Blue
+      { name: 'Windows 10', count: win10Count, color: '#14B8A6' }, // Teal
+      { name: 'Mac', count: macCount, color: '#7C3AED' },          // Violet
+    ];
+
+    const total = win11Count + win10Count + macCount;
+    return { items, total };
+  }, [hardwareData, data]);
+
+  // Section B: By Device Type (Donut Chart)
+  // Shows authoritative counts for Laptops and Desktops without duplicate summing
+  const deviceTypeChartData = useMemo(() => {
+    const rawMap = hardwareData?.byDevice ?? hardwareData?.by_device ?? data?.by_device_type;
+    let laptopCount = 0;
+    let desktopCount = 0;
+
+    if (rawMap && typeof rawMap === 'object') {
+      const entries: [string, number][] = Array.isArray(rawMap)
+        ? rawMap.map((item: any) => [
+            String(item.name || item.device_type || item.type || item.devicetype || ''),
+            Number(item.count || item.total || 0),
+          ])
+        : Object.entries(rawMap).map(([k, v]) => [String(k), typeof v === 'number' ? v : Number(v) || 0]);
+
+      // Direct authoritative lookup map
+      // Exclude composite category keys (e.g. 'store-desktops', 'corporate-laptops') and totals
+      const directMap = new Map<string, number>();
+      for (const [key, val] of entries) {
+        if (!key || val <= 0) continue;
+        const clean = key.trim().toLowerCase();
+        if (clean.includes('-') || clean.includes('_') || clean.includes('total') || clean.includes('all')) {
+          continue;
+        }
+        directMap.set(clean, val);
+      }
+
+      const directLaptop =
+        directMap.get('laptop') ??
+        directMap.get('laptops') ??
+        directMap.get('notebook') ??
+        directMap.get('notebooks');
+      const directDesktop =
+        directMap.get('desktop') ??
+        directMap.get('desktops') ??
+        directMap.get('workstation') ??
+        directMap.get('workstations');
+
+      if (directLaptop !== undefined || directDesktop !== undefined) {
+        laptopCount = directLaptop || 0;
+        desktopCount = directDesktop || 0;
+      } else {
+        // Fallback: iterate entries while strictly skipping compound category keys
+        for (const [key, val] of entries) {
+          if (!key || val <= 0) continue;
+          const lower = key.trim().toLowerCase();
+          if (
+            lower.includes('total') ||
+            lower.includes('store') ||
+            lower.includes('corporate') ||
+            lower.includes('corp') ||
+            lower.includes('-') ||
+            lower.includes('_')
+          ) {
+            continue;
+          }
+          if (lower === 'laptop' || lower === 'laptops' || lower === 'notebook' || lower === 'notebooks') {
+            laptopCount += val;
+          } else if (lower === 'desktop' || lower === 'desktops' || lower === 'workstation' || lower === 'workstations') {
+            desktopCount += val;
+          }
+        }
+      }
+    }
+
+    const items = [
+      { name: 'Laptops', count: laptopCount, color: '#635BFF' },  // Violet
+      { name: 'Desktops', count: desktopCount, color: '#14B8A6' }, // Teal
+    ];
+
+    // Authoritative total derived strictly from Laptops + Desktops
+    const total = laptopCount + desktopCount;
+    return { items, total };
+  }, [hardwareData, data]);
+
+  // Section C: By Category (Donut Chart)
+  // Shows ONLY: STORE (#4169E1) and CORPORATE (#14B8A6)
+  const categoryChartData = useMemo(() => {
+    const rawMap =
+      hardwareData?.byCategory ??
+      hardwareData?.by_category ??
+      (data as any)?.by_category ??
+      (data as any)?.byCategory;
+
+    let storeCount = 0;
+    let corporateCount = 0;
+
+    if (rawMap && typeof rawMap === 'object') {
+      const entries: [string, number][] = Array.isArray(rawMap)
+        ? rawMap.map((item: any) => [
+            String(item.name || item.category || ''),
+            Number(item.count || item.total || 0),
+          ])
+        : Object.entries(rawMap).map(([k, v]) => [String(k), typeof v === 'number' ? v : Number(v) || 0]);
+
+      for (const [key, val] of entries) {
+        if (!key || val <= 0) continue;
+        const upper = key.trim().toUpperCase();
+        if (upper === 'STORE' || upper === 'STORES') {
+          storeCount += val;
+        } else if (upper === 'CORPORATE' || upper === 'CORP') {
+          corporateCount += val;
+        }
+      }
+    }
+
+    // Fallback if only composite byDeviceTypeAndCategory was available
+    if (storeCount === 0 && corporateCount === 0) {
+      const fallbackMap =
+        hardwareData?.byDeviceTypeAndCategory ??
+        hardwareData?.by_device_type_and_category ??
+        (data as any)?.by_device_type_and_category ??
+        (data as any)?.byDeviceTypeAndCategory;
+      if (fallbackMap && typeof fallbackMap === 'object') {
+        const entries: [string, number][] = Array.isArray(fallbackMap)
+          ? fallbackMap.map((item: any) => [
+              String(item.name || item.category || ''),
+              Number(item.count || item.total || 0),
+            ])
+          : Object.entries(fallbackMap).map(([k, v]) => [String(k), typeof v === 'number' ? v : Number(v) || 0]);
+        for (const [key, val] of entries) {
+          if (!key || val <= 0) continue;
+          const upper = key.trim().toUpperCase();
+          if (upper.startsWith('STORE')) {
+            storeCount += val;
+          } else if (upper.startsWith('CORP')) {
+            corporateCount += val;
+          }
+        }
+      }
+    }
+
+    const items = [
+      { name: 'STORE', count: storeCount, color: '#4169E1' },      // Electric Blue
+      { name: 'CORPORATE', count: corporateCount, color: '#14B8A6' }, // Teal
+    ];
+
+    const total = storeCount + corporateCount;
+    return { items, total };
+  }, [hardwareData, data]);
+
+  /* --------------------------------------------------------------------------
+     Row 2 Data Processing: Departments, EOL Status, EOL Exposure
+     -------------------------------------------------------------------------- */
   const topDepartments = useMemo(() => {
     return (data?.assets_by_department ?? [])
-      .filter((item) => item && item.department && item.count > 0)
-      .sort((a, b) => b.count - a.count)
+      .filter((item) => {
+        if (!item || typeof item.department !== 'string') return false;
+        const trimmed = item.department.trim();
+        if (!trimmed) return false;
+        return trimmed.toLowerCase() !== 'unassigned';
+      })
       .slice(0, 10);
   }, [data]);
 
-  const departmentColors = useMemo(() => {
-    const usedColors = new Set<string>();
-    return topDepartments.map((dept, idx) => {
-      const name = (dept.department || '').trim();
-      const formatted = formatDepartmentDisplayName(name);
-      let color =
-        KNOWN_DEPARTMENT_COLORS[name] ||
-        KNOWN_DEPARTMENT_COLORS[formatted] ||
-        DEPARTMENT_COLOR_CACHE.get(name);
-      if (!color || usedColors.has(color)) {
-        const available = DEPARTMENT_PALETTE.find((c) => !usedColors.has(c));
-        color = available || DEPARTMENT_PALETTE[idx % DEPARTMENT_PALETTE.length];
-        if (name) DEPARTMENT_COLOR_CACHE.set(name, color);
-      }
-      usedColors.add(color);
-      return color;
-    });
-  }, [topDepartments]);
+  const totalTopDeptCount = useMemo(
+    () => topDepartments.reduce((acc, curr) => acc + curr.count, 0),
+    [topDepartments]
+  );
 
-  const eolData = useMemo(
-    () => data?.eol_distribution.filter((item) => item.count > 0) ?? [],
-    [data]
-  );
-  const totalEolCount = useMemo(
-    () => eolData.reduce((acc, curr) => acc + curr.count, 0),
-    [eolData]
-  );
+  // EOL Status Distribution: Exactly 4 categories in order
+  const eolStatusDistribution = useMemo(() => {
+    const rawList = data?.eol_distribution ?? [];
+    const countMap: Record<string, number> = {
+      ACTIVE: 0,
+      'EOL SOON': 0,
+      EXPIRED: 0,
+      UNKNOWN: 0,
+    };
+
+    for (const item of rawList) {
+      if (!item) continue;
+      const rawStatus = (item.status || '').trim().toUpperCase();
+      const count = Number(item.count) || 0;
+      if (rawStatus === 'ACTIVE' || rawStatus.startsWith('ACTIVE')) {
+        countMap.ACTIVE += count;
+      } else if (rawStatus === 'EOL SOON' || rawStatus === 'EOL_SOON' || rawStatus.includes('SOON')) {
+        countMap['EOL SOON'] += count;
+      } else if (rawStatus === 'EXPIRED') {
+        countMap.EXPIRED += count;
+      } else {
+        countMap.UNKNOWN += count;
+      }
+    }
+
+    const items = [
+      {
+        key: 'ACTIVE',
+        label: 'Active (> 90 days)',
+        count: countMap.ACTIVE,
+        color: '#16A34A', // Active Green
+      },
+      {
+        key: 'EOL SOON',
+        label: 'EOL soon (0–90 days)',
+        count: countMap['EOL SOON'],
+        color: '#F59E0B', // Amber
+      },
+      {
+        key: 'EXPIRED',
+        label: 'Expired',
+        count: countMap.EXPIRED,
+        color: '#DC2626', // Red
+      },
+      {
+        key: 'UNKNOWN',
+        label: 'Unknown',
+        count: countMap.UNKNOWN,
+        color: '#64748B', // Slate
+      },
+    ];
+
+    const totalFleet =
+      data?.kpis?.total_assets ||
+      items.reduce((sum, item) => sum + item.count, 0);
+
+    return { items, totalFleet };
+  }, [data]);
 
   const eolExposure = useMemo(() => data?.eol_exposure ?? [], [data]);
   const eolExposureFormatted = useMemo(
@@ -779,34 +937,12 @@ export const DashboardPage: React.FC = () => {
     [eolExposure]
   );
 
-  // Hardware Asset Analysis: Operating System distribution populated from GET /api/dashboard/hardware-analysis (byOs)
-  const osDistribution = useMemo(() => {
-    const rawMap = hardwareData?.byOs ?? (hardwareData as any)?.by_os;
-    return parseCategoryMap(rawMap, { filterUnknown: true });
-  }, [hardwareData]);
-
-  const totalOsCount = useMemo(
-    () => osDistribution.reduce((acc, curr) => acc + curr.count, 0),
-    [osDistribution]
-  );
-
-  // Hardware Asset Analysis: Device Type distribution populated from GET /api/dashboard/hardware-analysis (byDevice)
-  const deviceTypeDistribution = useMemo(() => {
-    const rawMap = hardwareData?.byDevice ?? (hardwareData as any)?.by_device;
-    return parseCategoryMap(rawMap, { filterUnknown: true });
-  }, [hardwareData]);
-
-  const totalDeviceTypeCount = useMemo(
-    () => deviceTypeDistribution.reduce((acc, curr) => acc + curr.count, 0),
-    [deviceTypeDistribution]
-  );
-
   if (loading && !data) {
     return (
       <div className="di-dashboard">
-        <div className="di-message">
+        <div className="di-loading-state">
           <span className="di-spinner" />
-          Loading dashboard metrics…
+          <span>Loading AssetIQ dashboard metrics…</span>
         </div>
       </div>
     );
@@ -815,10 +951,10 @@ export const DashboardPage: React.FC = () => {
   if (error && !data) {
     return (
       <div className="di-dashboard">
-        <div className="di-error">
+        <div className="di-error-state">
           <strong>Dashboard could not be loaded</strong>
           <p>{error}</p>
-          <button onClick={() => void loadDashboard()}>
+          <button className="di-refresh-btn" onClick={() => void loadDashboard()}>
             <RefreshCw size={14} /> Retry
           </button>
         </div>
@@ -869,7 +1005,7 @@ export const DashboardPage: React.FC = () => {
         </div>
       )}
 
-      {/* Row 1 — Five KPI Cards */}
+      {/* Row 0 — Five KPI Cards */}
       <div className="di-kpis">
         <KpiTile
           label="Total Assets"
@@ -921,68 +1057,74 @@ export const DashboardPage: React.FC = () => {
         />
       </div>
 
-      {/* Row 2 — Three Analysis Cards: Assets by Source | Hardware Asset Analysis | Assets by Department */}
-      <div className="di-chart-row-three">
-        {/* 1. Assets by Source */}
+      {/* Row 1 — Assets by Source & Hardware Asset Analysis */}
+      <div className="di-row-1">
+        {/* Card 1: Assets by Source (Donut Chart - compact sizing) */}
         <ChartCard
           title="Assets by Source"
           description="Discovery platform telemetry (BigFix vs Jamf)"
           className="di-card-source"
         >
-          <div className="di-chart-box">
-            {sourceData.length ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={sourceData}
-                    dataKey="count"
-                    nameKey="source"
-                    innerRadius={0}
-                    outerRadius={74}
-                    stroke="#fff"
-                    strokeWidth={2}
-                  >
-                    {sourceData.map((item) => (
-                      <Cell
-                        key={item.source}
-                        fill={getSourceColor(item.source)}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
-                    itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
-                    labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
-                    formatter={(value: any, name: any) => [
-                      `${formatNumber(value)} assets (${formatChartPercentage(Number(value), totalSourceCount)})`,
-                      labelForSource(String(name)),
-                    ]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="di-empty">No source data available</div>
-            )}
+          {/* Legend in one single horizontal line above the donut */}
+          <div className="di-source-legend-line">
+            <span className="di-source-legend-item">
+              <i className="di-source-legend-dot" style={{ backgroundColor: '#4169E1' }} />
+              <span className="di-source-legend-name">BigFix</span>
+              <span className="di-source-legend-count">{formatNumber(sourceData[0]?.count)}</span>
+            </span>
+            <span className="di-source-legend-item">
+              <i className="di-source-legend-dot" style={{ backgroundColor: '#D9468F' }} />
+              <span className="di-source-legend-name">Jamf</span>
+              <span className="di-source-legend-count">{formatNumber(sourceData[1]?.count)}</span>
+            </span>
           </div>
-          <div className="di-legend">
-            {sourceData.map((item) => {
-              const pct = formatChartPercentage(item.count, totalSourceCount);
-              return (
-                <span key={item.source} className="di-legend-item">
-                  <i style={{ background: getSourceColor(item.source) }} />
-                  <span className="di-legend-name">{labelForSource(item.source)}</span>
-                  <b className="di-legend-num">{formatNumber(item.count)}</b>
-                  <span className="di-pct-pill">{pct}</span>
-                </span>
-              );
-            })}
+
+          <div className="di-source-chart-box">
+            {totalSourceCount > 0 ? (
+              <>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={sourceData}
+                      dataKey="count"
+                      nameKey="source"
+                      innerRadius={46}
+                      outerRadius={66}
+                      stroke="#ffffff"
+                      strokeWidth={2}
+                      paddingAngle={2}
+                    >
+                      {sourceData.map((item) => (
+                        <Cell key={item.source} fill={item.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
+                      itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
+                      labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
+                      formatter={(value: any, name: any) => [
+                        `${formatNumber(value)} assets (${formatChartPercentage(Number(value), totalSourceCount)})`,
+                        labelForSource(String(name)),
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                {/* Center Asset Count */}
+                <div className="di-donut-center">
+                  <span className="di-donut-center-val">{formatNumber(totalSourceCount)}</span>
+                  <span className="di-donut-center-lbl">Total Assets</span>
+                </div>
+              </>
+            ) : (
+              <div className="di-empty">No discovery source data available</div>
+            )}
           </div>
         </ChartCard>
 
-        {/* 2. Hardware Asset Analysis */}
+        {/* Card 2: Hardware Asset Analysis (Three Sections Separated by Dividers) */}
         <ChartCard
           title="Hardware Asset Analysis"
-          description="Breakdown by operating system and device type"
+          description="Asset distribution across operating systems, device types, and category profiles"
         >
           {hardwareLoading && !hardwareData ? (
             <div className="di-hardware-loading-box">
@@ -993,165 +1135,229 @@ export const DashboardPage: React.FC = () => {
             <div className="di-hardware-error-box">
               <AlertTriangle className="w-5 h-5 text-amber-500" />
               <p className="di-hardware-error-msg">{hardwareError}</p>
-              <button
-                className="di-retry-btn"
-                onClick={() => void loadHardwareAnalysis()}
-              >
+              <button className="di-retry-btn" onClick={() => void loadHardwareAnalysis()}>
                 <RefreshCw size={13} /> Retry
               </button>
             </div>
           ) : (
-            <div className="di-hardware-analysis-grid" data-testid="card-hardware-asset-analysis">
-              {/* Subchart A: By Operating System */}
-              <div className="di-hardware-subchart" data-testid="chart-by-operating-system">
-                <div className="di-hardware-subchart-header">
-                  <span className="di-hardware-subchart-title">By Operating System</span>
-                  {totalOsCount > 0 && (
-                    <span className="di-hardware-subchart-badge">
-                      {formatNumber(totalOsCount)}
-                    </span>
-                  )}
+            <div className="di-hardware-sections-container" data-testid="card-hardware-asset-analysis">
+              {/* Section 1: By Operating System (Horizontal Bar Chart) */}
+              <div className="di-hardware-section" data-testid="chart-by-operating-system">
+                <div className="di-hardware-section-header">
+                  <span className="di-hardware-section-title">By Operating System</span>
                 </div>
-                <div className="di-hardware-subchart-chart-box">
-                  {osDistribution.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={osDistribution}
+
+                <div className="di-section-chart-box">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      layout="vertical"
+                      data={osChartData.items}
+                      margin={{ top: 12, right: 38, left: 2, bottom: 4 }}
+                    >
+                      <CartesianGrid stroke="#e8ecf2" strokeDasharray="3 3" horizontal={false} />
+                      <XAxis
+                        type="number"
+                        allowDecimals={false}
+                        tick={{ fontSize: 10, fill: '#64748b' }}
+                        axisLine={{ stroke: '#cbd5e1' }}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={82}
+                        tick={{ fontSize: 11, fill: '#334155', fontWeight: 600 }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <Tooltip
+                        cursor={{ fill: 'rgba(241, 245, 249, 0.65)' }}
+                        contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
+                        itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
+                        labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
+                        formatter={(value: any, name: any, item: any) => [
+                          `${formatNumber(value)} assets (${formatChartPercentage(Number(value), osChartData.total)})`,
+                          item?.payload?.name || name,
+                        ]}
+                      />
+                      <Bar
+                        dataKey="count"
+                        radius={[0, 4, 4, 0]}
+                        maxBarSize={18}
+                      >
+                        {osChartData.items.map((entry) => (
+                          <Cell key={entry.name} fill={entry.color} />
+                        ))}
+                        <LabelList
                           dataKey="count"
-                          nameKey="name"
-                          innerRadius={0}
-                          outerRadius={50}
-                          stroke="#fff"
-                          strokeWidth={2}
-                        >
-                          {osDistribution.map((item, idx) => (
-                            <Cell
-                              key={item.name}
-                              fill={getOsColor(item.name, idx)}
-                            />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
-                          itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
-                          labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
-                          formatter={(value: any, name: any) => [
-                            `${formatNumber(value)} assets (${formatChartPercentage(Number(value), totalOsCount)})`,
-                            formatOsDisplayName(String(name)),
-                          ]}
+                          position="right"
+                          fill="#334155"
+                          fontSize={11}
+                          fontWeight={600}
+                          formatter={(val: any) => formatNumber(val)}
                         />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="di-empty">No operating system data available</div>
-                  )}
-                </div>
-                <div className="di-hardware-legend">
-                  {osDistribution.map((item, idx) => {
-                    const pct = formatChartPercentage(item.count, totalOsCount);
-                    const color = getOsColor(item.name, idx);
-                    const displayName = formatOsDisplayName(item.name);
-                    return (
-                      <div key={item.name} className="di-hardware-legend-row">
-                        <span className="di-hardware-legend-left">
-                          <i style={{ background: color }} />
-                          <span className="di-hardware-legend-name" title={displayName}>
-                            {displayName}
-                          </span>
-                        </span>
-                        <span className="di-hardware-legend-right">
-                          <b className="di-legend-num">{formatNumber(item.count)}</b>
-                          <span className="di-pct-pill">{pct}</span>
-                        </span>
-                      </div>
-                    );
-                  })}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
               </div>
 
-              {/* Subchart B: By Device Type */}
-              <div className="di-hardware-subchart" data-testid="chart-by-device-type">
-                <div className="di-hardware-subchart-header">
-                  <span className="di-hardware-subchart-title">By Device Type</span>
-                  {totalDeviceTypeCount > 0 && (
-                    <span className="di-hardware-subchart-badge">
-                      {formatNumber(totalDeviceTypeCount)}
+              {/* Section 2: By Device Type (Donut Chart) */}
+              <div className="di-hardware-section" data-testid="chart-by-device-type">
+                <div className="di-hardware-section-header">
+                  <span className="di-hardware-section-title">By Device Type</span>
+                </div>
+
+                {/* Legends horizontally in a single line at top */}
+                <div className="di-section-legend-line">
+                  <span className="di-source-legend-item">
+                    <i className="di-source-legend-dot" style={{ backgroundColor: '#635BFF' }} />
+                    <span className="di-source-legend-name">Laptops</span>
+                    <span className="di-source-legend-count">
+                      {formatNumber(deviceTypeChartData.items[0]?.count)}
                     </span>
-                  )}
+                  </span>
+                  <span className="di-source-legend-item">
+                    <i className="di-source-legend-dot" style={{ backgroundColor: '#14B8A6' }} />
+                    <span className="di-source-legend-name">Desktops</span>
+                    <span className="di-source-legend-count">
+                      {formatNumber(deviceTypeChartData.items[1]?.count)}
+                    </span>
+                  </span>
                 </div>
-                <div className="di-hardware-subchart-chart-box">
-                  {deviceTypeDistribution.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={deviceTypeDistribution}
-                          dataKey="count"
-                          nameKey="name"
-                          innerRadius={0}
-                          outerRadius={50}
-                          stroke="#fff"
-                          strokeWidth={2}
-                        >
-                          {deviceTypeDistribution.map((item, idx) => (
-                            <Cell
-                              key={item.name}
-                              fill={getDeviceTypeColor(item.name, idx)}
-                            />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
-                          itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
-                          labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
-                          formatter={(value: any, name: any) => [
-                            `${formatNumber(value)} assets (${formatChartPercentage(Number(value), totalDeviceTypeCount)})`,
-                            String(name),
-                          ]}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="di-empty">No device type data available</div>
-                  )}
-                </div>
-                <div className="di-hardware-legend">
-                  {deviceTypeDistribution.map((item, idx) => {
-                    const pct = formatChartPercentage(item.count, totalDeviceTypeCount);
-                    const color = getDeviceTypeColor(item.name, idx);
-                    return (
-                      <div key={item.name} className="di-hardware-legend-row">
-                        <span className="di-hardware-legend-left">
-                          <i style={{ background: color }} />
-                          <span className="di-hardware-legend-name" title={item.name}>
-                            {item.name}
-                          </span>
+
+                <div className="di-section-chart-box">
+                  {deviceTypeChartData.total > 0 ? (
+                    <>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={deviceTypeChartData.items}
+                            dataKey="count"
+                            nameKey="name"
+                            innerRadius={46}
+                            outerRadius={66}
+                            stroke="#ffffff"
+                            strokeWidth={2}
+                            paddingAngle={2}
+                          >
+                            {deviceTypeChartData.items.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
+                            itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
+                            labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
+                            formatter={(value: any, name: any) => [
+                              `${formatNumber(value)} devices (${formatChartPercentage(Number(value), deviceTypeChartData.total)})`,
+                              String(name),
+                            ]}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="di-donut-center">
+                        <span className="di-donut-center-val">
+                          {formatNumber(deviceTypeChartData.total)}
                         </span>
-                        <span className="di-hardware-legend-right">
-                          <b className="di-legend-num">{formatNumber(item.count)}</b>
-                          <span className="di-pct-pill">{pct}</span>
-                        </span>
+                        <span className="di-donut-center-lbl">Devices</span>
                       </div>
-                    );
-                  })}
+                    </>
+                  ) : (
+                    <div className="di-empty">No device type data</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Section 3: By Category (Donut Chart - STORE and CORPORATE only) */}
+              <div
+                className="di-hardware-section"
+                data-testid="chart-by-category"
+                data-secondary-testid="chart-by-device-type-and-category"
+              >
+                <div className="di-hardware-section-header">
+                  <span className="di-hardware-section-title">By Category</span>
+                </div>
+
+                {/* Legend showing STORE and CORPORATE horizontally with live counts */}
+                <div className="di-section-legend-line">
+                  <span className="di-source-legend-item">
+                    <i className="di-source-legend-dot" style={{ backgroundColor: '#4169E1' }} />
+                    <span className="di-source-legend-name">STORE</span>
+                    <span className="di-source-legend-count">
+                      {formatNumber(categoryChartData.items[0]?.count)}
+                    </span>
+                  </span>
+                  <span className="di-source-legend-item">
+                    <i className="di-source-legend-dot" style={{ backgroundColor: '#14B8A6' }} />
+                    <span className="di-source-legend-name">CORPORATE</span>
+                    <span className="di-source-legend-count">
+                      {formatNumber(categoryChartData.items[1]?.count)}
+                    </span>
+                  </span>
+                </div>
+
+                <div className="di-section-chart-box">
+                  {categoryChartData.total > 0 ? (
+                    <>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={categoryChartData.items}
+                            dataKey="count"
+                            nameKey="name"
+                            innerRadius={46}
+                            outerRadius={66}
+                            stroke="#ffffff"
+                            strokeWidth={2}
+                            paddingAngle={2}
+                          >
+                            {categoryChartData.items.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
+                            itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
+                            labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
+                            formatter={(value: any, name: any) => [
+                              `${formatNumber(value)} assets (${formatChartPercentage(Number(value), categoryChartData.total)})`,
+                              String(name),
+                            ]}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="di-donut-center">
+                        <span className="di-donut-center-val">
+                          {formatNumber(categoryChartData.total)}
+                        </span>
+                        <span className="di-donut-center-lbl">Assets</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="di-empty">No category data</div>
+                  )}
                 </div>
               </div>
             </div>
           )}
         </ChartCard>
+      </div>
 
-        {/* 3. Assets by Department */}
+      {/* Row 2 — Assets by Department | EOL Status Distribution | EOL Exposure by Hardware Model */}
+      <div className="di-row-2">
+        {/* Card 1: Assets by Department (Horizontal Bar Chart) */}
         <ChartCard
           title="Assets by Department"
-          description="Top 10 departments by asset count"
+          description="Top 10 departments ranked by active asset count"
         >
-          <div className="di-chart-box di-department-chart-box">
+          <div className="di-row-2-chart-box">
             {topDepartments.length ? (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   layout="vertical"
                   data={topDepartments}
-                  margin={{ top: 8, right: 34, left: 2, bottom: 4 }}
+                  margin={{ top: 10, right: 42, left: 8, bottom: 6 }}
                 >
                   <CartesianGrid stroke="#e8ecf2" strokeDasharray="3 3" horizontal={false} />
                   <XAxis
@@ -1164,15 +1370,18 @@ export const DashboardPage: React.FC = () => {
                   <YAxis
                     type="category"
                     dataKey="department"
-                    width={125}
-                    tick={{ fontSize: 11, fill: '#334155' }}
-                    tickFormatter={(dept: any) => formatDepartmentDisplayName(String(dept))}
+                    width={146}
+                    interval={0}
+                    tick={renderDepartmentTick}
                     axisLine={false}
                     tickLine={false}
                   />
                   <Tooltip
                     cursor={{ fill: 'rgba(241, 245, 249, 0.65)' }}
-                    formatter={(value: any) => [`${formatNumber(value)} assets`, 'Asset Count']}
+                    formatter={(value: any) => [
+                      `${formatNumber(value)} assets (${formatChartPercentage(Number(value), totalTopDeptCount)})`,
+                      'Asset Count',
+                    ]}
                     labelFormatter={(label: any) =>
                       `Department: ${formatDepartmentDisplayName(String(label))}`
                     }
@@ -1184,12 +1393,12 @@ export const DashboardPage: React.FC = () => {
                     dataKey="count"
                     name="Assets"
                     radius={[0, 4, 4, 0]}
-                    maxBarSize={18}
+                    maxBarSize={16}
                   >
                     {topDepartments.map((dept, index) => (
                       <Cell
                         key={dept.department || index}
-                        fill={departmentColors[index] || '#4f46e5'}
+                        fill={DEPARTMENT_PALETTE[index % DEPARTMENT_PALETTE.length]}
                       />
                     ))}
                     <LabelList
@@ -1208,285 +1417,261 @@ export const DashboardPage: React.FC = () => {
             )}
           </div>
         </ChartCard>
-      </div>
 
-      {/* Row 3 — EOL Status Distribution | EOL Exposure by Model */}
-      <div className="di-chart-row-equal">
-        {/* Left: EOL Status Distribution */}
+        {/* Card 2: EOL Status Distribution (Vertical Column Chart) */}
         <ChartCard
           title="EOL Status Distribution"
-          description="Hardware lifecycle support & expiration posture"
+          description="Asset lifecycle posture: Active, EOL soon, Expired, and Unknown"
         >
-          <div className="di-chart-box">
-            {eolData.length ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={eolData}
+          <div className="di-row-2-chart-box">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={eolStatusDistribution.items}
+                margin={{ top: 22, right: 16, left: -10, bottom: 8 }}
+              >
+                <CartesianGrid stroke="#e8ecf2" strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="key"
+                  interval={0}
+                  tick={renderEolColumnTick}
+                  axisLine={{ stroke: '#cbd5e1' }}
+                  tickLine={false}
+                  height={42}
+                />
+                <YAxis
+                  type="number"
+                  allowDecimals={false}
+                  tick={{ fontSize: 10.5, fill: '#64748b' }}
+                  axisLine={{ stroke: '#cbd5e1' }}
+                  tickLine={false}
+                  width={36}
+                  domain={[0, (dataMax: number) => Math.max(5, Math.ceil(dataMax * 1.15))]}
+                />
+                <Tooltip
+                  cursor={{ fill: 'rgba(241, 245, 249, 0.65)' }}
+                  formatter={(value: any, _name: any, item: any) => [
+                    `${formatNumber(value)} assets (${formatChartPercentage(Number(value), eolStatusDistribution.totalFleet)})`,
+                    item?.payload?.label || item?.payload?.key || 'Status',
+                  ]}
+                  contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
+                  itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
+                  labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
+                />
+                <Bar
+                  dataKey="count"
+                  name="Assets"
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={36}
+                >
+                  {eolStatusDistribution.items.map((entry) => (
+                    <Cell key={entry.key} fill={entry.color} />
+                  ))}
+                  <LabelList
                     dataKey="count"
-                    nameKey="status"
-                    innerRadius={0}
-                    outerRadius={84}
-                    stroke="#fff"
-                    strokeWidth={2}
-                  >
-                    {eolData.map((item) => (
-                      <Cell
-                        key={item.status}
-                        fill={getEolColor(item.status)}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: any, name: any) => [
-                      `${formatNumber(value)} assets (${formatChartPercentage(Number(value), totalEolCount)})`,
-                      formatEolStatusLabel(String(name)),
-                    ]}
-                    contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
-                    itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
-                    labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
+                    position="top"
+                    fill="#334155"
+                    fontSize={11}
+                    fontWeight={600}
+                    formatter={(val: any) => formatNumber(val)}
+                    offset={8}
                   />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="di-empty">No EOL status data available</div>
-            )}
-          </div>
-          <div className="di-eol-legend">
-            {eolData.map((item) => {
-              const pct = formatChartPercentage(item.count, totalEolCount);
-              return (
-                <div key={item.status} className="di-eol-legend-item">
-                  <span className="di-eol-legend-label">
-                    <i style={{ background: getEolColor(item.status) }} />
-                    <span className="di-eol-legend-text">
-                      {formatEolStatusLabel(item.status)}
-                    </span>
-                  </span>
-                  <div className="di-eol-legend-vals">
-                    <b>{formatNumber(item.count)}</b>
-                    <span className="di-pct-pill">{pct}</span>
-                  </div>
-                </div>
-              );
-            })}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </ChartCard>
 
-        {/* Right: EOL Exposure by Model */}
+        {/* Card 3: EOL Exposure by Hardware Model (Standard Horizontal Bar Chart) */}
         <ChartCard
           title="EOL Exposure by Hardware Model"
-          description="Models past or nearing end of life (bar height = assets affected)"
+          description="Hardware models with expired or approaching lifecycle boundaries"
         >
-          <div className="di-chart-box di-model-chart-box">
-            <div className="di-model-chart-container">
-              {eolExposureFormatted.length ? (
-                <div
-                  className="di-model-chart"
-                  style={{
-                    width: `${Math.max(100, eolExposureFormatted.length * 68)}px`,
-                    minWidth: '100%',
-                    height: '240px',
-                  }}
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={eolExposureFormatted}
-                      margin={{ top: 20, right: 16, left: 0, bottom: 48 }}
+          <div className="di-row-2-chart-box di-scrollable-y">
+            {eolExposureFormatted.length ? (
+              <div style={{ height: `${Math.max(280, eolExposureFormatted.length * 36)}px`, width: '100%' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    layout="vertical"
+                    data={eolExposureFormatted}
+                    margin={{ top: 8, right: 38, left: 6, bottom: 8 }}
+                  >
+                    <CartesianGrid stroke="#e8ecf2" strokeDasharray="3 3" horizontal={false} />
+                    <XAxis
+                      type="number"
+                      allowDecimals={false}
+                      tick={{ fontSize: 10.5, fill: '#64748b' }}
+                      axisLine={{ stroke: '#cbd5e1' }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="shortModel"
+                      width={138}
+                      tick={renderModelTick}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      cursor={{ fill: 'rgba(241, 245, 249, 0.65)' }}
+                      labelFormatter={(_label: any, payload: readonly any[]) => {
+                        const fullModel = payload?.[0]?.payload?.originalModel || _label;
+                        return `Model: ${fullModel}`;
+                      }}
+                      formatter={(value: any, _name: any, item: any) => [
+                        `${formatNumber(value)} assets`,
+                        formatEolStatusLabel(item?.payload?.eol_status || 'EOL status'),
+                      ]}
+                      contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
+                      itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
+                      labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
+                    />
+                    <Bar
+                      dataKey="count"
+                      name="Affected assets"
+                      maxBarSize={18}
+                      radius={[0, 4, 4, 0]}
                     >
-                      <CartesianGrid stroke="#e8ecf2" strokeDasharray="4 4" vertical={false} />
-                      <XAxis
-                        dataKey="shortModel"
-                        interval={0}
-                        angle={-22}
-                        textAnchor="end"
-                        height={55}
-                        tick={{ fontSize: 10, fill: '#64748b', fontWeight: 500 }}
-                        axisLine={{ stroke: '#cbd5e1' }}
-                        tickLine={false}
-                      />
-                      <YAxis
-                        allowDecimals={false}
-                        tick={{ fontSize: 11, fill: '#64748b' }}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      <Tooltip
-                        labelFormatter={(_label: any, payload: readonly any[]) => {
-                          const fullModel = payload?.[0]?.payload?.originalModel || _label;
-                          return `Model: ${fullModel}`;
-                        }}
-                        formatter={(value: any, _name: any, item: any) => [
-                          `${formatNumber(value)} assets`,
-                          formatEolStatusLabel(item?.payload?.eol_status || 'EOL status'),
-                        ]}
-                        contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
-                        itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
-                        labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
-                      />
-                      <Bar
-                        dataKey="count"
-                        name="Affected assets"
-                        maxBarSize={44}
-                        radius={[4, 4, 0, 0]}
-                      >
-                        {eolExposureFormatted.map((item) => (
-                          <Cell
-                            key={item.originalModel}
-                            fill={getEolColor(item.eol_status)}
-                            tabIndex={0}
-                            aria-label={`Model: ${item.originalModel}, ${formatNumber(item.count)} assets, EOL status: ${formatEolStatusLabel(item.eol_status)}`}
-                          >
-                            <title>{`${item.originalModel}: ${formatNumber(item.count)} assets (${formatEolStatusLabel(item.eol_status)})`}</title>
-                          </Cell>
-                        ))}
-                        <LabelList
-                          dataKey="count"
-                          position="top"
-                          fill="#334155"
-                          fontSize={11}
-                          fontWeight={600}
-                          formatter={(val: any) => formatNumber(val)}
+                      {eolExposureFormatted.map((item) => (
+                        <Cell
+                          key={item.originalModel}
+                          fill={getEolColor(item.eol_status)}
                         />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <div className="di-empty">No EOL exposure found</div>
-              )}
-            </div>
-          </div>
-          <div className="di-legend di-legend-wrap">
-            {['EXPIRED', 'EOL SOON', 'UNKNOWN'].map((status) => (
-              <span key={status} className="di-legend-item">
-                <i style={{ background: getEolColor(status) }} />
-                <span className="di-legend-name">
-                  {status === 'EOL SOON'
-                    ? 'EOL soon (< 90 days)'
-                    : status.charAt(0) + status.slice(1).toLowerCase()}
-                </span>
-              </span>
-            ))}
+                      ))}
+                      <LabelList
+                        dataKey="count"
+                        position="right"
+                        fill="#334155"
+                        fontSize={11}
+                        fontWeight={600}
+                        formatter={(val: any) => formatNumber(val)}
+                      />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="di-empty">No EOL exposure detected in fleet</div>
+            )}
           </div>
         </ChartCard>
       </div>
 
-      {/* Row 4 — Source Summary — full available width */}
-      <ChartCard
-        title="Source Summary"
-        description="BigFix vs Jamf: inventory, assignment and end-of-life posture"
-        className="di-source-table-card"
-      >
-        <div className="di-table-scroll">
-          <table className="di-source-table">
-            <colgroup>
-              <col className="di-col-source" />
-              <col className="di-col-total" />
-              {Array.from({ length: 4 }, (_, i) => (
-                <col key={`status-${i}`} className="di-col-metric" />
-              ))}
-              {Array.from({ length: 3 }, (_, i) => (
-                <col key={`assignment-${i}`} className="di-col-metric" />
-              ))}
-              {Array.from({ length: 4 }, (_, i) => (
-                <col key={`eol-${i}`} className="di-col-metric" />
-              ))}
-            </colgroup>
-            <thead>
-              <tr className="di-group-head">
-                <th rowSpan={2}>Source</th>
-                <th colSpan={5}>Asset status</th>
-                <th colSpan={3}>Assignment</th>
-                <th colSpan={4}>EOL status</th>
-              </tr>
-              <tr className="di-sub-head">
-                <th>Total assets</th>
-                <th>Active</th>
-                <th>Need review</th>
-                <th>In stock</th>
-                <th>Retired</th>
-                <th>Auto assigned</th>
-                <th>Manual</th>
-                <th>Unassigned</th>
-                <th>Active</th>
-                <th>EOL soon</th>
-                <th>Expired</th>
-                <th>Unknown</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.source_summary.map((row) => (
-                <tr key={row.source}>
-                  <td className="di-source-name">
-                    <i style={{ background: getSourceColor(row.source) }} />
-                    {labelForSource(row.source)}
-                  </td>
-                  <td className="di-cell-total">{formatNumber(row.total)}</td>
-                  <td>
-                    <span className="di-value-pill di-green">
-                      {row.active ? formatNumber(row.active) : '–'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="di-value-pill di-amber">
-                      {row.review ? formatNumber(row.review) : '–'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="di-value-pill di-grey">
-                      {row.in_stock ? formatNumber(row.in_stock) : '–'}
-                    </span>
-                  </td>
-                  <td>{row.retired ? formatNumber(row.retired) : '–'}</td>
-                  <td className="di-separator">
-                    {row.auto ? formatNumber(row.auto) : '–'}
-                  </td>
-                  <td>{row.manual ? formatNumber(row.manual) : '–'}</td>
-                  <td>{row.unassigned ? formatNumber(row.unassigned) : '–'}</td>
-                  <td className="di-separator">
-                    <span className="di-value-pill di-green">
-                      {row.eol_active ? formatNumber(row.eol_active) : '–'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="di-value-pill di-amber">
-                      {row.eol_soon ? formatNumber(row.eol_soon) : '–'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="di-value-pill di-red">
-                      {row.eol_expired ? formatNumber(row.eol_expired) : '–'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="di-value-pill di-grey">
-                      {row.eol_unknown ? formatNumber(row.eol_unknown) : '–'}
-                    </span>
-                  </td>
+      {/* Row 3 — Source Summary (Full Width) */}
+      <div className="di-row-3">
+        <ChartCard
+          title="Source Summary"
+          description="BigFix vs Jamf reconciliation: inventory, assignment governance, and end-of-life posture"
+        >
+          <div className="di-table-scroll">
+            <table className="di-source-table">
+              <colgroup>
+                <col className="di-col-source" />
+                <col className="di-col-total" />
+                {Array.from({ length: 4 }, (_, i) => (
+                  <col key={`status-${i}`} className="di-col-metric" />
+                ))}
+                {Array.from({ length: 3 }, (_, i) => (
+                  <col key={`assignment-${i}`} className="di-col-metric" />
+                ))}
+                {Array.from({ length: 4 }, (_, i) => (
+                  <col key={`eol-${i}`} className="di-col-metric" />
+                ))}
+              </colgroup>
+              <thead>
+                <tr className="di-group-head">
+                  <th rowSpan={2}>Source</th>
+                  <th colSpan={5}>Asset status</th>
+                  <th colSpan={3}>Assignment</th>
+                  <th colSpan={4}>EOL status</th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td>Total</td>
-                <td className="di-cell-total">{formatNumber(summaryTotals.total)}</td>
-                <td>{formatNumber(summaryTotals.active)}</td>
-                <td>{formatNumber(summaryTotals.review)}</td>
-                <td>{formatNumber(summaryTotals.in_stock)}</td>
-                <td>{formatNumber(summaryTotals.retired)}</td>
-                <td className="di-separator">{formatNumber(summaryTotals.auto)}</td>
-                <td>{formatNumber(summaryTotals.manual)}</td>
-                <td>{formatNumber(summaryTotals.unassigned)}</td>
-                <td className="di-separator">{formatNumber(summaryTotals.eol_active)}</td>
-                <td>{formatNumber(summaryTotals.eol_soon)}</td>
-                <td>{formatNumber(summaryTotals.eol_expired)}</td>
-                <td>{formatNumber(summaryTotals.eol_unknown)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </ChartCard>
+                <tr className="di-sub-head">
+                  <th>Total assets</th>
+                  <th>Active</th>
+                  <th>Need review</th>
+                  <th>In stock</th>
+                  <th>Retired</th>
+                  <th>Auto assigned</th>
+                  <th>Manual</th>
+                  <th>Unassigned</th>
+                  <th>Active</th>
+                  <th>EOL soon</th>
+                  <th>Expired</th>
+                  <th>Unknown</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.source_summary.map((row) => (
+                  <tr key={row.source}>
+                    <td className="di-source-name">
+                      <i style={{ background: getSourceColor(row.source) }} />
+                      {labelForSource(row.source)}
+                    </td>
+                    <td className="di-cell-total">{formatNumber(row.total)}</td>
+                    <td>
+                      <span className="di-status-val di-status-val-green">
+                        {row.active ? formatNumber(row.active) : '–'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="di-status-val di-status-val-amber">
+                        {row.review ? formatNumber(row.review) : '–'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="di-status-val di-status-val-blue">
+                        {row.in_stock ? formatNumber(row.in_stock) : '–'}
+                      </span>
+                    </td>
+                    <td>{row.retired ? formatNumber(row.retired) : '–'}</td>
+                    <td className="di-separator">
+                      {row.auto ? formatNumber(row.auto) : '–'}
+                    </td>
+                    <td>{row.manual ? formatNumber(row.manual) : '–'}</td>
+                    <td>{row.unassigned ? formatNumber(row.unassigned) : '–'}</td>
+                    <td className="di-separator">
+                      <span className="di-status-val di-status-val-green">
+                        {row.eol_active ? formatNumber(row.eol_active) : '–'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="di-status-val di-status-val-amber">
+                        {row.eol_soon ? formatNumber(row.eol_soon) : '–'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="di-status-val di-status-val-red">
+                        {row.eol_expired ? formatNumber(row.eol_expired) : '–'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="di-status-val di-status-val-slate">
+                        {row.eol_unknown ? formatNumber(row.eol_unknown) : '–'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td>Total</td>
+                  <td className="di-cell-total">{formatNumber(summaryTotals.total)}</td>
+                  <td>{formatNumber(summaryTotals.active)}</td>
+                  <td>{formatNumber(summaryTotals.review)}</td>
+                  <td>{formatNumber(summaryTotals.in_stock)}</td>
+                  <td>{formatNumber(summaryTotals.retired)}</td>
+                  <td className="di-separator">{formatNumber(summaryTotals.auto)}</td>
+                  <td>{formatNumber(summaryTotals.manual)}</td>
+                  <td>{formatNumber(summaryTotals.unassigned)}</td>
+                  <td className="di-separator">{formatNumber(summaryTotals.eol_active)}</td>
+                  <td>{formatNumber(summaryTotals.eol_soon)}</td>
+                  <td>{formatNumber(summaryTotals.eol_expired)}</td>
+                  <td>{formatNumber(summaryTotals.eol_unknown)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </ChartCard>
+      </div>
     </div>
   );
 };

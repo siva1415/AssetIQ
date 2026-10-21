@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     # Governance & EOL Thresholds
     EOL_WARNING_DAYS: int = 90
 
+    # Authentication & Security
+    JWT_SECRET_KEY: str = "assetiq-super-secret-jwt-signing-key-production-change"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
+    DEFAULT_TEMPORARY_PASSWORD: str = "test@123"
+    LOGIN_RATE_LIMIT_MAX_ATTEMPTS: int = 5
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 300
+
     # Pagination Defaults
     DEFAULT_PAGE_SIZE: int = 25
     MAX_PAGE_SIZE: int = 100
