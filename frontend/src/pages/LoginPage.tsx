@@ -15,7 +15,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import michaelsLogo from '../assets/Logo.svg';
+import michaelsLogo from '../assets/logo.svg';
 import loginOfficeBg from '../assets/images/login_office_environment.jpg';
 
 export const LoginPage: React.FC = () => {
@@ -191,14 +191,14 @@ export const LoginPage: React.FC = () => {
         {/* Top-Left Content: Headline & 4 Capability Badges */}
         <div className="relative z-10 px-8 pt-10 sm:px-12 sm:pt-14 lg:px-14 lg:pt-16 max-w-3xl">
           {/* Main Headline */}
-          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-semibold text-white tracking-tight leading-[1.22] drop-shadow-md">
+          <h1 className="relative -top-8 sm:-top-10 text-2xl sm:text-3xl lg:text-4xl font-semibold text-white tracking-tight leading-[1.22] drop-shadow-md">
             Smarter Asset Intelligence
             <br />
             for a Connected Tomorrow
           </h1>
 
-          {/* Four Capability Badges — Single row on desktop, balanced grid on smaller viewports */}
-          <div className="mt-8 sm:mt-10 grid grid-cols-2 sm:grid-cols-4 lg:flex lg:flex-nowrap items-center gap-5 sm:gap-6 lg:gap-8">
+          {/* Four Capability Badges — 2-row, 2-column layout */}
+          <div className="relative -left-6 sm:-left-8 mt-8 sm:mt-10 grid grid-cols-2 gap-y-6 gap-x-8 sm:gap-y-7 sm:gap-x-12 max-w-xs sm:max-w-sm">
             {/* 1. Device Discovery */}
             <div className="flex flex-col items-center gap-2 group cursor-default">
               <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full border border-sky-400/50 bg-sky-950/40 backdrop-blur-md flex items-center justify-center text-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.35)] transition-all group-hover:border-sky-300 group-hover:shadow-[0_0_20px_rgba(56,189,248,0.6)]">

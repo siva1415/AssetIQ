@@ -597,3 +597,124 @@ def test_performance_simulation_and_pagination_scaling(client: TestClient, db_se
     assert elapsed_ms < 500, f"Query took {elapsed_ms:.2f}ms, expected sub-500ms"
 
 
+def test_employee_detail_numeric_and_string_identifiers(client: TestClient, db_session):
+    """
+    Test GET /api/employees/{employee_id} with both numeric and string identifiers:
+    - Numeric employee ID: /api/employees/1582
+    - String identifier: /api/employees/SYNTHUSER01582
+    - String identifier: /api/employees/MOCKEMP1338
+    - Numeric lookup for existing seeded employee: /api/employees/1
+    - String lookup for existing seeded employee: /api/employees/johndoe
+    - Unknown numeric ID returns 404 (not 422)
+    - Unknown string ID returns 404 (not 422)
+    """
+    from datetime import datetime, timezone
+    from app.models.workday_employee import WorkdayEmployee
+    from app.models.asset import Asset
+
+    now_utc = datetime.now(timezone.utc)
+
+    # Seed test employees
+    emp_synth = WorkdayEmployee(
+        employee_id=1582,
+        user_id="SYNTHUSER01582",
+        full_name="Synthetic User 1582",
+        email_work="synth.1582@enterprise.com",
+        department="Engineering",
+        division="Core Platform",
+        job_title="Software Architect",
+        employee_status="Active",
+        location="Seattle, WA",
+        created_at=now_utc,
+    )
+    emp_mock = WorkdayEmployee(
+        employee_id=2001,
+        user_id="MOCKEMP1338",
+        full_name="Mock Employee 1338",
+        email_work="mock.1338@enterprise.com",
+        department="Operations",
+        division="Logistics",
+        job_title="Operations Lead",
+        employee_status="Active",
+        location="Chicago, IL",
+        created_at=now_utc,
+    )
+    # Seed an asset correlated to SYNTHUSER01582
+    asset_synth = Asset(
+        asset_id=8801,
+        asset_number="AST-SYNTH-1582",
+        serial_number="SN-SYNTH-8801",
+        source="JAMF",
+        manufacturer="Apple",
+        model="MacBook Pro 16",
+        os_name="macOS Sonoma",
+        devicetype="Laptop",
+        assigned_username="SYNTHUSER01582",
+        asset_status="ACTIVE",
+        created_at=now_utc,
+    )
+
+    db_session.add_all([emp_synth, emp_mock, asset_synth])
+    db_session.commit()
+
+    # 1. Validation: GET /api/employees/1582 — numeric employee ID works as before
+    res_num = client.get("/api/employees/1582")
+    assert res_num.status_code == 200, res_num.text
+    data_num = res_num.json()
+    assert data_num["employee_id"] == 1582
+    assert data_num["user_id"] == "SYNTHUSER01582"
+    assert data_num["full_name"] == "Synthetic User 1582"
+    assert data_num["assigned_assets_count"] == 1
+    assert data_num["assigned_assets"][0]["asset_number"] == "AST-SYNTH-1582"
+
+    # 2. Validation: GET /api/employees/SYNTHUSER01582 — string employee identifier resolves correctly
+    res_str = client.get("/api/employees/SYNTHUSER01582")
+    assert res_str.status_code == 200, res_str.text
+    data_str = res_str.json()
+    assert data_str["employee_id"] == 1582
+    assert data_str["user_id"] == "SYNTHUSER01582"
+    assert data_str["full_name"] == "Synthetic User 1582"
+    assert data_str["assigned_assets_count"] == 1
+    assert data_str["assigned_assets"][0]["asset_number"] == "AST-SYNTH-1582"
+
+    # 2b. Case-insensitive lookup for string identifier
+    res_str_lower = client.get("/api/employees/synthuser01582")
+    assert res_str_lower.status_code == 200
+    assert res_str_lower.json()["employee_id"] == 1582
+
+    # 3. Validation: GET /api/employees/MOCKEMP1338 — string employee identifier resolves correctly
+    res_mock = client.get("/api/employees/MOCKEMP1338")
+    assert res_mock.status_code == 200, res_mock.text
+    data_mock = res_mock.json()
+    assert data_mock["employee_id"] == 2001
+    assert data_mock["user_id"] == "MOCKEMP1338"
+    assert data_mock["full_name"] == "Mock Employee 1338"
+
+    # 3b. Numeric lookup for MOCKEMP1338's numeric ID (2001)
+    res_mock_num = client.get("/api/employees/2001")
+    assert res_mock_num.status_code == 200
+    assert res_mock_num.json()["user_id"] == "MOCKEMP1338"
+
+    # 4. Backward-compatibility: seeded employee by numeric ID (1) and string user_id ("johndoe")
+    res_emp1_num = client.get("/api/employees/1")
+    assert res_emp1_num.status_code == 200
+    assert res_emp1_num.json()["user_id"] == "johndoe"
+
+    res_emp1_str = client.get("/api/employees/johndoe")
+    assert res_emp1_str.status_code == 200
+    assert res_emp1_str.json()["employee_id"] == 1
+
+    # 5. Validation: Unknown identifiers return 404 not-found (never 422 Unprocessable Entity)
+    res_unknown_num = client.get("/api/employees/999888777")
+    assert res_unknown_num.status_code == 404
+    assert "detail" in res_unknown_num.json()
+
+    res_unknown_str = client.get("/api/employees/SYNTHUSER_NONEXISTENT")
+    assert res_unknown_str.status_code == 404
+    assert "detail" in res_unknown_str.json()
+
+    res_unknown_code = client.get("/api/employees/NOTANEMP12345")
+    assert res_unknown_code.status_code == 404
+    assert "detail" in res_unknown_code.json()
+
+

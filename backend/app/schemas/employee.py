@@ -1,6 +1,34 @@
 from datetime import date, datetime
-from typing import Any, List, Optional
-from pydantic import BaseModel, ConfigDict, model_validator
+from typing import Any, List, Optional, Union
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+
+class ReportingEvp(BaseModel):
+    """
+    Structured Reporting EVP information for assigned users in the Executive hierarchy.
+    """
+    full_name: str
+    user_id: str
+    job_title: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @field_validator("full_name", "user_id", mode="before")
+    @classmethod
+    def clean_strings(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("job_title", mode="before")
+    @classmethod
+    def clean_job_title(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            cleaned = v.strip()
+            return cleaned if cleaned else None
+        return str(v).strip() or None
 
 
 class EmployeeSummary(BaseModel):
@@ -17,6 +45,7 @@ class EmployeeSummary(BaseModel):
     job_title: Optional[str] = None
     employee_status: Optional[str] = None
     location: Optional[str] = None
+    reporting_evp: Optional[Union[ReportingEvp, str]] = None
 
     # camelCase aliases
     employeeId: Optional[int] = None
@@ -25,6 +54,7 @@ class EmployeeSummary(BaseModel):
     emailWork: Optional[str] = None
     jobTitle: Optional[str] = None
     employeeStatus: Optional[str] = None
+    reportingEvp: Optional[Union[ReportingEvp, str]] = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -43,6 +73,7 @@ class EmployeeSummary(BaseModel):
                 "job_title": getattr(data, "job_title", None),
                 "employee_status": getattr(data, "employee_status", None),
                 "location": getattr(data, "location", None),
+                "reporting_evp": getattr(data, "reporting_evp", None),
             }
             data = d
         if isinstance(data, dict):
@@ -69,6 +100,10 @@ class EmployeeSummary(BaseModel):
             es = data.get("employee_status", data.get("employeeStatus"))
             data["employee_status"] = es
             data["employeeStatus"] = es
+
+            revp = data.get("reporting_evp", data.get("reportingEvp"))
+            data["reporting_evp"] = revp
+            data["reportingEvp"] = revp
         return data
 
 

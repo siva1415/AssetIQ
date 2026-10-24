@@ -89,9 +89,19 @@ class AuditService:
     ) -> List[AuditLog]:
         if not entries:
             return []
-        db.add_all(entries)
-        if commit:
-            db.commit()
+        try:
+            if len(entries) > 50:
+                for i in range(0, len(entries), 1000):
+                    db.bulk_save_objects(entries[i:i + 1000])
+            else:
+                db.add_all(entries)
+            if commit:
+                db.commit()
+        except Exception as exc:
+            logger.warning(f"bulk_save_objects encountered error: {exc}; falling back to add_all")
+            db.add_all(entries)
+            if commit:
+                db.commit()
         return entries
 
     @classmethod

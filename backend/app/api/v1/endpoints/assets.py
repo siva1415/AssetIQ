@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List, Optional, Union
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.api.deps import PaginationParams, get_authenticated_actor, get_database, verify_admin_access
@@ -45,6 +45,8 @@ def list_assets(
     device_type: Optional[str] = Query(None, include_in_schema=False),
     deviceType: Optional[str] = Query(None, include_in_schema=False),
     DeviceType: Optional[str] = Query(None, include_in_schema=False),
+    category: Optional[str] = Query(None, description="Filter by asset category (STORE or CORPORATE)"),
+    Category: Optional[str] = Query(None, include_in_schema=False),
     eol_status: Optional[str] = Query(None, description="Filter by EOL status (ACTIVE, EOL SOON, EXPIRED, UNKNOWN)"),
     eolStatus: Optional[str] = Query(None, include_in_schema=False),
     manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
@@ -65,6 +67,7 @@ def list_assets(
     Query the enterprise hardware inventory with multi-dimensional filtering and pagination.
     """
     effective_devicetype = devicetype or device_type or deviceType or DeviceType
+    effective_category = category or Category
     effective_eol_status = eol_status or eolStatus
     effective_assignment_type = assignment_type or assignmentType
     effective_sort_by = sort_by or sortBy
@@ -103,6 +106,7 @@ def list_assets(
         source=resolved_source,
         asset_status=asset_status,
         devicetype=effective_devicetype,
+        category=effective_category,
         manufacturer=manufacturer,
         model=model,
         assigned_username=assigned_username,
@@ -165,6 +169,8 @@ def export_assets(
     device_type: Optional[str] = Query(None, include_in_schema=False),
     deviceType: Optional[str] = Query(None, include_in_schema=False),
     DeviceType: Optional[str] = Query(None, include_in_schema=False),
+    category: Optional[str] = Query(None, description="Filter by asset category (STORE or CORPORATE)"),
+    Category: Optional[str] = Query(None, include_in_schema=False),
     eol_status: Optional[str] = Query(None, description="Filter by EOL status (ACTIVE, EOL SOON, EXPIRED, UNKNOWN)"),
     eolStatus: Optional[str] = Query(None, include_in_schema=False),
     manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
@@ -188,6 +194,7 @@ def export_assets(
     - Supports unlimited records (50,000+) streamed with constant memory usage.
     """
     effective_devicetype = devicetype or device_type or deviceType or DeviceType
+    effective_category = category or Category
     effective_eol_status = eol_status or eolStatus
     effective_assignment_type = assignment_type or assignmentType
     effective_sort_by = sort_by or sortBy
@@ -280,6 +287,7 @@ def export_assets(
                 source=resolved_source,
                 asset_status=asset_status,
                 devicetype=effective_devicetype,
+                category=effective_category,
                 manufacturer=manufacturer,
                 model=model,
                 assigned_username=assigned_username,
@@ -324,6 +332,7 @@ def export_assets(
             source=resolved_source,
             asset_status=asset_status,
             devicetype=effective_devicetype,
+            category=effective_category,
             manufacturer=manufacturer,
             model=model,
             assigned_username=assigned_username,
@@ -500,6 +509,26 @@ def get_assets_operational_status(
     response_model=AssetDetailResponse,
     include_in_schema=False,
 )
+@router.post(
+    "/ownership/assign",
+    response_model=AssetDetailResponse,
+    include_in_schema=False,
+)
+@router.put(
+    "/ownership/assign",
+    response_model=AssetDetailResponse,
+    include_in_schema=False,
+)
+@router.post(
+    "/ownership/reassign",
+    response_model=AssetDetailResponse,
+    include_in_schema=False,
+)
+@router.put(
+    "/ownership/reassign",
+    response_model=AssetDetailResponse,
+    include_in_schema=False,
+)
 def assign_asset_payload(
     payload: AssetAssignmentRequest,
     current_admin: str = Depends(verify_admin_access),
@@ -510,13 +539,43 @@ def assign_asset_payload(
     Collection-level assignment endpoint for popups sending asset_id in JSON payload.
     Supports POST and PUT with exact uppercase asset_status validation.
     """
-    target_id = payload.asset_id or payload.assetId or payload.AssetID
+    target_id = (
+        payload.asset_id
+        if payload.asset_id is not None
+        else (
+            payload.assetId
+            if payload.assetId is not None
+            else (
+                payload.AssetID
+                if payload.AssetID is not None
+                else (
+                    payload.asset_number
+                    if payload.asset_number is not None
+                    else (
+                        payload.assetNumber
+                        if payload.assetNumber is not None
+                        else (
+                            payload.AssetNumber
+                            if payload.AssetNumber is not None
+                            else (
+                                payload.asset_tag
+                                if payload.asset_tag is not None
+                                else payload.assetTag
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
     if not target_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Asset ID is required for assignment",
+            detail="Asset identifier (asset_id or asset_number) is required for assignment",
         )
-    return AssetService.assign_asset(db=db, asset_id=int(target_id), payload=payload, actor=actor)
+    return AssetService.assign_asset(
+        db=db, asset_id=target_id, payload=payload, is_assignment_action=True, actor=actor
+    )
 
 
 @router.post(
@@ -550,6 +609,8 @@ def bulk_assign_assets(
     devicetype: Optional[str] = Query(None, description="Filter by device type (Server or Desktop)"),
     device_type: Optional[str] = Query(None, include_in_schema=False),
     deviceType: Optional[str] = Query(None, include_in_schema=False),
+    category: Optional[str] = Query(None, description="Filter by asset category (STORE or CORPORATE)"),
+    Category: Optional[str] = Query(None, include_in_schema=False),
     manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
     model: Optional[str] = Query(None, description="Filter by hardware model"),
     assignment_type: Optional[str] = Query(None, description="Filter by assignment model (AUTO or MANUAL)"),
@@ -557,6 +618,8 @@ def bulk_assign_assets(
     eol_status: Optional[str] = Query(None, description="Filter by EOL lifecycle status"),
     scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership, reports)"),
     report: Optional[str] = Query(None, description="Report card scope"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", include_in_schema=False),
+    x_idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key", include_in_schema=False),
     current_admin: str = Depends(verify_admin_access),
     actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
@@ -568,7 +631,8 @@ def bulk_assign_assets(
     - ID-based selection (asset_ids: [1, 2, ...])
     - Select-all matching assets across all pagination pages matching search and filters
     - Mandatory remarks handling (empty/blank replaces remarks with SQL NULL)
-    - High-performance chunked updates safe for 2,000+ assets
+    - High-performance chunked updates safe for 2,675+ assets
+    - Idempotency & duplicate protection with structured counts
     """
     if select_all or select_all_matching or selectAll:
         payload.select_all = True
@@ -581,6 +645,9 @@ def bulk_assign_assets(
     eff_dev = devicetype or device_type or deviceType
     if eff_dev and not payload.devicetype:
         payload.devicetype = eff_dev
+    eff_cat = category or Category
+    if eff_cat and not payload.category:
+        payload.category = eff_cat
     if manufacturer and not payload.manufacturer:
         payload.manufacturer = manufacturer
     if model and not payload.model:
@@ -595,6 +662,9 @@ def bulk_assign_assets(
         payload.scope = scope
     if report and not payload.report:
         payload.report = report
+    header_idem = idempotency_key or x_idempotency_key
+    if header_idem and not payload.idempotency_key:
+        payload.idempotency_key = str(header_idem)
 
     return AssetService.bulk_assign_assets(db=db, payload=payload, actor=actor)
 
@@ -605,7 +675,7 @@ def bulk_assign_assets(
     summary="Detailed Asset Record with Correlated Employee & EOL",
 )
 def get_asset_by_id(
-    asset_id: int,
+    asset_id: Union[int, str],
     db: Session = Depends(get_database),
 ):
     """
@@ -645,8 +715,28 @@ def get_asset_by_id(
     response_model=AssetDetailResponse,
     include_in_schema=False,
 )
+@router.post(
+    "/ownership/{asset_id}/assign",
+    response_model=AssetDetailResponse,
+    include_in_schema=False,
+)
+@router.put(
+    "/ownership/{asset_id}/assign",
+    response_model=AssetDetailResponse,
+    include_in_schema=False,
+)
+@router.post(
+    "/ownership/{asset_id}/reassign",
+    response_model=AssetDetailResponse,
+    include_in_schema=False,
+)
+@router.put(
+    "/ownership/{asset_id}/reassign",
+    response_model=AssetDetailResponse,
+    include_in_schema=False,
+)
 def assign_asset_to_employee(
-    asset_id: int,
+    asset_id: Union[int, str],
     payload: AssetAssignmentRequest,
     current_admin: str = Depends(verify_admin_access),
     actor: Optional[AppUser] = Depends(get_authenticated_actor),
@@ -673,14 +763,15 @@ def assign_asset_to_employee(
     include_in_schema=False,
 )
 def update_or_patch_asset(
-    asset_id: int,
+    asset_id: Union[int, str],
     payload: AssetAssignmentRequest,
+    current_admin: str = Depends(verify_admin_access),
     actor: Optional[AppUser] = Depends(get_authenticated_actor),
     db: Session = Depends(get_database),
 ):
     """
-    Update or partial-patch asset records, supporting nullable fields, clearing fields with null,
-    and partial updates.
+    Update or partial-patch asset records, supporting individual field updates,
+    nullable fields, dropdown validation, and authorization checks.
     """
     return AssetService.assign_asset(
         db=db, asset_id=asset_id, payload=payload, is_assignment_action=False, actor=actor

@@ -46,6 +46,12 @@ export const MOCK_EMPLOYEES: Employee[] = [
     employee_status: 'Active',
     manager_username: 'mthorne',
     manager_name: 'Marcus Thorne',
+    reporting_evp: {
+      full_name: 'Jane Smith',
+      user_id: 'JS MITH',
+      job_title: 'Executive Vice President of Technology',
+    },
+    reporting_evp_job_title: 'Executive Vice President of Technology',
     location: 'San Francisco, CA',
     hire_date: '2021-03-15',
   },
@@ -61,6 +67,12 @@ export const MOCK_EMPLOYEES: Employee[] = [
     employee_status: 'Active',
     manager_username: 'evance',
     manager_name: 'Elena Vance',
+    reporting_evp: {
+      full_name: 'Elena Vance',
+      user_id: 'EVANCE',
+      job_title: 'Executive Vice President, Chief Operating Officer',
+    },
+    reporting_evp_job_title: 'Executive Vice President, Chief Operating Officer',
     location: 'San Francisco, CA',
     hire_date: '2019-08-01',
   },
@@ -978,6 +990,10 @@ export function bulkAssignMockAssets(
     successful.push(asset.id);
   }
 
+  const isAllSuccess = failed.length === 0 && successful.length > 0;
+  const isPartial = failed.length > 0 && successful.length > 0;
+  const status: 'success' | 'partial' | 'failure' = isAllSuccess ? 'success' : isPartial ? 'partial' : 'failure';
+
   return {
     assigned_count: successful.length,
     successful_asset_ids: successful,
@@ -985,7 +1001,64 @@ export function bulkAssignMockAssets(
     total_processed: targetAssetIds.length,
     failed_count: failed.length,
     message: `Successfully assigned ${successful.length} asset${successful.length === 1 ? '' : 's'} to ${emp.full_name} (${emp.user_id}).`,
+    success: isAllSuccess,
+    status,
   };
+}
+
+export function updateMockAsset(
+  assetId: string | number,
+  data: Record<string, any>
+): Asset {
+  const normAssetId = String(assetId).trim();
+  const asset = MOCK_ASSETS.find(
+    a => String(a.id) === normAssetId || a.asset_number === normAssetId
+  );
+  if (!asset) {
+    throw new Error(`Asset '${assetId}' was not found in the database.`);
+  }
+
+  if (data.serial_number !== undefined) {
+    const val = String(data.serial_number ?? '').trim();
+    asset.serial_number = val;
+    asset.serialNumber = val;
+  }
+  if (data.manufacturer !== undefined) {
+    const val = String(data.manufacturer ?? '').trim();
+    asset.manufacturer = val;
+  }
+  if (data.model !== undefined) {
+    const val = String(data.model ?? '').trim();
+    asset.model = val;
+  }
+  if (data.os_name !== undefined) {
+    const val = String(data.os_name ?? '').trim();
+    asset.os_name = val;
+    asset.osName = val;
+  }
+  if (data.devicetype !== undefined || data.device_type !== undefined) {
+    const val = String(data.devicetype ?? data.device_type ?? 'Laptop').trim();
+    asset.devicetype = val;
+    asset.device_type = val;
+    asset.deviceType = val;
+  }
+  if (data.managed_by !== undefined) {
+    const val = String(data.managed_by ?? 'INDIVIDUAL').trim().toUpperCase();
+    asset.managed_by = val;
+    asset.managedBy = val;
+  }
+  if (data.category !== undefined) {
+    const val = String(data.category ?? 'CORPORATE').trim().toUpperCase();
+    asset.category = val;
+  }
+  if (data.asset_status !== undefined || data.status !== undefined) {
+    const rawVal = String(data.asset_status ?? data.status ?? 'ACTIVE').trim().toUpperCase();
+    const standardStatus = rawVal === 'INSTOCK' ? 'IN STOCK' : rawVal;
+    asset.asset_status = standardStatus as any;
+    asset.assetStatus = standardStatus as any;
+  }
+
+  return { ...asset };
 }
 
 export const MOCK_ASSETS: Asset[] = [
@@ -1016,6 +1089,12 @@ export const MOCK_ASSETS: Asset[] = [
     ram_gb: 32,
     storage_gb: 1024,
     notes: 'Primary developer workstation.',
+    reporting_evp: {
+      full_name: 'Jane Smith',
+      user_id: 'JS MITH',
+      job_title: 'Executive Vice President of Technology',
+    },
+    reporting_evp_job_title: 'Executive Vice President of Technology',
   },
   {
     id: 'AST-002',
@@ -1628,6 +1707,10 @@ for (const a of MOCK_ASSETS) {
   }
   if (!a.remarks && a.notes) {
     a.remarks = a.notes;
+  }
+  if (!a.category) {
+    const dept = (a.department || '').toLowerCase();
+    a.category = dept.includes('operations') || dept.includes('retail') || dept.includes('store') ? 'STORE' : 'CORPORATE';
   }
 }
 

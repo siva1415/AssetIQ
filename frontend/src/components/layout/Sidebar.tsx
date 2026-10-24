@@ -21,6 +21,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   KeyRound,
+  Home,
+  LayoutGrid,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { isMenuVisibleForRole } from '../../config/menuConfig';
@@ -52,7 +54,7 @@ type MenuItem =
       }[];
     };
 
-// Single, authoritative navigation configuration
+// Single, authoritative navigation configuration matching reference design
 const NAV_ITEMS: MenuItem[] = [
   {
     type: 'link',
@@ -64,10 +66,10 @@ const NAV_ITEMS: MenuItem[] = [
   {
     type: 'group',
     id: 'hardware-inventory',
-    label: 'Hardware Inventory',
+    label: 'HardwareInventory',
     icon: HardDrive,
     children: [
-      { id: 'all-assets', label: 'All Assets', path: '/assets', icon: HardDrive },
+      { id: 'all-assets', label: 'All Assets', path: '/assets', icon: LayoutGrid },
       { id: 'windows-assets', label: 'Windows Assets (BigFix)', path: '/assets/windows', icon: Monitor },
       { id: 'mac-assets', label: 'Mac Assets (Jamf)', path: '/assets/mac', icon: Laptop },
     ],
@@ -75,7 +77,7 @@ const NAV_ITEMS: MenuItem[] = [
   {
     type: 'group',
     id: 'ownership-identity',
-    label: 'Ownership Management',
+    label: 'Ownership & Identity',
     icon: UserCheck,
     children: [
       { id: 'asset-ownership', label: 'Asset Ownership', path: '/ownership', icon: UserCheck },
@@ -93,7 +95,7 @@ const NAV_ITEMS: MenuItem[] = [
   {
     type: 'link',
     id: 'user-management',
-    label: 'User Management',
+    label: 'Users Management',
     path: '/users',
     icon: Users,
   },
@@ -148,7 +150,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
     navigate('/login', { replace: true });
   };
 
-  // Track expanded state for expandable groups in expanded mode
+  // Track expanded state for expandable groups in expanded mode (HardwareInventory and Ownership & Identity)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     'hardware-inventory': true,
     'ownership-identity': true,
@@ -204,7 +206,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
 
   // Filter navigation items based on current authenticated user's role
   const visibleNavItems: MenuItem[] = useMemo(() => {
-    return NAV_ITEMS.filter((item: MenuItem) => isMenuVisibleForRole(item.id, currentUser.role));
+    return NAV_ITEMS.map((item) => {
+      if (item.type === 'link') {
+        return isMenuVisibleForRole(item.id, currentUser.role) ? item : null;
+      }
+      // Group: filter visible children
+      const visibleChildren = item.children.filter((child) => {
+        if (child.id === 'all-assets' || child.id === 'windows-assets' || child.id === 'mac-assets') {
+          return isMenuVisibleForRole('hardware-inventory', currentUser.role);
+        }
+        if (child.id === 'asset-ownership' || child.id === 'eol-management' || child.id === 'admin-users') {
+          return isMenuVisibleForRole('ownership-identity', currentUser.role);
+        }
+        return isMenuVisibleForRole(child.id, currentUser.role);
+      });
+      if (visibleChildren.length === 0) return null;
+      return {
+        ...item,
+        children: visibleChildren,
+      };
+    }).filter(Boolean) as MenuItem[];
   }, [currentUser.role]);
 
   // Automatically expand parent group in expanded mode when current route belongs to it
@@ -247,6 +268,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onCloseMobile }) => {
     }
     if (path === '/users') {
       return currentPath === '/users' || currentPath === '/employees';
+    }
+    if (path === '/audit-reports') {
+      return currentPath === '/audit-reports' || currentPath === '/audit-logs';
     }
     return currentPath === path;
   };

@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { api } from '../services/api';
-import michaelsLogo from '../assets/Logo.svg';
+import michaelsLogo from '../assets/logo.svg';
 
 export const ResetPasswordPage: React.FC = () => {
   const navigate = useNavigate();

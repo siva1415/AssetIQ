@@ -81,6 +81,7 @@ import {
   deleteMockAdminUser,
   reassignMockAsset,
   bulkAssignMockAssets,
+  updateMockAsset,
   generateMockAssetsCsvExport,
   generateMockReportXlsxExport,
   buildReportXlsxFromAssets,
@@ -395,6 +396,66 @@ export function normalizeAsset(raw: any): Asset {
       raw.workday_employee?.manager_name ??
       raw.matched_employee?.manager_name ??
       null,
+    reporting_evp:
+      raw.reporting_evp ??
+      raw.reportingEvp ??
+      raw['Reporting EVP'] ??
+      raw['reporting_evp'] ??
+      raw.reporting_EVP ??
+      raw.employee?.reporting_evp ??
+      raw.employee?.reportingEvp ??
+      raw.workday_employee?.reporting_evp ??
+      raw.workday_employee?.reportingEvp ??
+      raw.matched_employee?.reporting_evp ??
+      raw.matched_employee?.reportingEvp ??
+      null,
+    reportingEvp:
+      raw.reporting_evp ??
+      raw.reportingEvp ??
+      raw['Reporting EVP'] ??
+      raw['reporting_evp'] ??
+      raw.reporting_EVP ??
+      raw.employee?.reporting_evp ??
+      raw.employee?.reportingEvp ??
+      raw.workday_employee?.reporting_evp ??
+      raw.workday_employee?.reportingEvp ??
+      raw.matched_employee?.reporting_evp ??
+      raw.matched_employee?.reportingEvp ??
+      null,
+    reporting_evp_job_title:
+      (typeof (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']) === 'object' && (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']) !== null
+        ? ((raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).job_title ?? (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).jobTitle ?? (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).title)
+        : null) ??
+      raw.reporting_evp_job_title ??
+      raw.reportingEvpJobTitle ??
+      raw['Reporting EVP Job Title'] ??
+      raw['reporting_evp_job_title'] ??
+      raw['Reporting EVP Title'] ??
+      raw.reporting_evp_title ??
+      raw.employee?.reporting_evp_job_title ??
+      raw.employee?.reportingEvpJobTitle ??
+      raw.workday_employee?.reporting_evp_job_title ??
+      raw.workday_employee?.reportingEvpJobTitle ??
+      raw.matched_employee?.reporting_evp_job_title ??
+      raw.matched_employee?.reportingEvpJobTitle ??
+      null,
+    reportingEvpJobTitle:
+      (typeof (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']) === 'object' && (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']) !== null
+        ? ((raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).job_title ?? (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).jobTitle ?? (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).title)
+        : null) ??
+      raw.reporting_evp_job_title ??
+      raw.reportingEvpJobTitle ??
+      raw['Reporting EVP Job Title'] ??
+      raw['reporting_evp_job_title'] ??
+      raw['Reporting EVP Title'] ??
+      raw.reporting_evp_title ??
+      raw.employee?.reporting_evp_job_title ??
+      raw.employee?.reportingEvpJobTitle ??
+      raw.workday_employee?.reporting_evp_job_title ??
+      raw.workday_employee?.reportingEvpJobTitle ??
+      raw.matched_employee?.reporting_evp_job_title ??
+      raw.matched_employee?.reportingEvpJobTitle ??
+      null,
     employee_status: employeeStatus,
     employeeStatus,
     workday_status: workdayStatus,
@@ -411,6 +472,26 @@ export function normalizeAsset(raw: any): Asset {
     storage_gb: raw.storage_gb ?? raw.storageGb,
     notes: raw.notes ?? raw['Notes'] ?? raw.remarks ?? raw['Remarks'] ?? '',
     remarks: raw.remarks ?? raw['Remarks'] ?? raw.notes ?? raw['Notes'] ?? '',
+    category: (() => {
+      const rawCat =
+        raw.category ??
+        raw.Category ??
+        raw.asset_category ??
+        raw.assetCategory ??
+        raw['Asset Category'] ??
+        raw.device_category ??
+        raw.deviceCategory ??
+        raw['Category'];
+      if (rawCat !== undefined && rawCat !== null && String(rawCat).trim() !== '') {
+        return String(rawCat).trim().toUpperCase();
+      }
+      return (raw.department &&
+       (raw.department.toLowerCase().includes('operations') ||
+        raw.department.toLowerCase().includes('retail') ||
+        raw.department.toLowerCase().includes('store'))
+        ? 'STORE'
+        : 'CORPORATE');
+    })(),
   };
 }
 
@@ -460,6 +541,30 @@ export function normalizeEmployee(raw: any): Employee {
     managerUsername: mgrUsername,
     manager_name: mgrName,
     managerName: mgrName,
+    reporting_evp: raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp'] ?? null,
+    reportingEvp: raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp'] ?? null,
+    reporting_evp_job_title:
+      (typeof (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']) === 'object' && (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']) !== null
+        ? ((raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).job_title ?? (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).jobTitle ?? (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).title)
+        : null) ??
+      raw.reporting_evp_job_title ??
+      raw.reportingEvpJobTitle ??
+      raw['Reporting EVP Job Title'] ??
+      raw['reporting_evp_job_title'] ??
+      raw['Reporting EVP Title'] ??
+      raw.reporting_evp_title ??
+      null,
+    reportingEvpJobTitle:
+      (typeof (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']) === 'object' && (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']) !== null
+        ? ((raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).job_title ?? (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).jobTitle ?? (raw.reporting_evp ?? raw.reportingEvp ?? raw['Reporting EVP'] ?? raw['reporting_evp']).title)
+        : null) ??
+      raw.reporting_evp_job_title ??
+      raw.reportingEvpJobTitle ??
+      raw['Reporting EVP Job Title'] ??
+      raw['reporting_evp_job_title'] ??
+      raw['Reporting EVP Title'] ??
+      raw.reporting_evp_title ??
+      null,
     location: String(raw.location ?? ''),
     hire_date: String(raw.hire_date ?? raw.hireDate ?? ''),
     assigned_assets_count:
@@ -1049,11 +1154,6 @@ class ApiService {
       STORE: 0,
       CORPORATE: 0,
     };
-    const byDeviceTypeAndCategory: Record<string, number> = {
-      'STORE-DESKTOPS': 0,
-      'CORPORATE-LAPTOPS': 0,
-      'CORPORATE-DESKTOPS': 0,
-    };
     for (const asset of MOCK_ASSETS) {
       const os = String(asset.os_name || asset.osName || '').trim();
       if (os && os !== '—' && os !== '-' && os.toLowerCase() !== 'unknown') {
@@ -1064,28 +1164,55 @@ class ApiService {
         const titleCase = dt.charAt(0).toUpperCase() + dt.slice(1);
         byDevice[titleCase] = (byDevice[titleCase] || 0) + 1;
       }
-      const dtLower = dt.toLowerCase();
       const rawCategory = (asset.category || (asset.department?.toLowerCase().includes('operations') || asset.department?.toLowerCase().includes('retail') ? 'STORE' : 'CORPORATE')).toUpperCase();
       if (rawCategory === 'STORE') {
         byCategory.STORE += 1;
       } else if (rawCategory === 'CORPORATE') {
         byCategory.CORPORATE += 1;
       }
-      if (rawCategory === 'STORE' && dtLower.includes('desktop')) {
-        byDeviceTypeAndCategory['STORE-DESKTOPS'] += 1;
-      } else if (rawCategory === 'CORPORATE' && (dtLower.includes('laptop') || dtLower.includes('notebook'))) {
-        byDeviceTypeAndCategory['CORPORATE-LAPTOPS'] += 1;
-      } else if (rawCategory === 'CORPORATE' && (dtLower.includes('desktop') || dtLower.includes('workstation'))) {
-        byDeviceTypeAndCategory['CORPORATE-DESKTOPS'] += 1;
-      }
     }
+
+    const totalCategoryAssets = byCategory.STORE + byCategory.CORPORATE;
+    const storePercentage = totalCategoryAssets > 0 ? Number(((byCategory.STORE / totalCategoryAssets) * 100).toFixed(1)) : 0;
+    const corporatePercentage = totalCategoryAssets > 0 ? Number(((byCategory.CORPORATE / totalCategoryAssets) * 100).toFixed(1)) : 0;
+
+    const by_category = [
+      {
+        name: 'STORE',
+        category: 'STORE',
+        count: byCategory.STORE,
+        percentage: storePercentage,
+      },
+      {
+        name: 'CORPORATE',
+        category: 'CORPORATE',
+        count: byCategory.CORPORATE,
+        percentage: corporatePercentage,
+      },
+    ];
+
+    const totalOsAssets = Object.values(byOs).reduce((a, b) => a + b, 0);
+    const totalDeviceAssets = Object.values(byDevice).reduce((a, b) => a + b, 0);
+
     return {
       byOs,
+      by_os: byOs,
+      byOperatingSystem: byOs,
+      by_operating_system: byOs,
+      totalOsAssets,
+      total_os_assets: totalOsAssets,
       byDevice,
+      by_device: byDevice,
+      byDeviceType: byDevice,
+      by_device_type: byDevice,
+      totalDeviceAssets,
+      total_device_assets: totalDeviceAssets,
       byCategory,
-      by_category: byCategory,
-      byDeviceTypeAndCategory,
-      byDeviceCategory: byDeviceTypeAndCategory,
+      by_category,
+      totalCategoryAssets,
+      total_category_assets: totalCategoryAssets,
+      totalAssets: MOCK_ASSETS.length,
+      total_assets: MOCK_ASSETS.length,
     };
   }
 
@@ -2368,6 +2495,32 @@ class ApiService {
     return normalizeAsset(response.data);
   }
 
+  // Update asset fields (PATCH /api/assets/{asset_id} with PUT fallback)
+  public async updateAsset(assetId: string | number, data: Record<string, any>): Promise<Asset> {
+    if (this.isMockMode) {
+      await this.simulateLatency();
+      return updateMockAsset(assetId, data);
+    }
+    const client = createAxiosClient();
+    let response: any;
+    try {
+      response = await client.patch<any>(`/api/assets/${assetId}`, data);
+    } catch (err: any) {
+      const status = err?.status || err?.response?.status;
+      if (status === 404 || status === 405) {
+        try {
+          response = await client.put<any>(`/api/assets/${assetId}`, data);
+        } catch {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
+    const resData = response.data?.data ?? response.data ?? {};
+    return normalizeAsset(resData);
+  }
+
   // Assign or reassign Workday employee to asset (POST /api/assets/{asset_id}/reassign)
   public async reassignAsset(assetId: string | number, data: ReassignAssetRequest): Promise<ReassignAssetResponse> {
     if (this.isMockMode) {
@@ -2491,20 +2644,196 @@ class ApiService {
     for (const route of routes) {
       try {
         const response = await client.post<any>(route, payload);
-        const resData = response.data?.data ?? response.data ?? {};
-        const fallbackTargetCount = data.select_all_matching ? (resData.total ?? 0) : (data.asset_ids?.length ?? 0);
-        const assignedCount =
-          resData.assigned_count ??
-          resData.count ??
-          resData.successful_count ??
-          (Array.isArray(resData.successful_asset_ids) ? resData.successful_asset_ids.length : fallbackTargetCount);
-        const successfulIds =
-          resData.successful_asset_ids ??
-          resData.asset_ids ??
-          (data.select_all_matching ? [] : (data.asset_ids || []));
-        const failedIds = resData.failed_asset_ids ?? [];
-        const failedCount = resData.failed_count ?? failedIds.length;
-        const totalProcessed = resData.total_processed ?? resData.total ?? (assignedCount + failedCount);
+        const rootData = response.data ?? {};
+        const nestedData = typeof rootData.data === 'object' && rootData.data !== null ? rootData.data : {};
+        const resData: Record<string, any> = { ...rootData, ...nestedData };
+        if (rootData.message && !nestedData.message) {
+          resData.message = rootData.message;
+        }
+        if (rootData.detail && !resData.message) {
+          resData.message = rootData.detail;
+        }
+
+        const rawMessage: string =
+          typeof resData.message === 'string'
+            ? resData.message
+            : typeof resData.detail === 'string'
+            ? resData.detail
+            : '';
+
+        // Check for explicit business-level failure vs success indicators in the response payload
+        const isExplicitBusinessFailure =
+          resData.status === 'error' ||
+          resData.status === 'failed' ||
+          resData.status === 'failure' ||
+          resData.success === false ||
+          resData.is_success === false ||
+          resData.isSuccess === false;
+
+        const isExplicitBusinessSuccess =
+          resData.status === 'success' ||
+          resData.status === 'ok' ||
+          resData.status === 'completed' ||
+          resData.success === true ||
+          resData.is_success === true ||
+          resData.isSuccess === true ||
+          /successfully|completed successfully/i.test(rawMessage);
+
+        // Requested target count
+        const targetCount = data.select_all_matching
+          ? (data.matching_count ?? (Array.isArray(data.asset_ids) ? data.asset_ids.length : 0))
+          : (Array.isArray(data.asset_ids) ? data.asset_ids.length : 0);
+
+        // Extract failed IDs and failed count
+        const failedIds: (string | number)[] = Array.isArray(resData.failed_asset_ids)
+          ? resData.failed_asset_ids
+          : Array.isArray(resData.failedAssetIds)
+          ? resData.failedAssetIds
+          : Array.isArray(resData.failed_ids)
+          ? resData.failed_ids
+          : [];
+
+        let failedCount: number =
+          typeof resData.failed_count === 'number'
+            ? resData.failed_count
+            : typeof resData.failedCount === 'number'
+            ? resData.failedCount
+            : typeof resData.failed === 'number'
+            ? resData.failed
+            : typeof resData.failures_count === 'number'
+            ? resData.failures_count
+            : typeof resData.error_count === 'number'
+            ? resData.error_count
+            : Array.isArray(resData.failures)
+            ? resData.failures.length
+            : Array.isArray(resData.errors)
+            ? resData.errors.length
+            : failedIds.length;
+
+        // Extract successful IDs array if present
+        const successfulIds: (string | number)[] = Array.isArray(resData.successful_asset_ids)
+          ? resData.successful_asset_ids
+          : Array.isArray(resData.successfulAssetIds)
+          ? resData.successfulAssetIds
+          : Array.isArray(resData.asset_ids) && !isExplicitBusinessFailure
+          ? resData.asset_ids
+          : [];
+
+        // Extract total processed count from known backend field variations
+        let totalProcessed: number | undefined =
+          typeof resData.total_processed === 'number'
+            ? resData.total_processed
+            : typeof resData.totalProcessed === 'number'
+            ? resData.totalProcessed
+            : typeof resData.processed === 'number'
+            ? resData.processed
+            : typeof resData.processed_count === 'number'
+            ? resData.processed_count
+            : typeof resData.total === 'number'
+            ? resData.total
+            : typeof resData.total_count === 'number'
+            ? resData.total_count
+            : typeof resData.target_count === 'number'
+            ? resData.target_count
+            : undefined;
+
+        // Extract directly reported assigned / success count from known backend field variations
+        let directAssignedCount: number | undefined =
+          typeof resData.assigned_count === 'number'
+            ? resData.assigned_count
+            : typeof resData.assignedCount === 'number'
+            ? resData.assignedCount
+            : typeof resData.success_count === 'number'
+            ? resData.success_count
+            : typeof resData.successCount === 'number'
+            ? resData.successCount
+            : typeof resData.successful_count === 'number'
+            ? resData.successful_count
+            : typeof resData.successfulCount === 'number'
+            ? resData.successfulCount
+            : typeof resData.assigned === 'number'
+            ? resData.assigned
+            : typeof resData.assigned_assets === 'number'
+            ? resData.assigned_assets
+            : typeof resData.assets_assigned === 'number'
+            ? resData.assets_assigned
+            : typeof resData.total_assigned === 'number'
+            ? resData.total_assigned
+            : typeof resData.updated_count === 'number'
+            ? resData.updated_count
+            : typeof resData.updatedCount === 'number'
+            ? resData.updatedCount
+            : typeof resData.updated === 'number'
+            ? resData.updated
+            : typeof resData.modified_count === 'number'
+            ? resData.modified_count
+            : typeof resData.rows_affected === 'number'
+            ? resData.rows_affected
+            : undefined;
+
+        // If direct count is not provided but successfulIds is populated with items, use its length
+        if (directAssignedCount === undefined && successfulIds.length > 0) {
+          directAssignedCount = successfulIds.length;
+        }
+
+        // Parse assigned count from message if count is missing or 0
+        // (Handles messages like "Bulk assignment completed successfully: 2672 asset(s) assigned")
+        let messageParsedCount: number | null = null;
+        if (rawMessage) {
+          const m1 = rawMessage.match(/(?:completed successfully:\s*|successfully assigned\s+|assigned\s+)(\d[\d,]*)\s*asset/i);
+          const m2 = rawMessage.match(/(\d[\d,]*)\s*asset(?:\(s\)|s)?\s+assigned/i);
+          const m3 = rawMessage.match(/assigned\s+(\d[\d,]*)/i);
+          const rawMatch = m1 || m2 || m3;
+          if (rawMatch) {
+            messageParsedCount = parseInt(rawMatch[1].replace(/,/g, ''), 10);
+          }
+        }
+
+        if ((directAssignedCount === undefined || directAssignedCount === 0) && messageParsedCount !== null && messageParsedCount > 0) {
+          directAssignedCount = messageParsedCount;
+        }
+
+        // Reconcile assigned count and total processed
+        let assignedCount: number;
+        if (isExplicitBusinessFailure) {
+          assignedCount = directAssignedCount ?? 0;
+          if (failedCount === 0) {
+            failedCount = totalProcessed || targetCount || 0;
+          }
+        } else if (directAssignedCount !== undefined) {
+          assignedCount = directAssignedCount;
+        } else if (isExplicitBusinessSuccess && failedCount === 0) {
+          assignedCount = (totalProcessed !== undefined && totalProcessed > 0) ? totalProcessed : targetCount;
+        } else if (totalProcessed !== undefined && totalProcessed > failedCount) {
+          assignedCount = totalProcessed - failedCount;
+        } else {
+          assignedCount = targetCount > failedCount ? targetCount - failedCount : 0;
+        }
+
+        if (totalProcessed === undefined || totalProcessed === 0) {
+          totalProcessed = (assignedCount + failedCount) > 0 ? (assignedCount + failedCount) : targetCount;
+        }
+
+        // Final status normalization
+        const isAllSuccess = !isExplicitBusinessFailure && failedCount === 0 && (assignedCount > 0 || totalProcessed > 0);
+        if (isAllSuccess && assignedCount === 0 && totalProcessed > 0) {
+          assignedCount = totalProcessed;
+        }
+
+        const isPartial = !isExplicitBusinessFailure && failedCount > 0 && assignedCount > 0;
+        const finalStatus: 'success' | 'partial' | 'failure' = isAllSuccess
+          ? 'success'
+          : isPartial
+          ? 'partial'
+          : 'failure';
+
+        const finalMessage = rawMessage || (
+          finalStatus === 'success'
+            ? `Successfully assigned ${assignedCount.toLocaleString()} assets to ${data.user_id}.`
+            : finalStatus === 'partial'
+            ? `Assigned ${assignedCount.toLocaleString()} assets with ${failedCount.toLocaleString()} failures.`
+            : `Bulk assignment failed.`
+        );
 
         return {
           assigned_count: assignedCount,
@@ -2513,9 +2842,9 @@ class ApiService {
           total_processed: totalProcessed,
           failed_count: failedCount,
           failures: resData.failures ?? [],
-          message:
-            resData.message ??
-            `Successfully assigned ${assignedCount} assets to ${data.user_id}.`,
+          message: finalMessage,
+          success: isAllSuccess,
+          status: finalStatus,
         };
       } catch (err: any) {
         const status = err?.status || err?.response?.status;
@@ -3230,17 +3559,71 @@ class ApiService {
     return this.requestWithRouteFallback<AppUser>(client, 'POST', routes, undefined, payload);
   }
 
+  private getAuthSessionUser(): { id?: string | number; username?: string } | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = sessionStorage.getItem('asset_iq_auth_session') || localStorage.getItem('asset_iq_auth_session');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.user) {
+          return {
+            id: parsed.user.id ?? parsed.user.user_id,
+            username: parsed.user.username,
+          };
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  private isSuperadminIdentifier(id: string | number, data?: UpdateAppUserPayload): boolean {
+    const rawId = String(id || '').trim().toLowerCase();
+    if (rawId === 'superadmin') return true;
+    if (data?.username && data.username.trim().toLowerCase() === 'superadmin') return true;
+    return false;
+  }
+
+  private isSelfTarget(id: string | number): boolean {
+    const sessionUser = this.getAuthSessionUser();
+    if (!sessionUser) return false;
+    const rawId = String(id || '').trim();
+    if (sessionUser.id != null && String(sessionUser.id).trim() === rawId) {
+      return true;
+    }
+    if (sessionUser.username && sessionUser.username.trim().toLowerCase() === rawId.toLowerCase()) {
+      return true;
+    }
+    return false;
+  }
+
   /**
    * Update portal user details/role: PUT /api/app-users/:id
    */
   public async updateAppUser(id: string | number, data: UpdateAppUserPayload): Promise<AppUser> {
+    const isSuperadmin = this.isSuperadminIdentifier(id, data);
+
+    // Backend restriction: protect superadmin username and role
+    if (isSuperadmin) {
+      if (data.username !== undefined && data.username.trim().toLowerCase() !== 'superadmin') {
+        throw new Error('The username of the protected superadmin account cannot be changed.');
+      }
+      if (data.role !== undefined && data.role !== 'SUPERADMIN') {
+        throw new Error('The role of the protected superadmin account cannot be changed.');
+      }
+      if (data.status === 'INACTIVE') {
+        throw new Error('The superadmin account cannot be deactivated.');
+      }
+    }
+
     const client = createAxiosClient();
     const encodedId = encodeURIComponent(String(id));
     const payload: Record<string, any> = {};
-    if (data.username !== undefined) payload.username = data.username.trim();
+    if (data.username !== undefined) payload.username = isSuperadmin ? 'superadmin' : data.username.trim();
     if (data.full_name !== undefined) payload.full_name = data.full_name.trim();
     if (data.email !== undefined) payload.email = data.email.trim();
-    if (data.role !== undefined) payload.role = data.role;
+    if (data.role !== undefined) payload.role = isSuperadmin ? 'SUPERADMIN' : data.role;
     if (data.status !== undefined) {
       payload.status = data.status;
       payload.is_active = data.status === 'ACTIVE';
@@ -3258,6 +3641,17 @@ class ApiService {
    * Activate or deactivate a user: PATCH /api/app-users/:id/status
    */
   public async setUserStatus(id: string | number, status: PortalUserStatus): Promise<AppUser> {
+    if (status === 'INACTIVE') {
+      // 1. Prevent deactivation of superadmin account
+      if (this.isSuperadminIdentifier(id)) {
+        throw new Error('The superadmin account cannot be deactivated.');
+      }
+      // 2. Prevent self-deactivation
+      if (this.isSelfTarget(id)) {
+        throw new Error('You cannot deactivate your own account.');
+      }
+    }
+
     const client = createAxiosClient();
     const encodedId = encodeURIComponent(String(id));
     const payload = {

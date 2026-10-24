@@ -28,12 +28,13 @@
   box-sizing: border-box;
 }
 
+
 /* --------------------------------------------------------------------------
-   Row 0: Five KPI Cards (Top of Dashboard)
+   Row 0: Six KPI Cards (Top of Dashboard)
    -------------------------------------------------------------------------- */
 .di-kpis {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -140,6 +141,20 @@
 }
 .di-kpi-stock .di-kpi-value {
   color: #2563eb;
+}
+
+.di-kpi-eol_soon,
+.di-kpi-eol-soon {
+  border-color: #fef3c7;
+}
+.di-kpi-eol_soon .di-kpi-icon,
+.di-kpi-eol-soon .di-kpi-icon {
+  background: #fffbeb;
+  color: #f59e0b;
+}
+.di-kpi-eol_soon .di-kpi-value,
+.di-kpi-eol-soon .di-kpi-value {
+  color: #d97706;
 }
 
 .di-kpi-employees {

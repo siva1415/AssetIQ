@@ -153,6 +153,15 @@ export interface DeviceEOLReferenceUpdate {
   reference_source?: string | null;
 }
 
+export interface ReportingEvp {
+  full_name?: string;
+  fullName?: string;
+  user_id?: string;
+  userId?: string;
+  job_title?: string;
+  jobTitle?: string;
+}
+
 export interface Asset {
   id: string | number;
   assetId?: string | number;
@@ -211,6 +220,10 @@ export interface Asset {
   managerUsername?: string | null;
   manager_name?: string | null;
   managerName?: string | null;
+  reporting_evp?: string | ReportingEvp | null;
+  reportingEvp?: string | ReportingEvp | null;
+  reporting_evp_job_title?: string | null;
+  reportingEvpJobTitle?: string | null;
   employee_status?: EmployeeStatus | string | null;
   employeeStatus?: EmployeeStatus | string | null;
   workday_status?: WorkdayMatchStatus;
@@ -245,6 +258,10 @@ export interface Employee {
   managerUsername?: string | null;
   manager_name: string | null;
   managerName?: string | null;
+  reporting_evp?: string | ReportingEvp | null;
+  reportingEvp?: string | ReportingEvp | null;
+  reporting_evp_job_title?: string | null;
+  reportingEvpJobTitle?: string | null;
   location: string;
   hire_date: string;
   assigned_assets_count?: number;
@@ -305,19 +322,57 @@ export interface DashboardHardwareAnalysisItem {
 export interface DashboardHardwareAnalysis {
   by_operating_system: DashboardHardwareAnalysisItem[];
   by_device_type: DashboardHardwareAnalysisItem[];
+  by_category?: DashboardHardwareAnalysisItem[];
+  total_category_assets?: number;
+}
+
+export interface CategoryAnalysisItem {
+  name?: string;
+  category?: string;
+  count?: number;
+  total?: number;
+  percentage?: number;
+  percent?: number;
+  color?: string;
 }
 
 export interface HardwareAnalysisResponse {
-  byOs?: Record<string, number | null | undefined>;
-  byDevice?: Record<string, number | null | undefined>;
-  by_os?: Record<string, number | null | undefined>;
-  by_device?: Record<string, number | null | undefined>;
+  // Operating System
+  byOs?: Record<string, number | null | undefined> | { name?: string; os?: string; count?: number; percentage?: number }[];
+  by_os?: Record<string, number | null | undefined> | { name?: string; os?: string; count?: number; percentage?: number }[];
+  byOperatingSystem?: Record<string, number | null | undefined> | { name?: string; os?: string; count?: number; percentage?: number }[];
+  by_operating_system?: Record<string, number | null | undefined> | { name?: string; os?: string; count?: number; percentage?: number }[];
+  totalOsAssets?: number;
+  total_os_assets?: number;
+  totalOperatingSystemAssets?: number;
+  total_operating_system_assets?: number;
+
+  // Device Type
+  byDevice?: Record<string, number | null | undefined> | { name?: string; device_type?: string; devicetype?: string; type?: string; count?: number; percentage?: number }[];
+  by_device?: Record<string, number | null | undefined> | { name?: string; device_type?: string; devicetype?: string; type?: string; count?: number; percentage?: number }[];
+  byDeviceType?: Record<string, number | null | undefined> | { name?: string; device_type?: string; devicetype?: string; type?: string; count?: number; percentage?: number }[];
+  by_device_type?: Record<string, number | null | undefined> | { name?: string; device_type?: string; devicetype?: string; type?: string; count?: number; percentage?: number }[];
+  totalDeviceAssets?: number;
+  total_device_assets?: number;
+  totalDeviceTypeAssets?: number;
+  total_device_type_assets?: number;
+
+  // Category
+  byCategory?: Record<string, number | null | undefined> | CategoryAnalysisItem[];
+  by_category?: Record<string, number | null | undefined> | CategoryAnalysisItem[];
+  totalCategoryAssets?: number;
+  total_category_assets?: number;
+
+  // Total
+  totalAssets?: number;
+  total_assets?: number;
+  total?: number;
+
+  // Deprecated fields kept for backward compatibility if referenced elsewhere
   byDeviceTypeAndCategory?: Record<string, number | null | undefined> | { name: string; count: number }[];
   by_device_type_and_category?: Record<string, number | null | undefined> | { name: string; count: number }[];
   byDeviceCategory?: Record<string, number | null | undefined> | { name: string; count: number }[];
   by_device_category?: Record<string, number | null | undefined> | { name: string; count: number }[];
-  byCategory?: Record<string, number | null | undefined> | { name: string; count: number }[];
-  by_category?: Record<string, number | null | undefined> | { name: string; count: number }[];
 }
 
 export interface DashboardRedesignOverview {
@@ -338,6 +393,12 @@ export interface DashboardRedesignOverview {
   byDeviceTypeAndCategory?: DashboardHardwareAnalysisItem[] | Record<string, number>;
   by_category?: DashboardHardwareAnalysisItem[] | Record<string, number>;
   byCategory?: DashboardHardwareAnalysisItem[] | Record<string, number>;
+  total_category_assets?: number;
+  totalCategoryAssets?: number;
+  total_os_assets?: number;
+  totalOsAssets?: number;
+  total_device_assets?: number;
+  totalDeviceAssets?: number;
 }
 
 export interface FilterOptions {
@@ -526,6 +587,7 @@ export interface BulkAssignAssetsRequest {
   asset_status?: StandardAssetStatus | string;
   select_all_matching?: boolean;
   all_matching?: boolean;
+  matching_count?: number;
   filters?: BulkAssignAssetFilters;
   search?: string;
   source?: string;
@@ -546,6 +608,8 @@ export interface BulkAssignAssetsResponse {
   failed_count?: number;
   failures?: { asset_id: string | number; reason?: string }[];
   message: string;
+  success?: boolean;
+  status?: 'success' | 'partial' | 'failure' | string;
 }
 
 // ==========================================

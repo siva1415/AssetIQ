@@ -260,8 +260,28 @@ def verify_admin_access(
                                 )
                             if u.role.upper() in ("ADMIN", "SUPERADMIN"):
                                 return u.username
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Administrative privileges required.",
+                            )
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail="User account no longer exists",
+                                headers={"WWW-Authenticate": "Bearer"},
+                            )
                     except (ValueError, TypeError):
-                        pass
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Malformed token: invalid subject identifier",
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired access token",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
 
     # 2. Check explicit role headers / query params
     role = (x_role or x_user_role or role_param)

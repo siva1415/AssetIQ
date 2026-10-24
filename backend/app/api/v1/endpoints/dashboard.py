@@ -15,6 +15,7 @@ from app.schemas.dashboard import (
     HardwareAssetAnalysisResponse,
     OperatingSystemItem,
     DeviceTypeItem,
+    CategoryItem,
     DeviceTypeCategoryItem,
     DeviceTypeCategoryResponse,
 )
@@ -283,7 +284,7 @@ def get_reports_summary(db: Session = Depends(get_database)):
 @router.get(
     "/hardware-analysis",
     response_model=HardwareAssetAnalysisResponse,
-    summary="Dashboard Hardware Asset Analysis (Operating Systems and Device Types)",
+    summary="Dashboard Hardware Asset Analysis (Operating Systems, Device Types, and Categories)",
 )
 @router.get(
     "/hardware-analysis/",
@@ -310,6 +311,7 @@ def get_hardware_asset_analysis(
     scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
     asset_status: Optional[str] = Query(None, description="Filter by status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
     devicetype: Optional[str] = Query(None, description="Filter by device type (Server or Desktop)"),
+    category: Optional[str] = Query(None, description="Filter by category (STORE or CORPORATE)"),
     manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
     model: Optional[str] = Query(None, description="Filter by hardware model"),
     assigned_username: Optional[str] = Query(None, description="Filter by assigned login username"),
@@ -319,9 +321,10 @@ def get_hardware_asset_analysis(
     db: Session = Depends(get_database),
 ):
     """
-    Live, database-backed aggregated data for the Hardware Asset Analysis card:
-    - Assets by Operating System (doughnut chart)
-    - Assets by Device Type (doughnut chart)
+    Live, database-backed aggregated data for the Hardware Asset Analysis section:
+    - Assets by Operating System (Windows 11, Windows 10, Mac)
+    - Assets by Device Type (Laptops, Desktops)
+    - Assets by Category (STORE, CORPORATE)
     Calculated via direct PostgreSQL GROUP BY queries excluding NULL, empty, or whitespace-only records.
     """
     return DashboardService.get_hardware_asset_analysis(
@@ -330,6 +333,7 @@ def get_hardware_asset_analysis(
         scope=scope,
         asset_status=asset_status,
         devicetype=devicetype,
+        category=category,
         manufacturer=manufacturer,
         model=model,
         assigned_username=assigned_username,
@@ -441,6 +445,55 @@ def get_assets_by_device_type(
         search=search,
     )
     return analysis.device_types
+
+
+@router.get(
+    "/assets-by-category",
+    response_model=List[CategoryItem],
+    summary="Assets Breakdown by Category",
+)
+@router.get(
+    "/assets-by-category/",
+    response_model=List[CategoryItem],
+    include_in_schema=False,
+)
+@router.get(
+    "/by-category",
+    response_model=List[CategoryItem],
+    include_in_schema=False,
+)
+def get_assets_by_category(
+    source: Optional[str] = Query(None, description="Optional discovery source filter (BIGFIX or JAMF)"),
+    scope: Optional[str] = Query(None, description="Page scope (all, windows, mac, ownership)"),
+    asset_status: Optional[str] = Query(None, description="Filter by status (ACTIVE, REVIEW, IN STOCK, RETIRED)"),
+    devicetype: Optional[str] = Query(None, description="Filter by device type (Server or Desktop)"),
+    category: Optional[str] = Query(None, description="Filter by category (STORE or CORPORATE)"),
+    manufacturer: Optional[str] = Query(None, description="Filter by hardware manufacturer"),
+    model: Optional[str] = Query(None, description="Filter by hardware model"),
+    assigned_username: Optional[str] = Query(None, description="Filter by assigned login username"),
+    assignment_type: Optional[str] = Query(None, description="Filter by assignment model (AUTO or MANUAL)"),
+    is_unassigned: Optional[bool] = Query(None, description="Filter for unassigned assets (true/false)"),
+    search: Optional[str] = Query(None, description="Text search keyword across asset identifiers"),
+    db: Session = Depends(get_database),
+):
+    """
+    Direct array endpoint for the Assets by Category doughnut chart (STORE, CORPORATE).
+    """
+    analysis = DashboardService.get_hardware_asset_analysis(
+        db=db,
+        source=source,
+        scope=scope,
+        asset_status=asset_status,
+        devicetype=devicetype,
+        category=category,
+        manufacturer=manufacturer,
+        model=model,
+        assigned_username=assigned_username,
+        assignment_type=assignment_type,
+        is_unassigned=is_unassigned,
+        search=search,
+    )
+    return analysis.categories
 
 
 @router.get(

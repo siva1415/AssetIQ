@@ -22,6 +22,7 @@ import {
   Package,
   Users,
   RefreshCw,
+  Clock,
 } from 'lucide-react';
 import './DashboardPage.css';
 
@@ -62,11 +63,11 @@ export const ASSET_STATUS_COLORS: Record<string, string> = {
 
 /**
  * Consistent EOL status colors:
- * ACTIVE: #16A34A, EOL SOON: #F59E0B, EXPIRED: #DC2626, UNKNOWN: #64748B
+ * ACTIVE: #16A34A, EOL SOON: #D97706, EXPIRED: #DC2626, UNKNOWN: #64748B
  */
 export const EOL_COLORS: Record<string, string> = {
-  ACTIVE: '#16A34A',     // Green (>90 days)
-  'EOL SOON': '#F59E0B', // Amber (0–90 days)
+  ACTIVE: '#16A34A',     // Green
+  'EOL SOON': '#D97706', // Amber (0–90 days)
   EXPIRED: '#DC2626',    // Red
   UNKNOWN: '#64748B',    // Slate
 };
@@ -74,10 +75,78 @@ export const EOL_COLORS: Record<string, string> = {
 export function getEolColor(status: string): string {
   const s = (status || '').trim().toUpperCase();
   if (s === 'ACTIVE' || s.startsWith('ACTIVE')) return '#16A34A';
-  if (s === 'EOL SOON' || s === 'EOL_SOON' || s.includes('SOON')) return '#F59E0B';
+  if (s === 'EOL SOON' || s === 'EOL_SOON' || s.includes('SOON')) return '#D97706';
   if (s === 'EXPIRED') return '#DC2626';
   if (s === 'UNKNOWN') return '#64748B';
   return EOL_COLORS[s] || '#64748B';
+}
+
+/**
+ * Operating System Palette:
+ * Windows 11: #2563EB | Windows 10: #F97316 | Mac: #16A34A
+ */
+export const OS_PALETTE: Record<string, string> = {
+  'Windows 11': '#2563EB',
+  'Windows 10': '#F97316',
+  Mac: '#16A34A',
+};
+
+export function getOsColor(osName: string): string {
+  const norm = (osName || '').trim();
+  const lower = norm.toLowerCase();
+  if (norm === 'Windows 11' || lower.includes('windows 11') || lower.includes('win 11') || lower.includes('win11')) {
+    return '#2563EB';
+  }
+  if (norm === 'Windows 10' || lower.includes('windows 10') || lower.includes('win 10') || lower.includes('win10')) {
+    return '#F97316';
+  }
+  if (norm === 'Mac' || lower.includes('mac') || lower.includes('apple') || lower.includes('macos') || lower.includes('os x')) {
+    return '#16A34A';
+  }
+  return OS_PALETTE[norm] || '#2563EB';
+}
+
+/**
+ * Device Type Palette:
+ * Laptop: #DB2777 | Desktop: #EAB308
+ */
+export const DEVICE_TYPE_PALETTE: Record<string, string> = {
+  Laptop: '#DB2777',
+  Laptops: '#DB2777',
+  Desktop: '#EAB308',
+  Desktops: '#EAB308',
+};
+
+export function getDeviceTypeColor(deviceType: string): string {
+  const norm = (deviceType || '').trim();
+  const lower = norm.toLowerCase();
+  if (lower.includes('laptop') || lower.includes('notebook')) {
+    return '#DB2777';
+  }
+  if (lower.includes('desktop') || lower.includes('workstation')) {
+    return '#EAB308';
+  }
+  return DEVICE_TYPE_PALETTE[norm] || '#DB2777';
+}
+
+/**
+ * Category Palette:
+ * STORE: #0D9488 | CORPORATE: #7C3AED
+ */
+export const CATEGORY_PALETTE: Record<string, string> = {
+  STORE: '#0D9488',
+  CORPORATE: '#7C3AED',
+};
+
+export function getCategoryColor(category: string): string {
+  const norm = (category || '').trim().toUpperCase();
+  if (norm.startsWith('STORE')) {
+    return '#0D9488';
+  }
+  if (norm.startsWith('CORP')) {
+    return '#7C3AED';
+  }
+  return CATEGORY_PALETTE[norm] || '#0D9488';
 }
 
 export interface ChartItem {
@@ -146,20 +215,201 @@ export function parseCategoryMap(
 
 /**
  * Coordinated palette for Top 10 Departments:
- * Professional blue, teal, violet, and slate shades.
+ * 1. #2563EB, 2. #0D9488, 3. #DB2777, 4. #D97706, 5. #7C3AED,
+ * 6. #0891B2, 7. #65A30D, 8. #EA580C, 9. #4F46E5, 10. #A16207
  */
 export const DEPARTMENT_PALETTE: string[] = [
-  '#4169E1', // Electric Blue
-  '#14B8A6', // Teal
-  '#7C3AED', // Violet
-  '#2563EB', // Royal Blue
-  '#0D9488', // Deep Teal
-  '#6366F1', // Indigo
-  '#0284C7', // Sky Blue
-  '#8B5CF6', // Soft Violet
-  '#0891B2', // Cyan Slate
-  '#4F46E5', // Slate Indigo
+  '#2563EB',
+  '#0D9488',
+  '#DB2777',
+  '#D97706',
+  '#7C3AED',
+  '#0891B2',
+  '#65A30D',
+  '#EA580C',
+  '#4F46E5',
+  '#A16207',
 ];
+
+export const DEPARTMENT_FALLBACK_PALETTE: string[] = [
+  '#0284C7',
+  '#9333EA',
+  '#059669',
+  '#E11D48',
+  '#D97706',
+  '#4F46E5',
+  '#0D9488',
+  '#475569',
+  '#CA8A04',
+  '#C026D3',
+];
+
+const INITIAL_DEPARTMENT_COLOR_MAP: Record<string, string> = {
+  'engineering': '#2563EB',
+  'finance': '#0D9488',
+  'marketing': '#DB2777',
+  'sales': '#D97706',
+  'human resources': '#7C3AED',
+  'hr': '#7C3AED',
+  'security & compliance': '#0891B2',
+  'security and compliance': '#0891B2',
+  'security': '#0891B2',
+  'product': '#65A30D',
+  'contractor services': '#EA580C',
+  'contractors': '#EA580C',
+  'contractor': '#EA580C',
+  'executive': '#4F46E5',
+  'infrastructure': '#A16207',
+};
+
+const departmentColorCache = new Map<string, string>(
+  Object.entries(INITIAL_DEPARTMENT_COLOR_MAP)
+);
+
+export function getDepartmentColor(departmentName: string): string {
+  const raw = (departmentName || '').trim();
+  if (!raw) return DEPARTMENT_PALETTE[0];
+  const key = raw.toLowerCase();
+
+  const cached = departmentColorCache.get(key);
+  if (cached) return cached;
+
+  const assignedColors = new Set(departmentColorCache.values());
+  const nextAvailable = DEPARTMENT_PALETTE.find((c) => !assignedColors.has(c));
+
+  let color: string;
+  if (nextAvailable) {
+    color = nextAvailable;
+  } else {
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = (hash << 5) - hash + key.charCodeAt(i);
+      hash |= 0;
+    }
+    const fallbackIdx = Math.abs(hash) % DEPARTMENT_FALLBACK_PALETTE.length;
+    color = DEPARTMENT_FALLBACK_PALETTE[fallbackIdx];
+  }
+
+  departmentColorCache.set(key, color);
+  return color;
+}
+
+/**
+ * Coordinated palette for EOL Exposure by Hardware Model:
+ * 1. #7C3AED, 2. #0284C7, 3. #CA8A04, 4. #DB2777, 5. #059669,
+ * 6. #C2410C, 7. #4F46E5, 8. #0F766E, 9. #A21CAF, 10. #854D0E
+ */
+export const HARDWARE_MODEL_PALETTE: string[] = [
+  '#7C3AED',
+  '#0284C7',
+  '#CA8A04',
+  '#DB2777',
+  '#059669',
+  '#C2410C',
+  '#4F46E5',
+  '#0F766E',
+  '#A21CAF',
+  '#854D0E',
+];
+
+export const HARDWARE_MODEL_FALLBACK_PALETTE: string[] = [
+  '#2563EB',
+  '#0D9488',
+  '#D97706',
+  '#DC2626',
+  '#65A30D',
+  '#0891B2',
+  '#EA580C',
+  '#9333EA',
+  '#475569',
+  '#16A34A',
+];
+
+const INITIAL_MODEL_COLOR_MAP: Record<string, string> = {
+  // 1. Lenovo ThinkPad X1 Carbon Gen 8
+  'lenovo thinkpad x1 carbon gen 8': '#7C3AED',
+  'thinkpad x1 carbon gen 8': '#7C3AED',
+  'thinkpad x1 carbon g8': '#7C3AED',
+  // 2. Apple Inc. MacBook Air 13" M1
+  'apple inc. macbook air 13" m1': '#0284C7',
+  'apple macbook air 13" m1': '#0284C7',
+  'macbook air 13" m1': '#0284C7',
+  // 3. HP Inc. EliteBook 840 G8
+  'hp inc. elitebook 840 g8': '#CA8A04',
+  'hp elitebook 840 g8': '#CA8A04',
+  'elitebook 840 g8': '#CA8A04',
+  // 4. Dell Inc. PowerEdge R640
+  'dell inc. poweredge r640': '#DB2777',
+  'dell poweredge r640': '#DB2777',
+  'poweredge r640': '#DB2777',
+  // 5. Cisco Systems UCS B200 M5 Blade
+  'cisco systems ucs b200 m5 blade': '#059669',
+  'cisco ucs b200 m5 blade': '#059669',
+  'ucs b200 m5 blade': '#059669',
+  'ucs b200 m5': '#059669',
+  // 6. Apple Inc. MacBook Pro 14" M1 Pro
+  'apple inc. macbook pro 14" m1 pro': '#C2410C',
+  'apple macbook pro 14" m1 pro': '#C2410C',
+  'macbook pro 14" m1 pro': '#C2410C',
+  // 7. Generic / Custom Build Custom Rack Unit
+  'generic / custom build custom rack unit': '#4F46E5',
+  'custom rack unit': '#4F46E5',
+  // 8. MacBook Pro 16" M2 Pro
+  'macbook pro 16" m2 pro': '#0F766E',
+  'apple inc. macbook pro 16" m2 pro': '#0F766E',
+  // 9. Precision 7680 Workstation
+  'precision 7680 workstation': '#A21CAF',
+  'dell inc. precision 7680 workstation': '#A21CAF',
+  'precision 7680': '#A21CAF',
+  // 10. ThinkPad T14s Gen 4
+  'thinkpad t14s gen 4': '#854D0E',
+  'lenovo thinkpad t14s gen 4': '#854D0E',
+  'thinkpad t14s g4': '#854D0E',
+};
+
+const hardwareModelColorCache = new Map<string, string>(
+  Object.entries(INITIAL_MODEL_COLOR_MAP)
+);
+
+export function getHardwareModelColor(modelName: string): string {
+  const raw = (modelName || '').trim();
+  if (!raw) return HARDWARE_MODEL_PALETTE[0];
+  const key = raw.toLowerCase();
+
+  const cached = hardwareModelColorCache.get(key);
+  if (cached) return cached;
+
+  const simplified = key
+    .replace(/\b(apple\s+inc\.?|apple|dell\s+inc\.?|dell|lenovo|hp\s+inc\.?|hp|cisco\s+systems|cisco)\b/gi, '')
+    .trim();
+  if (simplified && hardwareModelColorCache.has(simplified)) {
+    const col = hardwareModelColorCache.get(simplified)!;
+    hardwareModelColorCache.set(key, col);
+    return col;
+  }
+
+  const assignedColors = new Set(hardwareModelColorCache.values());
+  const nextAvailable = HARDWARE_MODEL_PALETTE.find((c) => !assignedColors.has(c));
+
+  let color: string;
+  if (nextAvailable) {
+    color = nextAvailable;
+  } else {
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = (hash << 5) - hash + key.charCodeAt(i);
+      hash |= 0;
+    }
+    const fallbackIdx = Math.abs(hash) % HARDWARE_MODEL_FALLBACK_PALETTE.length;
+    color = HARDWARE_MODEL_FALLBACK_PALETTE[fallbackIdx];
+  }
+
+  hardwareModelColorCache.set(key, color);
+  if (simplified) {
+    hardwareModelColorCache.set(simplified, color);
+  }
+  return color;
+}
 
 const KNOWN_ACRONYMS = new Set([
   'IT',
@@ -523,7 +773,7 @@ interface KpiTileProps {
   label: string;
   value: number;
   subtitle: string;
-  tone: 'total' | 'active' | 'review' | 'stock' | 'employees';
+  tone: 'total' | 'active' | 'review' | 'stock' | 'employees' | 'eol_soon';
   icon: React.ReactNode;
   testId?: string;
   valTestId?: string;
@@ -578,7 +828,7 @@ const ChartCard: React.FC<{
 );
 
 export const DashboardPage: React.FC = () => {
-  const { dataRefreshKey, triggerDataRefresh } = useApp();
+  const { dataRefreshKey } = useApp();
   const [data, setData] = useState<DashboardRedesignOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -587,6 +837,7 @@ export const DashboardPage: React.FC = () => {
   const [hardwareData, setHardwareData] = useState<HardwareAnalysisResponse | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState<boolean>(true);
   const [hardwareError, setHardwareError] = useState<string | null>(null);
+
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -656,7 +907,12 @@ export const DashboardPage: React.FC = () => {
   // Section A: By Operating System (Horizontal Bar Chart)
   // Exactly 3 categories: Windows 11, Windows 10, Mac
   const osChartData = useMemo(() => {
-    const rawMap = hardwareData?.byOs ?? hardwareData?.by_os ?? data?.by_operating_system;
+    const rawMap =
+      hardwareData?.byOs ??
+      hardwareData?.by_os ??
+      hardwareData?.byOperatingSystem ??
+      hardwareData?.by_operating_system ??
+      data?.by_operating_system;
     let win11Count = 0;
     let win10Count = 0;
     let macCount = 0;
@@ -703,19 +959,36 @@ export const DashboardPage: React.FC = () => {
     }
 
     const items = [
-      { name: 'Windows 11', count: win11Count, color: '#4169E1' }, // Electric Blue
-      { name: 'Windows 10', count: win10Count, color: '#14B8A6' }, // Teal
-      { name: 'Mac', count: macCount, color: '#7C3AED' },          // Violet
+      { name: 'Windows 11', count: win11Count, color: getOsColor('Windows 11') }, // #2563EB
+      { name: 'Windows 10', count: win10Count, color: getOsColor('Windows 10') }, // #F97316
+      { name: 'Mac', count: macCount, color: getOsColor('Mac') },                 // #16A34A
     ];
 
-    const total = win11Count + win10Count + macCount;
+    const apiTotalOs =
+      hardwareData?.total_os_assets ??
+      hardwareData?.totalOsAssets ??
+      hardwareData?.total_operating_system_assets ??
+      hardwareData?.totalOperatingSystemAssets ??
+      (data as any)?.total_os_assets ??
+      (data as any)?.totalOsAssets;
+
+    const total =
+      typeof apiTotalOs === 'number' && !isNaN(apiTotalOs) && apiTotalOs >= 0
+        ? apiTotalOs
+        : (win11Count + win10Count + macCount);
+
     return { items, total };
   }, [hardwareData, data]);
 
   // Section B: By Device Type (Donut Chart)
   // Shows authoritative counts for Laptops and Desktops without duplicate summing
   const deviceTypeChartData = useMemo(() => {
-    const rawMap = hardwareData?.byDevice ?? hardwareData?.by_device ?? data?.by_device_type;
+    const rawMap =
+      hardwareData?.byDevice ??
+      hardwareData?.by_device ??
+      hardwareData?.byDeviceType ??
+      hardwareData?.by_device_type ??
+      data?.by_device_type;
     let laptopCount = 0;
     let desktopCount = 0;
 
@@ -728,7 +1001,7 @@ export const DashboardPage: React.FC = () => {
         : Object.entries(rawMap).map(([k, v]) => [String(k), typeof v === 'number' ? v : Number(v) || 0]);
 
       // Direct authoritative lookup map
-      // Exclude composite category keys (e.g. 'store-desktops', 'corporate-laptops') and totals
+      // Exclude composite category keys and totals
       const directMap = new Map<string, number>();
       for (const [key, val] of entries) {
         if (!key || val <= 0) continue;
@@ -778,19 +1051,31 @@ export const DashboardPage: React.FC = () => {
     }
 
     const items = [
-      { name: 'Laptops', count: laptopCount, color: '#635BFF' },  // Violet
-      { name: 'Desktops', count: desktopCount, color: '#14B8A6' }, // Teal
+      { name: 'Laptops', count: laptopCount, color: getDeviceTypeColor('Laptops') },  // #DB2777
+      { name: 'Desktops', count: desktopCount, color: getDeviceTypeColor('Desktops') }, // #EAB308
     ];
 
-    // Authoritative total derived strictly from Laptops + Desktops
-    const total = laptopCount + desktopCount;
+    const apiTotalDevice =
+      hardwareData?.total_device_assets ??
+      hardwareData?.totalDeviceAssets ??
+      hardwareData?.total_device_type_assets ??
+      hardwareData?.totalDeviceTypeAssets ??
+      (data as any)?.total_device_assets ??
+      (data as any)?.totalDeviceAssets;
+
+    const total =
+      typeof apiTotalDevice === 'number' && !isNaN(apiTotalDevice) && apiTotalDevice >= 0
+        ? apiTotalDevice
+        : (laptopCount + desktopCount);
+
     return { items, total };
   }, [hardwareData, data]);
 
   // Section C: By Category (Donut Chart)
-  // Shows ONLY: STORE (#4169E1) and CORPORATE (#14B8A6)
+  // Shows ONLY: STORE (#0D9488) and CORPORATE (#7C3AED)
+  // Does not mix devicetype values (Laptop, Desktop, etc.) and uses revised by_category / byCategory schema
   const categoryChartData = useMemo(() => {
-    const rawMap =
+    const rawData =
       hardwareData?.byCategory ??
       hardwareData?.by_category ??
       (data as any)?.by_category ??
@@ -798,58 +1083,93 @@ export const DashboardPage: React.FC = () => {
 
     let storeCount = 0;
     let corporateCount = 0;
+    let apiStorePct: number | undefined = undefined;
+    let apiCorpPct: number | undefined = undefined;
 
-    if (rawMap && typeof rawMap === 'object') {
-      const entries: [string, number][] = Array.isArray(rawMap)
-        ? rawMap.map((item: any) => [
-            String(item.name || item.category || ''),
-            Number(item.count || item.total || 0),
-          ])
-        : Object.entries(rawMap).map(([k, v]) => [String(k), typeof v === 'number' ? v : Number(v) || 0]);
+    if (rawData && typeof rawData === 'object') {
+      if (Array.isArray(rawData)) {
+        for (const item of rawData) {
+          if (!item || typeof item !== 'object') continue;
+          const rawKey = String(item.name || item.category || (item as any).key || '').trim().toUpperCase();
+          const count = typeof item.count === 'number' ? item.count : Number(item.count || item.total || 0) || 0;
+          const pct =
+            typeof item.percentage === 'number'
+              ? item.percentage
+              : typeof (item as any).percent === 'number'
+              ? (item as any).percent
+              : undefined;
 
-      for (const [key, val] of entries) {
-        if (!key || val <= 0) continue;
-        const upper = key.trim().toUpperCase();
-        if (upper === 'STORE' || upper === 'STORES') {
-          storeCount += val;
-        } else if (upper === 'CORPORATE' || upper === 'CORP') {
-          corporateCount += val;
+          // Strictly accept only STORE and CORPORATE; do not mix devicetype values
+          if (rawKey === 'STORE' || rawKey === 'STORES') {
+            storeCount += count;
+            if (pct !== undefined && !isNaN(pct)) apiStorePct = pct;
+          } else if (rawKey === 'CORPORATE' || rawKey === 'CORP') {
+            corporateCount += count;
+            if (pct !== undefined && !isNaN(pct)) apiCorpPct = pct;
+          }
         }
-      }
-    }
-
-    // Fallback if only composite byDeviceTypeAndCategory was available
-    if (storeCount === 0 && corporateCount === 0) {
-      const fallbackMap =
-        hardwareData?.byDeviceTypeAndCategory ??
-        hardwareData?.by_device_type_and_category ??
-        (data as any)?.by_device_type_and_category ??
-        (data as any)?.byDeviceTypeAndCategory;
-      if (fallbackMap && typeof fallbackMap === 'object') {
-        const entries: [string, number][] = Array.isArray(fallbackMap)
-          ? fallbackMap.map((item: any) => [
-              String(item.name || item.category || ''),
-              Number(item.count || item.total || 0),
-            ])
-          : Object.entries(fallbackMap).map(([k, v]) => [String(k), typeof v === 'number' ? v : Number(v) || 0]);
-        for (const [key, val] of entries) {
-          if (!key || val <= 0) continue;
+      } else {
+        // Dictionary format: e.g. { STORE: 120, CORPORATE: 350 }
+        for (const [key, val] of Object.entries(rawData)) {
+          if (!key) continue;
           const upper = key.trim().toUpperCase();
-          if (upper.startsWith('STORE')) {
-            storeCount += val;
-          } else if (upper.startsWith('CORP')) {
-            corporateCount += val;
+          const count = typeof val === 'number' ? val : Number(val) || 0;
+
+          // Strictly accept only STORE and CORPORATE; do not mix devicetype values
+          if (upper === 'STORE' || upper === 'STORES') {
+            storeCount += count;
+          } else if (upper === 'CORPORATE' || upper === 'CORP') {
+            corporateCount += count;
           }
         }
       }
     }
 
+    // Category Total: Use total_category_assets / totalCategoryAssets where available
+    const apiTotalCategory =
+      hardwareData?.total_category_assets ??
+      hardwareData?.totalCategoryAssets ??
+      (hardwareData as any)?.total_category ??
+      (hardwareData as any)?.totalCategory ??
+      (data as any)?.total_category_assets ??
+      (data as any)?.totalCategoryAssets;
+
+    const total =
+      typeof apiTotalCategory === 'number' && !isNaN(apiTotalCategory) && apiTotalCategory >= 0
+        ? apiTotalCategory
+        : (storeCount + corporateCount);
+
+    // Calculate exact percentages returned or calculated from the category counts
+    const storePercentage =
+      apiStorePct !== undefined
+        ? apiStorePct
+        : total > 0
+        ? Number(((storeCount / total) * 100).toFixed(1))
+        : 0;
+
+    const corporatePercentage =
+      apiCorpPct !== undefined
+        ? apiCorpPct
+        : total > 0
+        ? Number(((corporateCount / total) * 100).toFixed(1))
+        : 0;
+
+    // Display both categories consistently, including categories with zero assets
     const items = [
-      { name: 'STORE', count: storeCount, color: '#4169E1' },      // Electric Blue
-      { name: 'CORPORATE', count: corporateCount, color: '#14B8A6' }, // Teal
+      {
+        name: 'STORE',
+        count: storeCount,
+        percentage: storePercentage,
+        color: getCategoryColor('STORE'), // #0D9488
+      },
+      {
+        name: 'CORPORATE',
+        count: corporateCount,
+        percentage: corporatePercentage,
+        color: getCategoryColor('CORPORATE'), // #7C3AED
+      },
     ];
 
-    const total = storeCount + corporateCount;
     return { items, total };
   }, [hardwareData, data]);
 
@@ -902,25 +1222,25 @@ export const DashboardPage: React.FC = () => {
         key: 'ACTIVE',
         label: 'Active (> 90 days)',
         count: countMap.ACTIVE,
-        color: '#16A34A', // Active Green
+        color: getEolColor('ACTIVE'), // #16A34A
       },
       {
         key: 'EOL SOON',
         label: 'EOL soon (0–90 days)',
         count: countMap['EOL SOON'],
-        color: '#F59E0B', // Amber
+        color: getEolColor('EOL SOON'), // #D97706
       },
       {
         key: 'EXPIRED',
         label: 'Expired',
         count: countMap.EXPIRED,
-        color: '#DC2626', // Red
+        color: getEolColor('EXPIRED'), // #DC2626
       },
       {
         key: 'UNKNOWN',
         label: 'Unknown',
         count: countMap.UNKNOWN,
-        color: '#64748B', // Slate
+        color: getEolColor('UNKNOWN'), // #64748B
       },
     ];
 
@@ -930,6 +1250,14 @@ export const DashboardPage: React.FC = () => {
 
     return { items, totalFleet };
   }, [data]);
+
+  const eolSoonCount = useMemo(() => {
+    return (
+      (data?.kpis as any)?.eol_soon ??
+      eolStatusDistribution.items.find((item) => item.key === 'EOL SOON')?.count ??
+      0
+    );
+  }, [data, eolStatusDistribution]);
 
   const eolExposure = useMemo(() => data?.eol_exposure ?? [], [data]);
   const eolExposureFormatted = useMemo(
@@ -1005,7 +1333,7 @@ export const DashboardPage: React.FC = () => {
         </div>
       )}
 
-      {/* Row 0 — Five KPI Cards */}
+      {/* Row 0 — Six KPI Cards */}
       <div className="di-kpis">
         <KpiTile
           label="Total Assets"
@@ -1044,6 +1372,16 @@ export const DashboardPage: React.FC = () => {
           testId="kpi-card-instock"
           valTestId="kpi-value-instock"
           secondaryTestId="kpi-card-in-stock"
+        />
+        <KpiTile
+          label="EOL SOON"
+          value={eolSoonCount}
+          subtitle="Within 0–90 days"
+          tone="eol_soon"
+          icon={<Clock className="w-4 h-4" />}
+          testId="kpi-card-eol-soon"
+          valTestId="kpi-value-eol-soon"
+          secondaryTestId="kpi-card-eol-soon-count"
         />
         <KpiTile
           label="Employees"
@@ -1211,14 +1549,14 @@ export const DashboardPage: React.FC = () => {
                 {/* Legends horizontally in a single line at top */}
                 <div className="di-section-legend-line">
                   <span className="di-source-legend-item">
-                    <i className="di-source-legend-dot" style={{ backgroundColor: '#635BFF' }} />
+                    <i className="di-source-legend-dot" style={{ backgroundColor: getDeviceTypeColor('Laptops') }} />
                     <span className="di-source-legend-name">Laptops</span>
                     <span className="di-source-legend-count">
                       {formatNumber(deviceTypeChartData.items[0]?.count)}
                     </span>
                   </span>
                   <span className="di-source-legend-item">
-                    <i className="di-source-legend-dot" style={{ backgroundColor: '#14B8A6' }} />
+                    <i className="di-source-legend-dot" style={{ backgroundColor: getDeviceTypeColor('Desktops') }} />
                     <span className="di-source-legend-name">Desktops</span>
                     <span className="di-source-legend-count">
                       {formatNumber(deviceTypeChartData.items[1]?.count)}
@@ -1273,26 +1611,25 @@ export const DashboardPage: React.FC = () => {
               <div
                 className="di-hardware-section"
                 data-testid="chart-by-category"
-                data-secondary-testid="chart-by-device-type-and-category"
               >
                 <div className="di-hardware-section-header">
                   <span className="di-hardware-section-title">By Category</span>
                 </div>
 
-                {/* Legend showing STORE and CORPORATE horizontally with live counts */}
+                {/* Legend showing STORE and CORPORATE horizontally with exact counts and percentages */}
                 <div className="di-section-legend-line">
                   <span className="di-source-legend-item">
-                    <i className="di-source-legend-dot" style={{ backgroundColor: '#4169E1' }} />
+                    <i className="di-source-legend-dot" style={{ backgroundColor: getCategoryColor('STORE') }} />
                     <span className="di-source-legend-name">STORE</span>
                     <span className="di-source-legend-count">
-                      {formatNumber(categoryChartData.items[0]?.count)}
+                      {formatNumber(categoryChartData.items[0]?.count)} ({categoryChartData.items[0]?.percentage !== undefined ? `${categoryChartData.items[0].percentage}%` : formatChartPercentage(categoryChartData.items[0]?.count, categoryChartData.total)})
                     </span>
                   </span>
                   <span className="di-source-legend-item">
-                    <i className="di-source-legend-dot" style={{ backgroundColor: '#14B8A6' }} />
+                    <i className="di-source-legend-dot" style={{ backgroundColor: getCategoryColor('CORPORATE') }} />
                     <span className="di-source-legend-name">CORPORATE</span>
                     <span className="di-source-legend-count">
-                      {formatNumber(categoryChartData.items[1]?.count)}
+                      {formatNumber(categoryChartData.items[1]?.count)} ({categoryChartData.items[1]?.percentage !== undefined ? `${categoryChartData.items[1].percentage}%` : formatChartPercentage(categoryChartData.items[1]?.count, categoryChartData.total)})
                     </span>
                   </span>
                 </div>
@@ -1320,10 +1657,14 @@ export const DashboardPage: React.FC = () => {
                             contentStyle={DASHBOARD_TOOLTIP_STYLE.contentStyle}
                             itemStyle={DASHBOARD_TOOLTIP_STYLE.itemStyle}
                             labelStyle={DASHBOARD_TOOLTIP_STYLE.labelStyle}
-                            formatter={(value: any, name: any) => [
-                              `${formatNumber(value)} assets (${formatChartPercentage(Number(value), categoryChartData.total)})`,
-                              String(name),
-                            ]}
+                            formatter={(value: any, name: any) => {
+                              const found = categoryChartData.items.find((i) => i.name === String(name));
+                              const pctStr =
+                                found?.percentage !== undefined
+                                  ? `${found.percentage}%`
+                                  : formatChartPercentage(Number(value), categoryChartData.total);
+                              return [`${formatNumber(value)} assets (${pctStr})`, String(name)];
+                            }}
                           />
                         </PieChart>
                       </ResponsiveContainer>
@@ -1398,7 +1739,7 @@ export const DashboardPage: React.FC = () => {
                     {topDepartments.map((dept, index) => (
                       <Cell
                         key={dept.department || index}
-                        fill={DEPARTMENT_PALETTE[index % DEPARTMENT_PALETTE.length]}
+                        fill={getDepartmentColor(dept.department)}
                       />
                     ))}
                     <LabelList
@@ -1534,7 +1875,7 @@ export const DashboardPage: React.FC = () => {
                       {eolExposureFormatted.map((item) => (
                         <Cell
                           key={item.originalModel}
-                          fill={getEolColor(item.eol_status)}
+                          fill={getHardwareModelColor(item.originalModel || item.model || item.shortModel)}
                         />
                       ))}
                       <LabelList

@@ -21,6 +21,7 @@ from app.schemas.dashboard import (
     HardwareAssetAnalysisResponse,
     OperatingSystemItem,
     DeviceTypeItem,
+    CategoryItem,
     DeviceTypeCategoryItem,
     DeviceTypeCategoryResponse,
 )
@@ -49,6 +50,7 @@ class DashboardService:
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
+        category: Optional[str] = None,
         manufacturer: Optional[str] = None,
         model: Optional[str] = None,
         assigned_username: Optional[str] = None,
@@ -143,6 +145,9 @@ class DashboardService:
 
         if devicetype and devicetype.strip().upper() != "ALL":
             stmt = stmt.where(func.lower(Asset.devicetype) == devicetype.strip().lower())
+
+        if category and category.strip().upper() != "ALL":
+            stmt = stmt.where(func.upper(func.trim(Asset.category)) == category.strip().upper())
 
         if manufacturer and manufacturer.strip().upper() != "ALL":
             stmt = stmt.where(func.lower(Asset.manufacturer) == manufacturer.strip().lower())
@@ -731,6 +736,7 @@ class DashboardService:
         scope: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
+        category: Optional[str] = None,
         manufacturer: Optional[str] = None,
         model: Optional[str] = None,
         assigned_username: Optional[str] = None,
@@ -742,7 +748,7 @@ class DashboardService:
         Computes live, database-backed aggregated metrics for the Hardware Asset Analysis card:
         1. Assets by Operating System (Windows 11, Windows 10, Mac)
         2. Assets by Device Type (Laptops, Desktops)
-        3. Assets by Device Type and Category (STORE-DESKTOPS, CORPORATE-LAPTOPS, CORPORATE-DESKTOPS)
+        3. Assets by Category (STORE, CORPORATE)
 
         Rules enforced:
         - Operating systems: aggregated for exactly three display groups:
@@ -754,11 +760,10 @@ class DashboardService:
         - Device types: aggregated for 'Laptops' and 'Desktops'.
           Normalized casing and whitespace, excluding Server and unrelated device types.
           Always includes both categories in response even when zero.
-        - Device type and category: aggregated for:
-          'STORE-DESKTOPS', 'CORPORATE-LAPTOPS', 'CORPORATE-DESKTOPS'.
-          Normalizes case and whitespace. Excludes unsupported combinations, Server devices,
-          blank/NULL categories. Always returns all three combinations with count 0 when no match.
-          Each asset counted at most once.
+        - Categories: aggregated exclusively by database `category` field: 'STORE' and 'CORPORATE'.
+          Normalizes case and whitespace. Excludes unrelated categories, NULL values, and blank values.
+          Does not mix devicetype (Laptop/Desktop) into category aggregation.
+          Always returns both STORE and CORPORATE present, including zero counts.
         - Accurate counts from PostgreSQL conditional aggregations without fetching full inventory into memory.
         """
         try:
@@ -770,6 +775,7 @@ class DashboardService:
                 scope=scope,
                 asset_status=asset_status,
                 devicetype=devicetype,
+                category=category,
                 manufacturer=manufacturer,
                 model=model,
                 assigned_username=assigned_username,
@@ -804,6 +810,7 @@ class DashboardService:
                 scope=scope,
                 asset_status=asset_status,
                 devicetype=devicetype,
+                category=category,
                 manufacturer=manufacturer,
                 model=model,
                 assigned_username=assigned_username,
@@ -852,6 +859,7 @@ class DashboardService:
                 source=source,
                 scope=scope,
                 asset_status=asset_status,
+                category=category,
                 manufacturer=manufacturer,
                 model=model,
                 assigned_username=assigned_username,
@@ -877,27 +885,25 @@ class DashboardService:
                 ),
             ]
 
-            # 4. Device Type and Category aggregation: STORE-DESKTOPS, CORPORATE-LAPTOPS, CORPORATE-DESKTOPS
+            # 4. Category aggregation: STORE, CORPORATE (pure category, no devicetype mixing)
             clean_cat = func.upper(func.trim(Asset.category))
-            store_desktop_cond = (clean_cat == "STORE") & desktop_cond
-            corp_laptop_cond = (clean_cat == "CORPORATE") & laptop_cond
-            corp_desktop_cond = (clean_cat == "CORPORATE") & desktop_cond
+            store_cond = clean_cat == "STORE"
+            corp_cond = clean_cat == "CORPORATE"
 
-            cat_dev_stmt = select(
-                func.count(case((store_desktop_cond, 1), else_=None)).label("store_desktops"),
-                func.count(case((corp_laptop_cond, 1), else_=None)).label("corp_laptops"),
-                func.count(case((corp_desktop_cond, 1), else_=None)).label("corp_desktops"),
+            cat_stmt = select(
+                func.count(case((store_cond, 1), else_=None)).label("store_cnt"),
+                func.count(case((corp_cond, 1), else_=None)).label("corp_cnt"),
             ).select_from(Asset).where(
                 Asset.category.is_not(None),
                 func.trim(Asset.category) != "",
-                Asset.devicetype.is_not(None),
-                func.trim(Asset.devicetype) != "",
             )
-            cat_dev_stmt = cls._apply_scope_and_filters(
-                cat_dev_stmt,
+            cat_stmt = cls._apply_scope_and_filters(
+                cat_stmt,
                 source=source,
                 scope=scope,
                 asset_status=asset_status,
+                devicetype=devicetype,
+                category=category,
                 manufacturer=manufacturer,
                 model=model,
                 assigned_username=assigned_username,
@@ -905,39 +911,33 @@ class DashboardService:
                 is_unassigned=is_unassigned,
                 search=search,
             )
-            cat_row = db.execute(cat_dev_stmt).first()
-            store_desktops_cnt = int(cat_row.store_desktops or 0) if cat_row else 0
-            corp_laptops_cnt = int(cat_row.corp_laptops or 0) if cat_row else 0
-            corp_desktops_cnt = int(cat_row.corp_desktops or 0) if cat_row else 0
+            cat_row = db.execute(cat_stmt).first()
+            store_cnt = int(cat_row.store_cnt or 0) if cat_row else 0
+            corp_cnt = int(cat_row.corp_cnt or 0) if cat_row else 0
+            total_category_assets = store_cnt + corp_cnt
 
-            by_device_type_and_category = [
-                DeviceTypeCategoryItem(
-                    category="STORE",
-                    deviceType="Desktop",
-                    label="STORE-DESKTOPS",
-                    count=store_desktops_cnt,
+            categories = [
+                CategoryItem(
+                    name="STORE",
+                    count=store_cnt,
+                    percentage=round((store_cnt / total_category_assets) * 100, 1) if total_category_assets > 0 else 0.0,
                 ),
-                DeviceTypeCategoryItem(
-                    category="CORPORATE",
-                    deviceType="Laptop",
-                    label="CORPORATE-LAPTOPS",
-                    count=corp_laptops_cnt,
-                ),
-                DeviceTypeCategoryItem(
-                    category="CORPORATE",
-                    deviceType="Desktop",
-                    label="CORPORATE-DESKTOPS",
-                    count=corp_desktops_cnt,
+                CategoryItem(
+                    name="CORPORATE",
+                    count=corp_cnt,
+                    percentage=round((corp_cnt / total_category_assets) * 100, 1) if total_category_assets > 0 else 0.0,
                 ),
             ]
 
             return HardwareAssetAnalysisResponse.model_validate({
                 "operating_systems": operating_systems,
                 "device_types": device_types,
-                "by_device_type_and_category": by_device_type_and_category,
+                "categories": categories,
+                "by_category": {"STORE": store_cnt, "CORPORATE": corp_cnt},
                 "total_assets": total_assets,
                 "total_os_assets": total_os_assets,
                 "total_device_assets": total_device_assets,
+                "total_category_assets": total_category_assets,
             })
         except Exception as e:
             logger.error(f"Error calculating hardware asset analysis: {e}", exc_info=True)
@@ -1234,8 +1234,11 @@ class DashboardService:
             ],
             "source_summary": source_summary_list,
             "hardware_analysis": hw_analysis,
-            "by_device_type_and_category": hw_analysis.by_device_type_and_category,
-            "byDeviceTypeAndCategory": hw_analysis.by_device_type_and_category,
+            "categories": hw_analysis.categories,
+            "by_category": hw_analysis.by_category,
+            "byCategory": hw_analysis.by_category,
+            "by_device_type_and_category": cls.get_device_type_and_category(db=db).byDeviceTypeAndCategory,
+            "byDeviceTypeAndCategory": cls.get_device_type_and_category(db=db).byDeviceTypeAndCategory,
         }
 
 

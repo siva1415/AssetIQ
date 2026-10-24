@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from app.models.workday_employee import WorkdayEmployee
@@ -14,12 +14,25 @@ class EmployeeService:
     """
 
     @classmethod
-    def get_employee_detail(cls, db: Session, employee_id: int) -> EmployeeDetailResponse:
-        employee = EmployeeRepository.get_by_id(db, employee_id)
+    def get_employee_detail(
+        cls,
+        db: Session,
+        employee_id: Optional[Union[int, str]] = None,
+        *,
+        identifier: Optional[Union[int, str]] = None,
+    ) -> EmployeeDetailResponse:
+        lookup_id = identifier if identifier is not None else employee_id
+        if lookup_id is None or (isinstance(lookup_id, str) and not lookup_id.strip()):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee identifier is required",
+            )
+
+        employee = EmployeeRepository.get_by_identifier(db, lookup_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found",
+                detail=f"Employee with ID {lookup_id} not found",
             )
 
         # Retrieve all correlated assets assigned to this employee's user_id

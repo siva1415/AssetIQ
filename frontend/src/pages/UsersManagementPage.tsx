@@ -145,6 +145,31 @@ export const UsersManagementPage: React.FC = () => {
   const isSuperadmin = currentUser.role === 'SUPERADMIN';
   const isAdmin = currentUser.role === 'ADMIN';
 
+  // Check if a target user is the currently logged-in user using stable identifier
+  const isCurrentLoggedInUser = useCallback((targetUser: AppUser): boolean => {
+    if (!currentUser) return false;
+    // Check stable database user ID first
+    const currentId = currentUser.id;
+    const targetId = targetUser.id ?? targetUser.user_id;
+    if (currentId != null && targetId != null && String(currentId).trim() !== '' && String(targetId).trim() !== '') {
+      if (String(currentId).trim() === String(targetId).trim()) {
+        return true;
+      }
+    }
+    // Fallback to canonical username comparison (case-insensitively, trimmed)
+    if (currentUser.username && targetUser.username) {
+      if (currentUser.username.trim().toLowerCase() === targetUser.username.trim().toLowerCase()) {
+        return true;
+      }
+    }
+    return false;
+  }, [currentUser]);
+
+  // Check if an account is the permanently protected superadmin username (case-insensitive, trimmed)
+  const isProtectedSuperadmin = useCallback((user: { username?: string } | null | undefined): boolean => {
+    return (user?.username || '').trim().toLowerCase() === 'superadmin';
+  }, []);
+
   // Can current user manage a specific target user?
   const canManageUser = (targetUser: AppUser): boolean => {
     if (isSuperadmin) return true;
@@ -157,10 +182,22 @@ export const UsersManagementPage: React.FC = () => {
 
   // Can deactivate this user?
   const canDeactivateUser = (targetUser: AppUser): { allowed: boolean; reason?: string } => {
+    // 1. Current logged-in user cannot deactivate their own account (applies to ALL roles)
+    if (isCurrentLoggedInUser(targetUser)) {
+      return { allowed: false, reason: 'You cannot deactivate your own account.' };
+    }
+
+    // 2. Permanently protect the 'superadmin' username
+    if (isProtectedSuperadmin(targetUser)) {
+      return { allowed: false, reason: 'The superadmin account cannot be deactivated.' };
+    }
+
+    // 3. Existing role-based permission: ADMIN cannot modify or deactivate SUPERADMIN accounts
     if (!canManageUser(targetUser)) {
       return { allowed: false, reason: 'Admin cannot modify or deactivate Superadmin accounts.' };
     }
-    // Block deactivating the last active SUPERADMIN
+
+    // 4. Block deactivating the last active SUPERADMIN
     if (
       targetUser.role === 'SUPERADMIN' &&
       (targetUser.status === 'ACTIVE' || targetUser.is_active === true) &&
@@ -168,6 +205,7 @@ export const UsersManagementPage: React.FC = () => {
     ) {
       return { allowed: false, reason: 'Cannot deactivate the last active Superadmin account.' };
     }
+
     return { allowed: true };
   };
 
@@ -246,9 +284,11 @@ export const UsersManagementPage: React.FC = () => {
     if (!userToEdit) return;
     setEditError(null);
 
-    const trimmedUsername = editForm.username.trim();
+    const isEditingSuperadmin = isProtectedSuperadmin(userToEdit);
+    const trimmedUsername = isEditingSuperadmin ? 'superadmin' : editForm.username.trim();
     const trimmedFullName = editForm.full_name.trim();
     const trimmedEmail = editForm.email.trim();
+    const targetRole = isEditingSuperadmin ? userToEdit.role : editForm.role;
 
     if (!trimmedUsername) {
       setEditError('Username is required.');
@@ -270,17 +310,18 @@ export const UsersManagementPage: React.FC = () => {
         username: trimmedUsername,
         full_name: trimmedFullName,
         email: trimmedEmail,
-        role: editForm.role,
+        role: targetRole,
       });
 
       // Synchronize authenticated user state if self-editing
-      if (currentUser.username === userToEdit.username) {
+      const isSelf = isCurrentLoggedInUser(userToEdit);
+      if (isSelf) {
         setCurrentUser({
           ...currentUser,
           username: trimmedUsername,
           name: trimmedFullName,
           email: trimmedEmail,
-          role: editForm.role,
+          role: targetRole,
         });
       }
 
@@ -318,10 +359,22 @@ export const UsersManagementPage: React.FC = () => {
   // Handle Toggle Status Submit
   const handleStatusConfirm = async () => {
     if (!statusConfirmUser) return;
-    const newStatus: PortalUserStatus =
-      statusConfirmUser.status === 'ACTIVE' || statusConfirmUser.is_active === true
-        ? 'INACTIVE'
-        : 'ACTIVE';
+    const isDeactivating =
+      statusConfirmUser.status === 'ACTIVE' || statusConfirmUser.is_active === true;
+
+    if (isDeactivating) {
+      const check = canDeactivateUser(statusConfirmUser);
+      if (!check.allowed) {
+        setNotification({
+          type: 'error',
+          message: check.reason || 'Deactivation is not permitted for this account.',
+        });
+        setStatusConfirmUser(null);
+        return;
+      }
+    }
+
+    const newStatus: PortalUserStatus = isDeactivating ? 'INACTIVE' : 'ACTIVE';
 
     setStatusActionLoading(true);
     try {
@@ -577,7 +630,7 @@ export const UsersManagementPage: React.FC = () => {
               ) : (
                 users.map(u => {
                   const deactivationCheck = canDeactivateUser(u);
-                  const isSelf = currentUser.username && u.username === currentUser.username;
+                  const isSelf = isCurrentLoggedInUser(u);
                   const canManage = canManageUser(u);
 
                   return (
@@ -676,11 +729,14 @@ export const UsersManagementPage: React.FC = () => {
                           {u.status === 'ACTIVE' || u.is_active === true ? (
                             <button
                               type="button"
-                              onClick={() => setStatusConfirmUser(u)}
+                              onClick={() => {
+                                if (!deactivationCheck.allowed) return;
+                                setStatusConfirmUser(u);
+                              }}
                               disabled={!deactivationCheck.allowed}
-                              className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+                              className={`p-1.5 rounded-md transition-colors ${
                                 deactivationCheck.allowed
-                                  ? 'text-slate-600 hover:text-rose-600 hover:bg-rose-50'
+                                  ? 'text-slate-600 hover:text-rose-600 hover:bg-rose-50 cursor-pointer'
                                   : 'text-slate-300 cursor-not-allowed opacity-40'
                               }`}
                               title={deactivationCheck.reason || 'Deactivate user account'}
@@ -1061,18 +1117,31 @@ export const UsersManagementPage: React.FC = () => {
                   className="block text-xs font-semibold text-slate-700 mb-1"
                 >
                   Username <span className="text-rose-500">*</span>
+                  {isProtectedSuperadmin(userToEdit) && (
+                    <span className="ml-2 text-[10px] font-normal text-slate-400">
+                      (Protected account — username cannot be changed)
+                    </span>
+                  )}
                 </label>
                 <input
                   id="edit-username"
                   type="text"
                   required
-                  value={editForm.username}
+                  disabled={isProtectedSuperadmin(userToEdit)}
+                  readOnly={isProtectedSuperadmin(userToEdit)}
+                  value={isProtectedSuperadmin(userToEdit) ? 'superadmin' : editForm.username}
                   onChange={e => {
+                    if (isProtectedSuperadmin(userToEdit)) return;
                     setEditForm({ ...editForm, username: e.target.value });
                     if (editError) setEditError(null);
                   }}
                   placeholder="e.g. jsmith or admin_john"
-                  className="w-full h-9 px-3 text-xs bg-white text-slate-900 font-mono font-medium border border-slate-200 hover:border-slate-300 rounded-lg focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 transition-all"
+                  className={`w-full h-9 px-3 text-xs font-mono font-medium border rounded-lg transition-all ${
+                    isProtectedSuperadmin(userToEdit)
+                      ? 'bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed select-none'
+                      : 'bg-white text-slate-900 border-slate-200 hover:border-slate-300 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20'
+                  }`}
+                  title={isProtectedSuperadmin(userToEdit) ? 'The superadmin username is protected and cannot be changed.' : undefined}
                 />
               </div>
 
@@ -1122,6 +1191,11 @@ export const UsersManagementPage: React.FC = () => {
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   Role <span className="text-rose-500">*</span>
+                  {isProtectedSuperadmin(userToEdit) && (
+                    <span className="ml-2 text-[10px] font-normal text-slate-400">
+                      (Protected account — role cannot be changed)
+                    </span>
+                  )}
                 </label>
                 <div
                   className="flex flex-col gap-2"
@@ -1130,19 +1204,26 @@ export const UsersManagementPage: React.FC = () => {
                 >
                   {/* SUPERADMIN */}
                   <label
-                    className={`flex items-center gap-2.5 w-full p-2.5 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${
-                      editForm.role === 'SUPERADMIN'
-                        ? 'bg-purple-50/70 border-purple-400 text-purple-900 ring-2 ring-purple-500/20 shadow-2xs'
-                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300'
+                    className={`flex items-center gap-2.5 w-full p-2.5 rounded-lg border text-xs font-semibold transition-all ${
+                      isProtectedSuperadmin(userToEdit)
+                        ? 'bg-purple-50/50 border-purple-300 text-purple-900 cursor-not-allowed opacity-90'
+                        : editForm.role === 'SUPERADMIN'
+                        ? 'bg-purple-50/70 border-purple-400 text-purple-900 ring-2 ring-purple-500/20 shadow-2xs cursor-pointer'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 cursor-pointer'
                     }`}
+                    title={isProtectedSuperadmin(userToEdit) ? 'The role of the superadmin account cannot be changed.' : undefined}
                   >
                     <input
                       type="radio"
                       name="edit-portal-role"
                       value="SUPERADMIN"
+                      disabled={isProtectedSuperadmin(userToEdit)}
                       checked={editForm.role === 'SUPERADMIN'}
-                      onChange={() => setEditForm({ ...editForm, role: 'SUPERADMIN' })}
-                      className="w-4 h-4 text-purple-600 border-slate-300 focus:ring-purple-500 cursor-pointer"
+                      onChange={() => {
+                        if (isProtectedSuperadmin(userToEdit)) return;
+                        setEditForm({ ...editForm, role: 'SUPERADMIN' });
+                      }}
+                      className="w-4 h-4 text-purple-600 border-slate-300 focus:ring-purple-500 disabled:cursor-not-allowed"
                     />
                     <ShieldCheck className="w-4 h-4 text-purple-600 shrink-0" />
                     <span className="font-semibold tracking-wide">SUPERADMIN</span>
@@ -1150,19 +1231,26 @@ export const UsersManagementPage: React.FC = () => {
 
                   {/* ADMIN */}
                   <label
-                    className={`flex items-center gap-2.5 w-full p-2.5 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${
-                      editForm.role === 'ADMIN'
-                        ? 'bg-blue-50/70 border-blue-400 text-blue-900 ring-2 ring-blue-500/20 shadow-2xs'
-                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300'
+                    className={`flex items-center gap-2.5 w-full p-2.5 rounded-lg border text-xs font-semibold transition-all ${
+                      isProtectedSuperadmin(userToEdit)
+                        ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed opacity-50'
+                        : editForm.role === 'ADMIN'
+                        ? 'bg-blue-50/70 border-blue-400 text-blue-900 ring-2 ring-blue-500/20 shadow-2xs cursor-pointer'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 cursor-pointer'
                     }`}
+                    title={isProtectedSuperadmin(userToEdit) ? 'The role of the superadmin account cannot be changed.' : undefined}
                   >
                     <input
                       type="radio"
                       name="edit-portal-role"
                       value="ADMIN"
+                      disabled={isProtectedSuperadmin(userToEdit)}
                       checked={editForm.role === 'ADMIN'}
-                      onChange={() => setEditForm({ ...editForm, role: 'ADMIN' })}
-                      className="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer"
+                      onChange={() => {
+                        if (isProtectedSuperadmin(userToEdit)) return;
+                        setEditForm({ ...editForm, role: 'ADMIN' });
+                      }}
+                      className="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 disabled:cursor-not-allowed"
                     />
                     <Shield className="w-4 h-4 text-blue-600 shrink-0" />
                     <span className="font-semibold tracking-wide">ADMIN</span>
@@ -1170,19 +1258,26 @@ export const UsersManagementPage: React.FC = () => {
 
                   {/* VIEWER */}
                   <label
-                    className={`flex items-center gap-2.5 w-full p-2.5 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${
-                      editForm.role === 'VIEWER'
-                        ? 'bg-teal-50/70 border-teal-400 text-teal-900 ring-2 ring-teal-500/20 shadow-2xs'
-                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300'
+                    className={`flex items-center gap-2.5 w-full p-2.5 rounded-lg border text-xs font-semibold transition-all ${
+                      isProtectedSuperadmin(userToEdit)
+                        ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed opacity-50'
+                        : editForm.role === 'VIEWER'
+                        ? 'bg-teal-50/70 border-teal-400 text-teal-900 ring-2 ring-teal-500/20 shadow-2xs cursor-pointer'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 cursor-pointer'
                     }`}
+                    title={isProtectedSuperadmin(userToEdit) ? 'The role of the superadmin account cannot be changed.' : undefined}
                   >
                     <input
                       type="radio"
                       name="edit-portal-role"
                       value="VIEWER"
+                      disabled={isProtectedSuperadmin(userToEdit)}
                       checked={editForm.role === 'VIEWER'}
-                      onChange={() => setEditForm({ ...editForm, role: 'VIEWER' })}
-                      className="w-4 h-4 text-teal-600 border-slate-300 focus:ring-teal-500 cursor-pointer"
+                      onChange={() => {
+                        if (isProtectedSuperadmin(userToEdit)) return;
+                        setEditForm({ ...editForm, role: 'VIEWER' });
+                      }}
+                      className="w-4 h-4 text-teal-600 border-slate-300 focus:ring-teal-500 disabled:cursor-not-allowed"
                     />
                     <Eye className="w-4 h-4 text-teal-600 shrink-0" />
                     <span className="font-semibold tracking-wide">VIEWER</span>

@@ -19,6 +19,7 @@ import { api } from '../../services/api';
 import { SelectableEmployeeCard } from '../employees/SelectableEmployeeCard';
 
 export interface BulkAssignResult {
+  status: 'success' | 'partial' | 'failure';
   assignedCount: number;
   failedCount: number;
   totalProcessed: number;
@@ -26,6 +27,20 @@ export interface BulkAssignResult {
   failedAssetIds: (string | number)[];
   isAllSuccess: boolean;
   message: string;
+}
+
+function parseAssignedCountFromMessage(msg?: string): number | null {
+  if (!msg || typeof msg !== 'string') return null;
+  const m1 = msg.match(/(?:completed successfully:\s*|successfully assigned\s+|assigned\s+)(\d[\d,]*)\s*asset/i);
+  if (m1) return parseInt(m1[1].replace(/,/g, ''), 10);
+
+  const m2 = msg.match(/(\d[\d,]*)\s*asset(?:\(s\)|s)?\s+assigned/i);
+  if (m2) return parseInt(m2[1].replace(/,/g, ''), 10);
+
+  const m3 = msg.match(/assigned\s+(\d[\d,]*)/i);
+  if (m3) return parseInt(m3[1].replace(/,/g, ''), 10);
+
+  return null;
 }
 
 export interface BulkAssignAssetModalProps {
@@ -72,70 +87,7 @@ export const BulkAssignAssetModal: React.FC<BulkAssignAssetModalProps> = ({
     return selectedAssetIds.map(id => map.get(id) || String(id));
   }, [selectedAssetIds, selectedAssets]);
 
-  // For all-matching-assets, fetch the actual asset numbers across all pages
-  useEffect(() => {
-    if (!isAllMatchingSelected) return;
-
-    let isMounted = true;
-    setLoadingAssetNumbers(true);
-
-    const fetchAllMatchingNumbers = async () => {
-      try {
-        const pageSize = Math.min(100, Math.max(10, matchingCount || 100));
-        const firstPage = await api.getAssets({
-          ...(activeFilters || {}),
-          page: 1,
-          page_size: pageSize,
-        });
-
-        if (!isMounted) return;
-
-        let allItems = [...firstPage.items];
-        const total = firstPage.total || allItems.length;
-        const totalPages = firstPage.total_pages || Math.ceil(total / pageSize);
-
-        if (totalPages > 1 && totalPages <= 50) {
-          const pagePromises: Promise<any>[] = [];
-          for (let p = 2; p <= totalPages; p++) {
-            pagePromises.push(
-              api.getAssets({
-                ...(activeFilters || {}),
-                page: p,
-                page_size: pageSize,
-              })
-            );
-          }
-          const otherPages = await Promise.all(pagePromises);
-          if (!isMounted) return;
-          otherPages.forEach(res => {
-            if (res && res.items) {
-              allItems = allItems.concat(res.items);
-            }
-          });
-        }
-
-        const numbers = allItems
-          .map(a => a.asset_number || String(a.id))
-          .filter(Boolean);
-
-        if (isMounted) {
-          setResolvedAssetNumbers(numbers);
-        }
-      } catch (err) {
-        console.error('[BulkAssignAssetModal] Failed to resolve matching asset numbers:', err);
-      } finally {
-        if (isMounted) {
-          setLoadingAssetNumbers(false);
-        }
-      }
-    };
-
-    void fetchAllMatchingNumbers();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [isAllMatchingSelected, activeFilters, matchingCount]);
+  // Do not fetch asset numbers for all-matching selections; the summary only needs matchingCount.
 
   // Unified displayed asset numbers for Target Assets section
   const displayedAssetNumbers = useMemo(() => {
@@ -292,6 +244,7 @@ export const BulkAssignAssetModal: React.FC<BulkAssignAssetModalProps> = ({
       const response = await api.bulkAssignAssets({
         asset_ids: isAllMatchingSelected ? undefined : selectedAssetIds,
         select_all_matching: isAllMatchingSelected,
+        matching_count: targetCount,
         filters: isAllMatchingSelected ? activeFilters : undefined,
         user_id: selectedUser.user_id,
         assigned_username: selectedUser.user_id,
@@ -301,24 +254,75 @@ export const BulkAssignAssetModal: React.FC<BulkAssignAssetModalProps> = ({
         remarks: remarksPayload,
       });
 
-      const assignedCount = response.assigned_count ?? 0;
+      // Extract failed items and count
       const failedIds = response.failed_asset_ids ?? [];
       const failedCount = response.failed_count ?? failedIds.length;
-      const totalProcessed = response.total_processed ?? (assignedCount + failedCount);
-      const isAllSuccess = failedCount === 0 && assignedCount > 0;
+
+      // Extract assigned count with message fallback
+      let assignedCount = response.assigned_count ?? 0;
+      if (assignedCount === 0) {
+        const msgParsed = parseAssignedCountFromMessage(response.message);
+        if (msgParsed !== null && msgParsed > 0) {
+          assignedCount = msgParsed;
+        }
+      }
+
+      // Extract total processed count
+      let totalProcessed = response.total_processed ?? 0;
+      if (totalProcessed === 0) {
+        totalProcessed = (assignedCount + failedCount) > 0 ? (assignedCount + failedCount) : targetCount;
+      }
+
+      // Check explicit business-level failure vs success
+      const isExplicitFail =
+        response.status === 'failure' ||
+        response.status === 'failed' ||
+        response.status === 'error' ||
+        response.success === false;
+
+      const isExplicitSuccess =
+        response.status === 'success' ||
+        response.status === 'ok' ||
+        response.status === 'completed' ||
+        response.success === true ||
+        /successfully|completed successfully/i.test(response.message || '');
+
+      if (!isExplicitFail && isExplicitSuccess && failedCount === 0) {
+        if (assignedCount === 0 && totalProcessed > 0) {
+          assignedCount = totalProcessed;
+        } else if (totalProcessed === 0 && assignedCount > 0) {
+          totalProcessed = assignedCount;
+        }
+      }
+
+      const isAllSuccess = !isExplicitFail && failedCount === 0 && (assignedCount > 0 || totalProcessed > 0);
+      if (isAllSuccess && assignedCount === 0 && totalProcessed > 0) {
+        assignedCount = totalProcessed;
+      }
+      const isPartial = !isExplicitFail && failedCount > 0 && assignedCount > 0;
+      const status: 'success' | 'partial' | 'failure' = isAllSuccess
+        ? 'success'
+        : isPartial
+        ? 'partial'
+        : 'failure';
+
+      const finalMessage = response.message || (
+        status === 'success'
+          ? `Successfully assigned ${assignedCount.toLocaleString()} assets to ${selectedUser.full_name}.`
+          : status === 'partial'
+          ? `Assigned ${assignedCount.toLocaleString()} assets with ${failedCount.toLocaleString()} failures.`
+          : `Bulk assignment failed.`
+      );
 
       const result: BulkAssignResult = {
+        status,
         assignedCount,
         failedCount,
         totalProcessed: totalProcessed > 0 ? totalProcessed : targetCount,
         successfulAssetIds: response.successful_asset_ids || [],
         failedAssetIds: failedIds,
         isAllSuccess,
-        message:
-          response.message ||
-          (isAllSuccess
-            ? `Successfully assigned ${assignedCount.toLocaleString()} assets to ${selectedUser.full_name}.`
-            : `Assigned ${assignedCount.toLocaleString()} assets with ${failedCount.toLocaleString()} failures.`),
+        message: finalMessage,
       };
 
       setAssignmentResult(result);
@@ -342,6 +346,7 @@ export const BulkAssignAssetModal: React.FC<BulkAssignAssetModalProps> = ({
       }
 
       const result: BulkAssignResult = {
+        status: 'failure',
         assignedCount: 0,
         failedCount: targetCount,
         totalProcessed: targetCount,
@@ -407,7 +412,20 @@ export const BulkAssignAssetModal: React.FC<BulkAssignAssetModalProps> = ({
 
             {/* Scrollable Form Body */}
             <form onSubmit={handleProceedToConfirmation} className="flex-1 overflow-y-auto p-5 space-y-4">
-              {/* Target Assets Summary Banner */}
+              {isAllMatchingSelected ? (
+                <div className="rounded-lg border border-slate-200 bg-white px-3.5 py-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Laptop className="w-4 h-4 text-slate-500" />
+                    <h4 className="text-sm font-semibold text-slate-900">Target Assets</h4>
+                  </div>
+                  <div className="flex items-start gap-2.5 rounded-md bg-emerald-50 px-3 py-2.5">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                    <p className="text-xs leading-5 text-slate-700">
+                      All <span className="font-semibold text-slate-900 tabular-nums">{targetCount.toLocaleString()}</span> matching assets will be included in the assignment.
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
@@ -442,6 +460,7 @@ export const BulkAssignAssetModal: React.FC<BulkAssignAssetModalProps> = ({
                   )}
                 </div>
               </div>
+              )}
 
               {/* Assignment Configuration: Managed By and Remarks */}
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
@@ -820,16 +839,16 @@ export const BulkAssignAssetModal: React.FC<BulkAssignAssetModalProps> = ({
             <div className="flex items-start gap-3.5 pb-4 border-b border-slate-200">
               <div
                 className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
-                  assignmentResult.isAllSuccess
+                  assignmentResult.status === 'success'
                     ? 'bg-emerald-100 text-emerald-700'
-                    : assignmentResult.assignedCount > 0
+                    : assignmentResult.status === 'partial'
                     ? 'bg-amber-100 text-amber-700'
                     : 'bg-rose-100 text-rose-700'
                 }`}
               >
-                {assignmentResult.isAllSuccess ? (
+                {assignmentResult.status === 'success' ? (
                   <CheckCircle2 className="w-6 h-6" />
-                ) : assignmentResult.assignedCount > 0 ? (
+                ) : assignmentResult.status === 'partial' ? (
                   <AlertTriangle className="w-6 h-6" />
                 ) : (
                   <AlertCircle className="w-6 h-6" />
@@ -837,16 +856,16 @@ export const BulkAssignAssetModal: React.FC<BulkAssignAssetModalProps> = ({
               </div>
               <div className="flex-1">
                 <h3 className="text-base font-bold text-slate-900 leading-tight">
-                  {assignmentResult.isAllSuccess
-                    ? 'Bulk Assignment Completed Successfully'
-                    : assignmentResult.assignedCount > 0
-                    ? 'Bulk Assignment Completed with Partial Failures'
+                  {assignmentResult.status === 'success'
+                    ? 'Bulk Assignment Successful'
+                    : assignmentResult.status === 'partial'
+                    ? 'Bulk Assignment Partially Successful'
                     : 'Bulk Assignment Failed'}
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  {assignmentResult.isAllSuccess
+                  {assignmentResult.status === 'success'
                     ? 'All selected assets have been attributed in the inventory database.'
-                    : assignmentResult.assignedCount > 0
+                    : assignmentResult.status === 'partial'
                     ? 'Some assets were attributed successfully, but errors occurred on others.'
                     : 'The backend was unable to execute the assignment operation.'}
                 </p>
@@ -896,9 +915,9 @@ export const BulkAssignAssetModal: React.FC<BulkAssignAssetModalProps> = ({
             {/* Result Message Banner */}
             <div
               className={`p-3.5 rounded-lg text-xs flex items-start gap-2.5 border ${
-                assignmentResult.isAllSuccess
+                assignmentResult.status === 'success'
                   ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                  : assignmentResult.assignedCount > 0
+                  : assignmentResult.status === 'partial'
                   ? 'bg-amber-50 border-amber-200 text-amber-900'
                   : 'bg-rose-50 border-rose-200 text-rose-900'
               }`}

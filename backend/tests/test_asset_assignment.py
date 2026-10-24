@@ -389,3 +389,161 @@ def test_migration_of_legacy_records():
     with pytest.raises(ValueError) as excinfo:
         migrate_asset_status_records(session)
     assert "CORRUPTED_VALUE" in str(excinfo.value)
+
+
+# =========================================================================
+# Asset Ownership Details: Assign and Reassign User Tests
+# =========================================================================
+
+def test_assign_user_from_ownership_details_unassigned_asset(client: TestClient):
+    """
+    Requirement 1-6: Assign user to an unassigned asset from Asset Ownership details.
+    - Uses asset_number ('AST-1003') or ID (3).
+    - Accepts selected Workday employee user_id ('sarahconnor').
+    - Updates ownership info, sets status to 'ACTIVE', assignment_type to 'MANUAL'.
+    - Returns updated asset including asset_number, user_id, and user_full_name.
+    """
+    payload = {
+        "user_id": "sarahconnor",
+        "managed_by": "INDIVIDUAL",
+        "remarks": "Assigned via Asset Ownership details popup",
+    }
+    # Test assignment via asset_number in path
+    response = client.post("/api/assets/AST-1003/assign", json=payload)
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert data["asset_number"] == "AST-1003"
+    assert data["user_id"] == "sarahconnor"
+    assert data["userId"] == "sarahconnor"
+    assert data["user_full_name"] == "Sarah Connor"
+    assert data["userFullName"] == "Sarah Connor"
+    assert data["assigned_username"] == "sarahconnor"
+    assert data["asset_status"] == "ACTIVE"
+    assert data["assignment_type"] == "MANUAL"
+    assert data["managed_by"] == "INDIVIDUAL"
+    assert data["remarks"] == "Assigned via Asset Ownership details popup"
+    assert data["workday_status"] == "Matched Workday employee"
+    assert data["matched_employee"]["full_name"] == "Sarah Connor"
+
+    # Verify persisted in database
+    get_res = client.get("/api/assets/AST-1003")
+    assert get_res.status_code == 200
+    persisted = get_res.json()
+    assert persisted["assigned_username"] == "sarahconnor"
+    assert persisted["user_id"] == "sarahconnor"
+    assert persisted["user_full_name"] == "Sarah Connor"
+    assert persisted["asset_status"] == "ACTIVE"
+
+
+def test_reassign_user_from_ownership_details_assigned_asset(client: TestClient):
+    """
+    Requirement 4-6: Reassign an already assigned asset to another Workday user.
+    - Asset 1 initially assigned to 'johndoe'.
+    - Reassigned to 'sarahconnor'.
+    - Replaces assigned user in place without duplicates.
+    - Returns updated asset including asset_number, user_id, and user_full_name.
+    """
+    # Verify initial assignment
+    initial = client.get("/api/assets/1").json()
+    assert initial["assigned_username"].strip() == "JOHNDOE"
+
+    payload = {
+        "user_id": "sarahconnor",
+        "remarks": "Reassigned from John Doe to Sarah Connor",
+    }
+    # Reassign using asset ID
+    reassign_res = client.post("/api/assets/1/reassign", json=payload)
+    assert reassign_res.status_code == 200, reassign_res.text
+    data = reassign_res.json()
+
+    assert data["asset_id"] == 1
+    assert data["asset_number"] == "AST-1001"
+    assert data["user_id"] == "sarahconnor"
+    assert data["user_full_name"] == "Sarah Connor"
+    assert data["assigned_username"] == "sarahconnor"
+    assert data["assignment_type"] == "MANUAL"
+    assert data["remarks"] == "Reassigned from John Doe to Sarah Connor"
+    assert data["workday_status"] == "Matched Workday employee"
+
+    # Verify persistence
+    persisted = client.get("/api/assets/1").json()
+    assert persisted["assigned_username"] == "sarahconnor"
+    assert persisted["user_full_name"] == "Sarah Connor"
+
+
+def test_assign_user_from_ownership_details_payload_with_asset_number(client: TestClient):
+    """
+    Requirement 2 & 5: Collection endpoint /api/assets/assign accepting asset_number in payload.
+    """
+    payload = {
+        "asset_number": "AST-1003",
+        "user_id": "sarahconnor",
+        "managed_by": "GROUP",
+        "remarks": "Assigned via payload",
+    }
+    response = client.post("/api/assets/assign", json=payload)
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert data["asset_number"] == "AST-1003"
+    assert data["user_id"] == "sarahconnor"
+    assert data["user_full_name"] == "Sarah Connor"
+    assert data["managed_by"] == "GROUP"
+    assert data["assigned_username"] == "sarahconnor"
+
+
+def test_assign_user_from_ownership_alias_endpoint(client: TestClient):
+    """
+    Verifies /api/assets/ownership/{asset_id}/assign and /api/assets/ownership/assign endpoints.
+    """
+    # 1. Path alias
+    res_path = client.post(
+        "/api/assets/ownership/3/assign",
+        json={"user_id": "sarahconnor", "remarks": "Ownership path alias test"},
+    )
+    assert res_path.status_code == 200, res_path.text
+    assert res_path.json()["asset_number"] == "AST-1003"
+    assert res_path.json()["user_id"] == "sarahconnor"
+    assert res_path.json()["user_full_name"] == "Sarah Connor"
+
+    # 2. Collection alias
+    res_coll = client.post(
+        "/api/assets/ownership/assign",
+        json={"asset_id": 3, "user_id": "johndoe", "remarks": "Ownership collection alias test"},
+    )
+    assert res_coll.status_code == 200, res_coll.text
+    assert res_coll.json()["user_id"] == "johndoe"
+    assert res_coll.json()["user_full_name"] == "John Doe"
+
+
+def test_assign_user_ownership_validation_errors(client: TestClient):
+    """
+    Requirement 3 & 7: Proper error validation:
+    - 404 for non-existent asset
+    - 400 for non-existent Workday employee
+    - 400 for inactive/terminated Workday employee
+    """
+    # 1. Non-existent asset
+    res_404 = client.post(
+        "/api/assets/NON_EXISTENT_TAG/assign",
+        json={"user_id": "sarahconnor"},
+    )
+    assert res_404.status_code == 404
+
+    # 2. Non-existent employee
+    res_emp_not_found = client.post(
+        "/api/assets/3/assign",
+        json={"user_id": "nonexistent_employee_user_id"},
+    )
+    assert res_emp_not_found.status_code == 400
+    assert "not found" in res_emp_not_found.json()["detail"].lower()
+
+    # 3. Inactive employee (alexturner is Terminated in conftest)
+    res_inactive = client.post(
+        "/api/assets/3/assign",
+        json={"user_id": "alexturner"},
+    )
+    assert res_inactive.status_code == 400
+    assert "cannot be assigned" in res_inactive.json()["detail"].lower()
+

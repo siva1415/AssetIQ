@@ -22,10 +22,10 @@ def test_hardware_asset_analysis_standard_counts(client: TestClient):
         - 'Desktops': 4 (AST-1001, AST-1002, AST-1004, AST-1005)
         (AST-1003 and AST-1006 Server devices are excluded)
         Total matching device assets: 4
-    - Device type and category:
-        - STORE-DESKTOPS: 0
-        - CORPORATE-LAPTOPS: 0
-        - CORPORATE-DESKTOPS: 0
+    - Categories: exactly 2 groups:
+        - 'STORE': 3 (AST-1002, AST-1003, AST-1006)
+        - 'CORPORATE': 3 (AST-1001, AST-1004, AST-1005)
+        Total matching category assets: 6
     """
     response = client.get("/api/dashboard/hardware-analysis")
     assert response.status_code == 200
@@ -34,6 +34,7 @@ def test_hardware_asset_analysis_standard_counts(client: TestClient):
     assert data["total_assets"] == 6
     assert data["total_os_assets"] == 4
     assert data["total_device_assets"] == 4
+    assert data["total_category_assets"] == 6
 
     # 1. Operating Systems verification: exactly 3 display groups
     os_list = data["operating_systems"]
@@ -67,175 +68,138 @@ def test_hardware_asset_analysis_standard_counts(client: TestClient):
     assert dev_pct_map["Desktops"] == 100.0
     assert dev_pct_map["Laptops"] == 0.0
 
-    # 3. Device Type and Category verification
-    assert "by_device_type_and_category" in data
-    cat_dev_list = data["by_device_type_and_category"]
-    assert len(cat_dev_list) == 3
-    cat_labels = [item["label"] for item in cat_dev_list]
-    assert cat_labels == ["STORE-DESKTOPS", "CORPORATE-LAPTOPS", "CORPORATE-DESKTOPS"]
-    for item in cat_dev_list:
-        assert item["count"] == 0
+    # 3. Category verification: pure category STORE and CORPORATE, no devicetype mixing
+    assert "categories" in data
+    cat_list = data["categories"]
+    assert len(cat_list) == 2
+    cat_names = [item["name"] for item in cat_list]
+    assert cat_names == ["STORE", "CORPORATE"]
+
+    cat_map = {item["name"]: item["count"] for item in cat_list}
+    assert cat_map["STORE"] == 3
+    assert cat_map["CORPORATE"] == 3
+
+    cat_pct_map = {item["name"]: item["percentage"] for item in cat_list}
+    assert cat_pct_map["STORE"] == 50.0
+    assert cat_pct_map["CORPORATE"] == 50.0
 
     # Verify camelCase and map aliases
     assert "operatingSystems" in data
     assert "deviceTypes" in data
-    assert "byDeviceTypeAndCategory" in data
+    assert "byCategory" in data
+    assert "by_category" in data
     assert "by_os" in data
     assert "by_device" in data
     assert data["by_os"]["Windows 11"] == 2
     assert data["by_device"]["Desktops"] == 4
     assert data["by_device"]["Laptops"] == 0
-    assert data["by_device"]["Desktop"] == 4
-    assert data["by_device"]["Laptop"] == 0
+    assert data["by_category"]["STORE"] == 3
+    assert data["by_category"]["CORPORATE"] == 3
 
 
-def test_device_type_and_category_aggregation(client: TestClient, db_session: Session):
+def test_category_aggregation_pure_and_isolated_from_devicetype(client: TestClient, db_session: Session):
     """
-    Verify Section 5: Hardware Asset Analysis – Device Type and Category:
-    Combinations:
-    - STORE-DESKTOPS
-    - CORPORATE-LAPTOPS
-    - CORPORATE-DESKTOPS
-    Requirements:
-    - Case & whitespace normalization
-    - Exclude unsupported combinations (STORE + Laptop, etc.)
-    - Exclude Server devices
-    - Exclude blank/NULL categories
-    - Each asset counted at most once
+    Verify Hardware Asset Analysis – By Category:
+    - Counts assets exclusively by database `category` field: STORE and CORPORATE
+    - Does NOT mix devicetype (Laptop/Desktop/Server) into category aggregation:
+      Laptops, Desktops, and Servers in STORE are all counted under STORE
+      Laptops, Desktops, and Servers in CORPORATE are all counted under CORPORATE
+    - Case & whitespace normalization (e.g. 'store', '  CORPORATE  ')
+    - Excludes NULL, empty/whitespace-only, and unrecognized categories (e.g. 'WAREHOUSE')
+    - Preserves stable STORE and CORPORATE group representation
     """
     now = datetime.now(timezone.utc)
 
-    # Valid matches:
-    # 1. STORE-DESKTOPS
-    a1 = Asset(
-        asset_id=801,
-        asset_number="AST-CAT-1",
-        source="BIGFIX",
-        devicetype="Desktop",
-        category="STORE",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    a2 = Asset(
-        asset_id=802,
-        asset_number="AST-CAT-2",
-        source="BIGFIX",
-        devicetype="  desktop  ",  # whitespace
-        category="store",          # lowercase
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-
-    # 2. CORPORATE-LAPTOPS
-    a3 = Asset(
-        asset_id=803,
-        asset_number="AST-CAT-3",
-        source="JAMF",
-        devicetype="Laptop",
-        category="CORPORATE",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    a4 = Asset(
-        asset_id=804,
-        asset_number="AST-CAT-4",
-        source="JAMF",
-        devicetype="LAPTOP",
-        category="corporate",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-
-    # 3. CORPORATE-DESKTOPS
-    a5 = Asset(
-        asset_id=805,
-        asset_number="AST-CAT-5",
-        source="BIGFIX",
-        devicetype="DESKTOP",
-        category="CORPORATE",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-
-    # Disallowed/Excluded records:
-    # - STORE + Server (Server excluded)
-    e1 = Asset(
-        asset_id=806,
-        asset_number="AST-CAT-EX-1",
-        source="BIGFIX",
-        devicetype="Server",
-        category="STORE",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    # - CORPORATE + Server (Server excluded)
-    e2 = Asset(
-        asset_id=807,
-        asset_number="AST-CAT-EX-2",
-        source="BIGFIX",
-        devicetype="Server",
-        category="CORPORATE",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    # - STORE + Laptop (unsupported combination)
-    e3 = Asset(
-        asset_id=808,
-        asset_number="AST-CAT-EX-3",
-        source="JAMF",
-        devicetype="Laptop",
-        category="STORE",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    # - NULL category
-    e4 = Asset(
-        asset_id=809,
-        asset_number="AST-CAT-EX-4",
-        source="BIGFIX",
-        devicetype="Desktop",
-        category=None,
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    # - Empty string category
-    e5 = Asset(
-        asset_id=810,
-        asset_number="AST-CAT-EX-5",
-        source="BIGFIX",
-        devicetype="Desktop",
-        category="   ",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-    # - Unrelated category
-    e6 = Asset(
-        asset_id=811,
-        asset_number="AST-CAT-EX-6",
-        source="BIGFIX",
-        devicetype="Desktop",
-        category="WAREHOUSE",
-        asset_status="ACTIVE",
-        created_at=now,
-    )
-
-    db_session.add_all([a1, a2, a3, a4, a5, e1, e2, e3, e4, e5, e6])
+    # Clear table for isolated counts
+    db_session.query(Asset).delete()
     db_session.commit()
 
-    # Test via /api/dashboard/hardware-analysis
+    # Seed assets covering combinations of category and devicetype
+    assets = [
+        # STORE category across diverse devicetypes (Laptop, Desktop, Server)
+        Asset(asset_id=901, asset_number="AST-S-1", source="BIGFIX", devicetype="Desktop", category="STORE", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=902, asset_number="AST-S-2", source="JAMF", devicetype="Laptop", category="store", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=903, asset_number="AST-S-3", source="BIGFIX", devicetype="Server", category="  STORE  ", asset_status="ACTIVE", created_at=now),
+
+        # CORPORATE category across diverse devicetypes (Desktop, Laptop, Server)
+        Asset(asset_id=904, asset_number="AST-C-1", source="BIGFIX", devicetype="Desktop", category="CORPORATE", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=905, asset_number="AST-C-2", source="JAMF", devicetype="LAPTOP", category="corporate", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=906, asset_number="AST-C-3", source="BIGFIX", devicetype="Server", category="  Corporate  ", asset_status="ACTIVE", created_at=now),
+
+        # Excluded from category (NULL, empty whitespace, unrelated category)
+        Asset(asset_id=907, asset_number="AST-E-1", source="BIGFIX", devicetype="Desktop", category=None, asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=908, asset_number="AST-E-2", source="JAMF", devicetype="Laptop", category="   ", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=909, asset_number="AST-E-3", source="BIGFIX", devicetype="Desktop", category="WAREHOUSE", asset_status="ACTIVE", created_at=now),
+    ]
+
+    db_session.add_all(assets)
+    db_session.commit()
+
+    # 1. Test via /api/dashboard/hardware-analysis
     res = client.get("/api/dashboard/hardware-analysis")
     assert res.status_code == 200
     data = res.json()
-    cat_items = {it["label"]: it["count"] for it in data["by_device_type_and_category"]}
-    assert cat_items["STORE-DESKTOPS"] == 2
-    assert cat_items["CORPORATE-LAPTOPS"] == 2
-    assert cat_items["CORPORATE-DESKTOPS"] == 1
 
-    # Test via dedicated /api/dashboard/by-device-type-and-category
-    res_direct = client.get("/api/dashboard/by-device-type-and-category")
+    assert data["total_assets"] == 9
+    assert data["total_category_assets"] == 6
+
+    # Category aggregation: 3 STORE, 3 CORPORATE
+    assert "categories" in data
+    cat_items = {it["name"]: it["count"] for it in data["categories"]}
+    assert cat_items["STORE"] == 3
+    assert cat_items["CORPORATE"] == 3
+
+    # Category percentages
+    cat_pcts = {it["name"]: it["percentage"] for it in data["categories"]}
+    assert cat_pcts["STORE"] == 50.0
+    assert cat_pcts["CORPORATE"] == 50.0
+
+    # by_category map
+    assert data["by_category"]["STORE"] == 3
+    assert data["by_category"]["CORPORATE"] == 3
+
+    # Device types are NOT mixed into category:
+    # Desktops: 4 (AST-S-1, AST-C-1, AST-E-1, AST-E-3)
+    # Laptops: 3 (AST-S-2, AST-C-2, AST-E-2)
+    # Servers: excluded from device_types (0)
+    dev_items = {it["name"]: it["count"] for it in data["device_types"]}
+    assert dev_items["Desktops"] == 4
+    assert dev_items["Laptops"] == 3
+    assert "Server" not in dev_items
+
+    # 2. Test via dedicated /api/dashboard/assets-by-category
+    res_direct = client.get("/api/dashboard/assets-by-category")
     assert res_direct.status_code == 200
-    direct_data = res_direct.json()
-    items = direct_data.get("byDeviceTypeAndCategory", direct_data)
+    cat_direct = res_direct.json()
+    assert len(cat_direct) == 2
+    d_map = {it["name"]: it["count"] for it in cat_direct}
+    assert d_map["STORE"] == 3
+    assert d_map["CORPORATE"] == 3
+
+
+def test_dedicated_by_device_type_and_category_endpoint(client: TestClient, db_session: Session):
+    """
+    Verify that the dedicated /api/dashboard/by-device-type-and-category endpoint
+    continues to function correctly for legacy clients.
+    """
+    now = datetime.now(timezone.utc)
+    db_session.query(Asset).delete()
+    db_session.commit()
+
+    assets = [
+        Asset(asset_id=801, asset_number="A1", source="BIGFIX", devicetype="Desktop", category="STORE", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=802, asset_number="A2", source="BIGFIX", devicetype="desktop", category="store", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=803, asset_number="A3", source="JAMF", devicetype="Laptop", category="CORPORATE", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=804, asset_number="A4", source="JAMF", devicetype="LAPTOP", category="corporate", asset_status="ACTIVE", created_at=now),
+        Asset(asset_id=805, asset_number="A5", source="BIGFIX", devicetype="DESKTOP", category="CORPORATE", asset_status="ACTIVE", created_at=now),
+    ]
+    db_session.add_all(assets)
+    db_session.commit()
+
+    res = client.get("/api/dashboard/by-device-type-and-category")
+    assert res.status_code == 200
+    data = res.json()
+    items = data.get("byDeviceTypeAndCategory", data)
     d_map = {it["label"]: it["count"] for it in items}
     assert d_map["STORE-DESKTOPS"] == 2
     assert d_map["CORPORATE-LAPTOPS"] == 2
@@ -373,7 +337,7 @@ def test_zero_count_groups_stable_response(client: TestClient, db_session: Sessi
     Verify that when no assets exist:
     - All three OS groups are present with count 0
     - Both device type groups are present with count 0
-    - All three device type and category combinations are present with count 0
+    - Both category groups (STORE, CORPORATE) are present with count 0
     """
     db_session.query(Asset).delete()
     db_session.commit()
@@ -385,6 +349,7 @@ def test_zero_count_groups_stable_response(client: TestClient, db_session: Sessi
     assert data["total_assets"] == 0
     assert data["total_os_assets"] == 0
     assert data["total_device_assets"] == 0
+    assert data["total_category_assets"] == 0
 
     os_map = {item["name"]: item["count"] for item in data["operating_systems"]}
     assert os_map == {"Windows 11": 0, "Windows 10": 0, "Mac": 0}
@@ -392,8 +357,9 @@ def test_zero_count_groups_stable_response(client: TestClient, db_session: Sessi
     dev_map = {item["name"]: item["count"] for item in data["device_types"]}
     assert dev_map == {"Laptops": 0, "Desktops": 0}
 
-    cat_map = {item["label"]: item["count"] for item in data["by_device_type_and_category"]}
-    assert cat_map == {"STORE-DESKTOPS": 0, "CORPORATE-LAPTOPS": 0, "CORPORATE-DESKTOPS": 0}
+    cat_map = {item["name"]: item["count"] for item in data["categories"]}
+    assert cat_map == {"STORE": 0, "CORPORATE": 0}
+    assert data["by_category"] == {"STORE": 0, "CORPORATE": 0}
 
 
 def test_eol_distribution_all_four_states(client: TestClient, db_session: Session):

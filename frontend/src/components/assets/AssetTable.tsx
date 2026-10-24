@@ -64,6 +64,7 @@ interface AssetTableProps {
   allowAssignment?: boolean;
   allowBulkAssignment?: boolean;
   exportFilenamePrefix?: string;
+  allowFieldEditing?: boolean;
 }
 
 export const AssetTable: React.FC<AssetTableProps> = ({
@@ -78,11 +79,13 @@ export const AssetTable: React.FC<AssetTableProps> = ({
   allowAssignment = false,
   allowBulkAssignment,
   exportFilenamePrefix,
+  allowFieldEditing = false,
 }) => {
   const enableBulkAssignment = allowBulkAssignment !== undefined ? allowBulkAssignment : allowAssignment;
   const { dataRefreshKey, triggerDataRefresh } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
+  const isOwnershipPage = Boolean(allowFieldEditing || location.pathname === '/ownership' || location.pathname.startsWith('/ownership'));
 
   // Query state
   const [search, setSearch] = useState('');
@@ -131,6 +134,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
 
   // Notification state
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [drawerAssignmentSuccess, setDrawerAssignmentSuccess] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
   // Fleet Summary KPI state (aligned with backend contract fields)
@@ -146,6 +150,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
 
   // Assign user modal state
   const [assignAsset, setAssignAsset] = useState<Asset | null>(null);
+  const [assignSource, setAssignSource] = useState<'table' | 'drawer' | null>(null);
 
   // EOL inline edit modal state
   const [eolModalAsset, setEolModalAsset] = useState<Asset | null>(null);
@@ -277,6 +282,14 @@ export const AssetTable: React.FC<AssetTableProps> = ({
       return () => clearTimeout(timer);
     }
   }, [notification]);
+
+  // Auto-dismiss drawer assignment success after 6 seconds
+  useEffect(() => {
+    if (drawerAssignmentSuccess) {
+      const timer = setTimeout(() => setDrawerAssignmentSuccess(null), 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [drawerAssignmentSuccess]);
 
   // Load Workday employee directory for identity matching
   useEffect(() => {
@@ -600,25 +613,22 @@ export const AssetTable: React.FC<AssetTableProps> = ({
     eolStatus,
   ]);
 
-  // Format Managed By as GROUP or INDIVIDUAL
-  const getManagedByDisplay = (asset: Asset): 'GROUP' | 'INDIVIDUAL' => {
-    if (asset.managed_by) {
-      const val = asset.managed_by.trim().toUpperCase();
-      if (val === 'GROUP' || val === 'INDIVIDUAL') {
-        return val;
-      }
-      if (
-        val.includes('GROUP') ||
-        val.includes('DATACENTER') ||
-        val.includes('POOL') ||
-        val.includes('SERVER') ||
-        asset.devicetype === 'Server' ||
-        asset.assignment_type === 'Unassigned'
-      ) {
-        return 'GROUP';
-      }
+  // Extract actual Managed By value directly from the asset without fabricating defaults
+  const getManagedByDisplay = (asset: Asset): string | null => {
+    const raw = asset.managed_by ?? asset.managedBy;
+    if (raw === null || raw === undefined) {
+      return null;
     }
-    return asset.devicetype === 'Server' ? 'GROUP' : 'INDIVIDUAL';
+    const trimmed = String(raw).trim();
+    if (
+      trimmed.length === 0 ||
+      trimmed.toLowerCase() === 'null' ||
+      trimmed.toLowerCase() === 'none' ||
+      trimmed.toLowerCase() === 'undefined'
+    ) {
+      return null;
+    }
+    return trimmed;
   };
 
   // Export standardized CSV report from backend export endpoint
@@ -811,13 +821,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
             loading={kpiLoading}
             error={kpiError}
             icon={TotalCardIcon}
-            subtitle={
-              initialSourceFilter === 'BIGFIX'
-                ? 'BigFix (Windows) fleet'
-                : initialSourceFilter === 'JAMF'
-                ? 'Jamf (Mac) fleet'
-                : 'Unified inventory fleet'
-            }
+            subtitle="Unified inventory asset"
             colorTheme="default"
             compact={true}
             onClick={() => {
@@ -1424,7 +1428,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
 
                       {/* 8. Managed By */}
                       <td className="py-2.5 px-2 whitespace-nowrap align-middle">
-                        <ManagedByBadge managedBy={managedByDisplay} />
+                        <ManagedByBadge managedBy={managedByDisplay} fallback="-" />
                       </td>
 
                       {/* 9. Status */}
@@ -1471,6 +1475,7 @@ export const AssetTable: React.FC<AssetTableProps> = ({
                             <button
                               onClick={e => {
                                 e.stopPropagation();
+                                setAssignSource('table');
                                 setAssignAsset(asset);
                               }}
                               className="w-7 h-7 inline-flex items-center justify-center rounded-md bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white shadow-xs hover:shadow hover:-translate-y-0.5 active:translate-y-0 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
@@ -1535,21 +1540,60 @@ export const AssetTable: React.FC<AssetTableProps> = ({
       {/* Asset Detail Drawer */}
       <AssetDetailDrawer
         asset={selectedAsset}
-        onClose={() => setSelectedAsset(null)}
+        onClose={() => {
+          setSelectedAsset(null);
+          setDrawerAssignmentSuccess(null);
+        }}
         onNavigateToEmployee={user => navigate(`/users?search=${user}`)}
+        editable={isOwnershipPage}
+        allowAssignUser={isOwnershipPage}
+        onAssignUser={assetToAssign => {
+          setAssignSource('drawer');
+          setAssignAsset(assetToAssign);
+        }}
+        assignmentSuccessMessage={drawerAssignmentSuccess}
+        onDismissAssignmentSuccessMessage={() => setDrawerAssignmentSuccess(null)}
+        onAssetUpdated={updatedAsset => {
+          setSelectedAsset(updatedAsset);
+          triggerDataRefresh();
+          fetchAssets();
+          loadKpiMetrics();
+        }}
       />
 
       {/* Assign Asset User Modal */}
       {assignAsset && (
         <AssignAssetModal
           asset={assignAsset}
-          onClose={() => setAssignAsset(null)}
-          onSuccess={msg => {
+          onClose={() => {
             setAssignAsset(null);
+            setAssignSource(null);
+          }}
+          onSuccess={(msg, updatedAsset) => {
+            const isFromDrawer = assignSource === 'drawer' && selectedAsset !== null;
+            setAssignAsset(null);
+            setAssignSource(null);
             triggerDataRefresh();
             fetchAssets();
             loadKpiMetrics();
             setNotification({ type: 'success', message: msg });
+
+            if (isFromDrawer) {
+              setDrawerAssignmentSuccess(msg);
+              if (updatedAsset) {
+                setSelectedAsset(updatedAsset);
+              } else if (selectedAsset) {
+                const targetId = selectedAsset.id ?? selectedAsset.asset_number;
+                api
+                  .getAssetById(targetId)
+                  .then(refreshed => setSelectedAsset(refreshed))
+                  .catch(() => {});
+              }
+            } else {
+              // Triggered from table row: keep View Asset & Ownership Details popup closed
+              setSelectedAsset(null);
+              setDrawerAssignmentSuccess(null);
+            }
           }}
         />
       )}

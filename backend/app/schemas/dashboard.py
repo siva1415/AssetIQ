@@ -737,20 +737,48 @@ class DeviceTypeCategoryResponse(BaseModel):
         return data
 
 
+class CategoryItem(BaseModel):
+    name: str = Field(..., description="Category (e.g. STORE, CORPORATE)")
+    count: int = Field(0, ge=0, description="Number of assets in this category")
+    percentage: Optional[float] = Field(None, description="Percentage of assets with valid category")
+
+    # Aliases
+    label: Optional[str] = None
+    category: Optional[str] = None
+    share: Optional[float] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            name = data.get("name") or data.get("category") or data.get("label") or ""
+            data["name"] = name
+            data["label"] = name
+            data["category"] = name
+            if "percentage" in data and data["percentage"] is not None and "share" not in data:
+                data["share"] = data["percentage"]
+            elif "share" in data and data["share"] is not None and "percentage" not in data:
+                data["percentage"] = data["share"]
+        return data
+
+
 class HardwareAssetAnalysisResponse(BaseModel):
     """
     Live aggregated hardware asset analysis for dashboard doughnut charts:
     1. Assets by Operating System (Windows 11, Windows 10, Mac)
     2. Assets by Device Type (Laptops, Desktops)
-    3. Assets by Device Type and Category (STORE-DESKTOPS, CORPORATE-LAPTOPS, CORPORATE-DESKTOPS)
+    3. Assets by Category (STORE, CORPORATE)
     """
     operating_systems: List[OperatingSystemItem] = Field(default_factory=list, description="Assets grouped by Operating System")
     device_types: List[DeviceTypeItem] = Field(default_factory=list, description="Assets grouped by Device Type")
-    by_device_type_and_category: List[DeviceTypeCategoryItem] = Field(default_factory=list, description="Assets grouped by Device Type and Category")
+    categories: List[CategoryItem] = Field(default_factory=list, description="Assets grouped by Category (STORE, CORPORATE)")
 
     total_assets: int = Field(0, ge=0, description="Total assets in evaluation scope")
     total_os_assets: int = Field(0, ge=0, description="Total assets with a non-empty OS")
     total_device_assets: int = Field(0, ge=0, description="Total assets with a non-empty device type")
+    total_category_assets: int = Field(0, ge=0, description="Total assets with a valid category")
 
     # CamelCase aliases
     operatingSystems: Optional[List[OperatingSystemItem]] = None
@@ -759,17 +787,20 @@ class HardwareAssetAnalysisResponse(BaseModel):
     by_operating_system: Optional[List[OperatingSystemItem]] = None
     byDeviceType: Optional[List[DeviceTypeItem]] = None
     by_device_type: Optional[List[DeviceTypeItem]] = None
-    byDeviceTypeAndCategory: Optional[List[DeviceTypeCategoryItem]] = None
-    device_type_and_category: Optional[List[DeviceTypeCategoryItem]] = None
+    byCategories: Optional[List[CategoryItem]] = None
+    by_categories: Optional[List[CategoryItem]] = None
     totalAssets: Optional[int] = None
     totalOsAssets: Optional[int] = None
     totalDeviceAssets: Optional[int] = None
+    totalCategoryAssets: Optional[int] = None
 
     # Map/Dict representations for charts that accept label -> count dictionaries
     by_os: Optional[Dict[str, int]] = None
     byOs: Optional[Dict[str, int]] = None
     by_device: Optional[Dict[str, int]] = None
     byDevice: Optional[Dict[str, int]] = None
+    by_category: Optional[Dict[str, int]] = None
+    byCategory: Optional[Dict[str, int]] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -789,10 +820,10 @@ class HardwareAssetAnalysisResponse(BaseModel):
             data["by_device_type"] = dev_items
             data["byDeviceType"] = dev_items
 
-            cat_dev_items = data.get("by_device_type_and_category", data.get("byDeviceTypeAndCategory", data.get("device_type_and_category", []))) or []
-            data["by_device_type_and_category"] = cat_dev_items
-            data["byDeviceTypeAndCategory"] = cat_dev_items
-            data["device_type_and_category"] = cat_dev_items
+            cat_items = data.get("categories", data.get("by_categories", data.get("byCategories", []))) or []
+            data["categories"] = cat_items
+            data["by_categories"] = cat_items
+            data["byCategories"] = cat_items
 
             tot = data.get("total_assets", data.get("totalAssets", 0)) or 0
             data["total_assets"] = tot
@@ -805,6 +836,10 @@ class HardwareAssetAnalysisResponse(BaseModel):
             tot_dev = data.get("total_device_assets", data.get("totalDeviceAssets", sum(it.get("count", 0) if isinstance(it, dict) else getattr(it, "count", 0) for it in dev_items))) or 0
             data["total_device_assets"] = tot_dev
             data["totalDeviceAssets"] = tot_dev
+
+            tot_cat = data.get("total_category_assets", data.get("totalCategoryAssets", sum(it.get("count", 0) if isinstance(it, dict) else getattr(it, "count", 0) for it in cat_items))) or 0
+            data["total_category_assets"] = tot_cat
+            data["totalCategoryAssets"] = tot_cat
 
             os_map = {
                 (it.get("name") if isinstance(it, dict) else getattr(it, "name", "")): (it.get("count") if isinstance(it, dict) else getattr(it, "count", 0))
@@ -829,6 +864,20 @@ class HardwareAssetAnalysisResponse(BaseModel):
                     dev_map["Desktops"] = cnt
             data["by_device"] = dev_map
             data["byDevice"] = dev_map
+
+            cat_map = {}
+            if isinstance(data.get("by_category"), dict):
+                cat_map.update(data["by_category"])
+            elif isinstance(data.get("byCategory"), dict):
+                cat_map.update(data["byCategory"])
+            else:
+                for it in cat_items:
+                    cname = it.get("name") if isinstance(it, dict) else getattr(it, "name", "")
+                    ccnt = it.get("count") if isinstance(it, dict) else getattr(it, "count", 0)
+                    if cname:
+                        cat_map[cname] = ccnt
+            data["by_category"] = cat_map
+            data["byCategory"] = cat_map
 
         return data
 

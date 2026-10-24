@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Menu, RefreshCw, Maximize, Minimize } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import michaelsLogo from '../../assets/Logo.svg';
+import michaelsLogo from '../../assets/logo.svg';
 
 interface TopNavProps {
   onToggleMobileSidebar: () => void;
@@ -26,6 +26,7 @@ export const TopNav: React.FC<TopNavProps> = ({ onToggleMobileSidebar }) => {
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => {
     return !!getFullscreenElement();
   });
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -77,18 +78,18 @@ export const TopNav: React.FC<TopNavProps> = ({ onToggleMobileSidebar }) => {
   const getPageInfo = () => {
     const path = location.pathname;
     if (path === '/' || path === '/dashboard') return { breadcrumb: 'Overview', title: 'Dashboard' };
-    if (path === '/assets') return { breadcrumb: 'Hardware Inventory', title: 'All Assets' };
-    if (path === '/assets/windows') return { breadcrumb: 'Hardware Inventory', title: 'Windows Assets (BigFix)' };
-    if (path === '/assets/mac') return { breadcrumb: 'Hardware Inventory', title: 'Mac Assets (Jamf)' };
-    if (path === '/ownership') return { breadcrumb: 'Ownership Management', title: 'Asset Ownership' };
-    if (path === '/eol-management' || path === '/eol') return { breadcrumb: 'Ownership Management', title: 'EOL Management' };
-    if (path === '/admin-users') return { breadcrumb: 'Ownership Management', title: 'Admin Users' };
+    if (path === '/assets') return { breadcrumb: 'HardwareInventory', title: 'All Assets' };
+    if (path === '/assets/windows') return { breadcrumb: 'HardwareInventory', title: 'Windows Assets (BigFix)' };
+    if (path === '/assets/mac') return { breadcrumb: 'HardwareInventory', title: 'Mac Assets (Jamf)' };
+    if (path === '/ownership') return { breadcrumb: 'Ownership & Identity', title: 'Asset Ownership' };
+    if (path === '/eol-management' || path === '/eol') return { breadcrumb: 'Ownership & Identity', title: 'EOL Management' };
+    if (path === '/admin-users') return { breadcrumb: 'Ownership & Identity', title: 'Admin Users' };
     if (path === '/reports') return { breadcrumb: 'Analytics', title: 'Reports' };
-    if (path === '/users' || path === '/employees') return { breadcrumb: 'Identity', title: 'User Management' };
+    if (path === '/users' || path === '/employees') return { breadcrumb: 'Identity', title: 'Users Management' };
     if (path === '/job-scheduler') return { breadcrumb: 'Automation', title: 'Job Scheduler' };
     if (path === '/audit-reports' || path === '/audit-logs') return { breadcrumb: 'Compliance', title: 'Audit Logs' };
     if (path === '/settings' || path === '/admin') return { breadcrumb: 'System', title: 'Settings' };
-    if (path === '/unassigned') return { breadcrumb: 'Hardware Inventory', title: 'Unassigned Assets' };
+    if (path === '/unassigned') return { breadcrumb: 'HardwareInventory', title: 'Unassigned Assets' };
     if (path === '/exceptions') return { breadcrumb: 'Compliance', title: 'Exceptions & Flags' };
     return { breadcrumb: 'AssetIQ', title: 'Asset Governance Console' };
   };
@@ -96,67 +97,71 @@ export const TopNav: React.FC<TopNavProps> = ({ onToggleMobileSidebar }) => {
   const { breadcrumb, title } = getPageInfo();
 
   const handleRefresh = async () => {
-    triggerDataRefresh();
-    await refreshHealth();
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      triggerDataRefresh();
+      await refreshHealth();
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between gap-2 sm:gap-4 h-16 px-3 sm:px-6 md:px-8 bg-white border-b border-slate-200 shadow-xs relative">
-      {/* Zone 1: Breadcrumbs & Page Title (Left) */}
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-[28%] sm:max-w-[32%] md:max-w-[35%] z-10">
+    <header className="sticky top-0 z-30 flex items-center justify-between gap-2 sm:gap-4 h-14 px-4 sm:px-6 md:px-8 bg-white border-b border-[#DCE5F1] shadow-2xs relative">
+      {/* Zone 1: Menu Toggle & Breadcrumbs / Page Title (Left) */}
+      <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0 max-w-[32%] sm:max-w-[38%] z-10">
         <button
           onClick={onToggleMobileSidebar}
-          className="p-1.5 text-slate-500 rounded-md hover:bg-slate-100 lg:hidden shrink-0 cursor-pointer"
+          className="p-1.5 text-slate-700 hover:text-slate-900 rounded-md hover:bg-slate-100 shrink-0 cursor-pointer transition-colors"
           aria-label="Toggle navigation"
         >
           <Menu className="w-5 h-5" />
         </button>
 
         <div className="flex flex-col min-w-0">
-          <div className="flex items-center gap-1.5 text-[11px] sm:text-xs text-slate-500 truncate font-medium">
-            <span>{breadcrumb}</span>
-          </div>
-          <h1 className="text-xs sm:text-sm md:text-base font-bold text-slate-900 tracking-tight truncate">
+          <span className="text-[11px] text-slate-500 font-medium leading-none mb-1">
+            {breadcrumb}
+          </span>
+          <h1 className="text-sm sm:text-base font-bold text-[#14213D] tracking-tight leading-none truncate">
             {title}
           </h1>
         </div>
       </div>
 
-      {/* Zone 2: Michaels Customer Logo (Top-Center) */}
-      <div className="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 items-center justify-center pointer-events-none px-2 max-w-[25%] md:max-w-[30%]">
+      {/* Zone 2: Centered Michaels Logo (Horizontally centered relative to the header width, slightly reduced size) */}
+      <div
+        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none z-10"
+        aria-label="Michaels Logo"
+      >
         <img
           src={michaelsLogo}
           alt="Michaels"
-          className="h-[18px] md:h-[24px] w-auto max-w-full object-contain pointer-events-auto"
+          className="h-5 sm:h-6 max-h-6.5 w-auto max-w-[100px] sm:max-w-[125px] md:max-w-[140px] object-contain select-none pointer-events-auto"
         />
       </div>
 
-      {/* Zone 3: Top-Right Controls (Refresh Data | Full Screen) */}
-      <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 z-10">
-        {/* 1. Refresh Data button */}
+      {/* Zone 3: Top-Right actions (same Refresh Data button & Full Screen icon across all pages including Dashboard) */}
+      <div className="flex items-center gap-2 shrink-0 z-10">
         <button
           type="button"
           onClick={handleRefresh}
-          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-xs cursor-pointer shrink-0"
+          disabled={isRefreshing}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-xs cursor-pointer shrink-0 disabled:opacity-65"
+          title="Refresh Data"
+          aria-label="Refresh Data"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           <span className="hidden sm:inline">Refresh Data</span>
-          <span className="sm:hidden">Refresh</span>
         </button>
-
-        {/* 2. Full Screen icon */}
         <button
           type="button"
           onClick={toggleFullscreen}
           title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
           aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-          className="inline-flex items-center justify-center h-[30px] w-[30px] text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 rounded-md transition-colors shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/20 shrink-0"
+          className="inline-flex items-center justify-center h-[30px] w-[30px] text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 rounded-md transition-colors shadow-2xs cursor-pointer shrink-0"
         >
-          {isFullscreen ? (
-            <Minimize className="w-4 h-4 text-slate-600" />
-          ) : (
-            <Maximize className="w-4 h-4 text-slate-600" />
-          )}
+          {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
         </button>
       </div>
     </header>

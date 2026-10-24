@@ -1,5 +1,5 @@
 from typing import Optional, Union
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.orm import Session
 from app.api.deps import _parse_int_param, get_database
 from app.schemas.employee import EmployeeResponse, EmployeeDetailResponse
@@ -122,11 +122,15 @@ def list_employees(
     summary="Employee Profile with Correlated Assigned Assets",
 )
 def get_employee_by_id(
-    employee_id: int,
+    employee_id: str = Path(
+        ...,
+        description="Numeric employee ID or string employee identifier (e.g. user_id)",
+    ),
     db: Session = Depends(get_database),
 ):
     """
     Retrieve comprehensive Workday employee data together with all hardware assets
     currently correlated to their user login.
+    Supports lookup by numeric employee_id (primary key) or string employee identifier (user_id).
     """
-    return EmployeeService.get_employee_detail(db=db, employee_id=employee_id)
+    return EmployeeService.get_employee_detail(db=db, identifier=employee_id)

@@ -22,7 +22,7 @@ import { SelectableEmployeeCard } from '../employees/SelectableEmployeeCard';
 interface AssignAssetModalProps {
   asset: Asset;
   onClose: () => void;
-  onSuccess: (message: string) => void;
+  onSuccess: (message: string, updatedAsset?: Asset) => void;
 }
 
 export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
@@ -308,7 +308,7 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
     setSubmitting(true);
     const assetIdToUse = asset.id ?? asset.assetId ?? asset.asset_number;
     try {
-      const response = await api.reassignAsset(assetIdToUse, {
+      await api.reassignAsset(assetIdToUse, {
         user_id: selectedUser.user_id,
         assigned_username: selectedUser.user_id,
         managed_by: group,
@@ -317,10 +317,72 @@ export const AssignAssetModal: React.FC<AssignAssetModalProps> = ({
         remarks: remarks.trim() || undefined,
       });
 
+      const assetNumber = asset.asset_number || asset.assetNumber || '';
+      const userFullName = selectedUser.full_name || '';
+      const userId = selectedUser.user_id || '';
+
+      // Construct refreshed asset representation for the detail drawer
+      let updatedAsset: Asset | undefined;
+      try {
+        const fetched = await api.getAssetById(assetIdToUse);
+        updatedAsset = {
+          ...fetched,
+          assigned_username: selectedUser.user_id,
+          verified_employee_name: selectedUser.full_name,
+          verified_employee_id: selectedUser.employee_id || selectedUser.user_id,
+          full_name: selectedUser.full_name,
+          employee: selectedUser,
+          workday_employee: selectedUser,
+          matched_employee: selectedUser,
+          workday_status: 'Matched',
+          employee_status: selectedUser.employee_status || 'Active',
+          work_email: selectedUser.work_email,
+          email_work: selectedUser.work_email,
+          department: selectedUser.department,
+          division: selectedUser.division,
+          job_title: selectedUser.job_title,
+          manager_username: selectedUser.manager_username,
+          manager_user_name: selectedUser.manager_user_name || selectedUser.manager_username,
+          manager_name: selectedUser.manager_name,
+          managed_by: group,
+          assignment_type: 'Manual',
+          asset_status: ASSET_STATUSES.ACTIVE,
+          remarks: remarks.trim() || asset.remarks,
+          notes: remarks.trim() || asset.notes,
+        };
+      } catch {
+        updatedAsset = {
+          ...asset,
+          assigned_username: selectedUser.user_id,
+          verified_employee_name: selectedUser.full_name,
+          verified_employee_id: selectedUser.employee_id || selectedUser.user_id,
+          full_name: selectedUser.full_name,
+          employee: selectedUser,
+          workday_employee: selectedUser,
+          matched_employee: selectedUser,
+          workday_status: 'Matched',
+          employee_status: selectedUser.employee_status || 'Active',
+          work_email: selectedUser.work_email,
+          email_work: selectedUser.work_email,
+          department: selectedUser.department,
+          division: selectedUser.division,
+          job_title: selectedUser.job_title,
+          manager_username: selectedUser.manager_username,
+          manager_user_name: selectedUser.manager_user_name || selectedUser.manager_username,
+          manager_name: selectedUser.manager_name,
+          managed_by: group,
+          assignment_type: 'Manual',
+          asset_status: ASSET_STATUSES.ACTIVE,
+          remarks: remarks.trim() || asset.remarks,
+          notes: remarks.trim() || asset.notes,
+        };
+      }
+
       // Show success notification ONLY when confirmed by API
+      // Format: Asset <asset_number> successfully assigned to <user_full_name>(<user_id>).
       onSuccess(
-        response.message ||
-          `Asset ${asset.asset_number} successfully assigned to ${selectedUser.full_name} (${selectedUser.user_id}).`
+        `Asset ${assetNumber} successfully assigned to ${userFullName}(${userId}).`,
+        updatedAsset
       );
     } catch (err: any) {
       // Handle backend HTTP 422 validation errors with a useful message

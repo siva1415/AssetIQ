@@ -44,6 +44,8 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
         displayStatus = 'REVIEW';
       } else if (upper === 'IN STOCK' || upper === 'INSTOCK') {
         displayStatus = 'IN STOCK';
+      } else if (upper === 'EXPIRED') {
+        displayStatus = 'EXPIRED';
       } else if (upper === 'RETIRED') {
         displayStatus = 'RETIRED';
       } else {
@@ -125,6 +127,8 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
         solidColorClass = 'bg-sky-100 text-sky-800 border border-sky-300';
       } else if (s === 'retired') {
         solidColorClass = 'bg-slate-100 text-slate-700 border border-slate-300';
+      } else if (s === 'expired') {
+        solidColorClass = 'bg-rose-600 text-white';
       } else if (s === 'inactive' || s === 'unknown' || !rawStatus) {
         solidColorClass = 'bg-slate-500 text-white';
       } else {

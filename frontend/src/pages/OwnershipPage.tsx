@@ -8,6 +8,7 @@ export const OwnershipPage: React.FC = () => {
         showKPICards={true}
         allowAssignment={true}
         allowBulkAssignment={true}
+        allowFieldEditing={true}
         exportFilenamePrefix="AssetIQ_Asset_Ownership"
       />
     </div>

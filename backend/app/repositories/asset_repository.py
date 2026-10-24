@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session
 from app.core.config import settings
@@ -24,12 +24,22 @@ class AssetRepository:
 
     @staticmethod
     def get_by_id_joined(
-        db: Session, asset_id: int
+        db: Session, asset_id: Union[int, str]
     ) -> Optional[Tuple[Asset, Optional[WorkdayEmployee], Optional[date], Optional[str]]]:
         """
         Lookup single asset with parameterized outer join to WorkdayEmployee and DeviceEolReference.
+        Accepts integer asset_id or string asset_number.
         """
         eol_sub = EolRepository.get_eol_subquery()
+
+        if isinstance(asset_id, int):
+            where_clause = (Asset.asset_id == asset_id)
+        else:
+            clean = str(asset_id).strip()
+            if clean.isdigit():
+                where_clause = (Asset.asset_id == int(clean))
+            else:
+                where_clause = (func.lower(func.trim(Asset.asset_number)) == clean.lower())
 
         stmt = (
             select(
@@ -46,13 +56,24 @@ class AssetRepository:
                 eol_sub,
                 EolRepository.get_eol_join_condition(eol_sub),
             )
-            .where(Asset.asset_id == asset_id)
+            .where(where_clause)
         )
         return db.execute(stmt).first()
 
     @staticmethod
-    def get_by_id(db: Session, asset_id: int) -> Optional[Asset]:
-        stmt = select(Asset).where(Asset.asset_id == asset_id)
+    def get_by_id(db: Session, asset_id: Union[int, str]) -> Optional[Asset]:
+        """
+        Lookup single asset by primary key ID or asset_number tag.
+        """
+        if isinstance(asset_id, int):
+            stmt = select(Asset).where(Asset.asset_id == asset_id)
+            return db.execute(stmt).scalar_one_or_none()
+        clean = str(asset_id).strip()
+        if clean.isdigit():
+            found = db.execute(select(Asset).where(Asset.asset_id == int(clean))).scalar_one_or_none()
+            if found:
+                return found
+        stmt = select(Asset).where(func.lower(func.trim(Asset.asset_number)) == clean.lower())
         return db.execute(stmt).scalar_one_or_none()
 
     @classmethod
@@ -64,6 +85,7 @@ class AssetRepository:
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
+        category: Optional[str] = None,
         manufacturer: Optional[str] = None,
         model: Optional[str] = None,
         assigned_username: Optional[str] = None,
@@ -144,6 +166,9 @@ class AssetRepository:
         if devicetype:
             stmt = stmt.where(Asset.devicetype.is_not(None), func.lower(Asset.devicetype) == devicetype.strip().lower())
 
+        if category:
+            stmt = stmt.where(Asset.category.is_not(None), func.lower(func.trim(Asset.category)) == category.strip().lower())
+
         if eol_status and eol_sub is not None:
             clean_eol = eol_status.strip().upper()
             today = date.today()
@@ -215,6 +240,7 @@ class AssetRepository:
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
+        category: Optional[str] = None,
         manufacturer: Optional[str] = None,
         model: Optional[str] = None,
         assigned_username: Optional[str] = None,
@@ -255,6 +281,7 @@ class AssetRepository:
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
+            category=category,
             manufacturer=manufacturer,
             model=model,
             assigned_username=assigned_username,
@@ -282,6 +309,8 @@ class AssetRepository:
                 order_col = Asset.model
             elif clean_sort in ("devicetype", "device_type"):
                 order_col = Asset.devicetype
+            elif clean_sort in ("category",):
+                order_col = Asset.category
             elif clean_sort in ("asset_status", "assetstatus"):
                 order_col = Asset.asset_status
             elif clean_sort in ("assignment_type", "assignmenttype"):
@@ -317,6 +346,7 @@ class AssetRepository:
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
+        category: Optional[str] = None,
         manufacturer: Optional[str] = None,
         model: Optional[str] = None,
         assigned_username: Optional[str] = None,
@@ -337,6 +367,7 @@ class AssetRepository:
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
+            category=category,
             manufacturer=manufacturer,
             model=model,
             assigned_username=assigned_username,
@@ -366,6 +397,7 @@ class AssetRepository:
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
+        category: Optional[str] = None,
         manufacturer: Optional[str] = None,
         model: Optional[str] = None,
         assigned_username: Optional[str] = None,
@@ -385,6 +417,7 @@ class AssetRepository:
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
+            category=category,
             manufacturer=manufacturer,
             model=model,
             assigned_username=assigned_username,
@@ -405,6 +438,7 @@ class AssetRepository:
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
+        category: Optional[str] = None,
         manufacturer: Optional[str] = None,
         model: Optional[str] = None,
         assigned_username: Optional[str] = None,
@@ -438,6 +472,7 @@ class AssetRepository:
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
+            category=category,
             manufacturer=manufacturer,
             model=model,
             assigned_username=assigned_username,
@@ -456,6 +491,7 @@ class AssetRepository:
         source: Optional[str] = None,
         asset_status: Optional[str] = None,
         devicetype: Optional[str] = None,
+        category: Optional[str] = None,
         manufacturer: Optional[str] = None,
         model: Optional[str] = None,
         assigned_username: Optional[str] = None,
@@ -489,6 +525,7 @@ class AssetRepository:
             source=source,
             asset_status=asset_status,
             devicetype=devicetype,
+            category=category,
             manufacturer=manufacturer,
             model=model,
             assigned_username=assigned_username,
@@ -502,11 +539,19 @@ class AssetRepository:
         return [(int(r[0]), str(r[1]) if r[1] is not None else None) for r in rows]
 
     @staticmethod
-    def get_by_id(db: Session, asset_id: int) -> Optional[Asset]:
+    def get_by_id(db: Session, asset_id: Union[int, str]) -> Optional[Asset]:
         """
-        Lookup single Asset record by primary key.
+        Lookup single asset by primary key ID or asset_number tag.
         """
-        return db.get(Asset, asset_id)
+        if isinstance(asset_id, int):
+            return db.get(Asset, asset_id)
+        clean = str(asset_id).strip()
+        if clean.isdigit():
+            found = db.get(Asset, int(clean))
+            if found:
+                return found
+        stmt = select(Asset).where(func.lower(func.trim(Asset.asset_number)) == clean.lower())
+        return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod
     def get_assets_by_assigned_username(db: Session, user_id: str) -> List[Asset]:

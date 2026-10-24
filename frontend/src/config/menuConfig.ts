@@ -115,7 +115,7 @@ export const MENU_ITEMS: AppMenuItem[] = [
   {
     type: 'group',
     id: 'hardware-inventory',
-    label: 'Hardware Inventory',
+    label: 'HardwareInventory',
     icon: HardDrive,
     allowedRoles: ['SUPERADMIN', 'ADMIN', 'VIEWER'],
     children: [
@@ -127,7 +127,7 @@ export const MENU_ITEMS: AppMenuItem[] = [
   {
     type: 'group',
     id: 'ownership-identity',
-    label: 'Ownership Management',
+    label: 'Ownership & Identity',
     icon: UserCheck,
     allowedRoles: ['SUPERADMIN', 'ADMIN'],
     children: [
@@ -148,7 +148,7 @@ export const MENU_ITEMS: AppMenuItem[] = [
   {
     type: 'link',
     id: 'user-management',
-    label: 'User Management',
+    label: 'Users Management',
     path: '/users',
     matchPaths: ['/users', '/employees'],
     icon: Users,

@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 from app.models.workday_employee import WorkdayEmployee
@@ -17,6 +17,79 @@ class EmployeeRepository:
     @staticmethod
     def get_by_user_id(db: Session, user_id: str) -> Optional[WorkdayEmployee]:
         clean_user_id = user_id.strip().lower()
+        stmt = select(WorkdayEmployee).where(
+            func.lower(func.trim(WorkdayEmployee.user_id)) == clean_user_id
+        )
+        return db.execute(stmt).scalar_one_or_none()
+
+    @staticmethod
+    def get_executive_committee_lookup(db: Session) -> dict[str, dict[str, str]]:
+        """
+        Builds a reusable lookup of executives in 'Executive Committee' department whose job_title
+        starts with 'EVP -' or 'President -'.
+        Stores their user_id and full_name.
+        Caches on db.info to prevent repeated queries during a request or session.
+        """
+        if hasattr(db, "info") and "executive_committee_lookup" in db.info:
+            return db.info["executive_committee_lookup"]
+
+        stmt = select(
+            WorkdayEmployee.user_id,
+            WorkdayEmployee.full_name,
+            WorkdayEmployee.job_title,
+        ).where(
+            func.lower(func.trim(WorkdayEmployee.department)) == "executive committee",
+            WorkdayEmployee.user_id.is_not(None),
+        )
+        rows = db.execute(stmt).all()
+        lookup: dict[str, dict[str, Any]] = {}
+        for uid, fn, jt in rows:
+            clean_jt = (jt or "").strip()
+            # Match job_title starting with 'EVP -' or 'President -' (case-insensitive, trimmed)
+            if clean_jt.lower().startswith("evp -") or clean_jt.lower().startswith("president -"):
+                clean_uid = str(uid).strip()
+                clean_fn = str(fn).strip() if fn else clean_uid
+                if clean_uid:
+                    lookup[clean_uid.lower()] = {
+                        "user_id": clean_uid,
+                        "full_name": clean_fn,
+                        "job_title": clean_jt if clean_jt else None,
+                    }
+
+        if hasattr(db, "info"):
+            db.info["executive_committee_lookup"] = lookup
+        return lookup
+
+    @staticmethod
+    def get_by_identifier(db: Session, identifier: Union[int, str]) -> Optional[WorkdayEmployee]:
+        """
+        Look up an employee by numeric employee_id (primary key) or string identifier (user_id).
+        Uses parameterized queries.
+        - If identifier is numeric (e.g., 1582, "1582"), queries first by employee_id PK.
+          If not found by PK, falls back to checking user_id (in case user_id is digits).
+        - If identifier is string (e.g., "SYNTHUSER01582", "MOCKEMP1338"), queries by user_id
+          case-insensitively with trimming.
+        """
+        if identifier is None:
+            return None
+
+        str_val = str(identifier).strip()
+        if not str_val:
+            return None
+
+        # Check if numeric
+        if isinstance(identifier, int) or str_val.isdigit():
+            try:
+                num_id = int(str_val)
+                stmt = select(WorkdayEmployee).where(WorkdayEmployee.employee_id == num_id)
+                emp = db.execute(stmt).scalar_one_or_none()
+                if emp is not None:
+                    return emp
+            except (ValueError, OverflowError):
+                pass
+
+        # String lookup by user_id (case-insensitive, trimmed)
+        clean_user_id = str_val.lower()
         stmt = select(WorkdayEmployee).where(
             func.lower(func.trim(WorkdayEmployee.user_id)) == clean_user_id
         )

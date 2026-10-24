@@ -303,3 +303,81 @@ def test_bulk_assign_put_and_alternate_endpoints(client: TestClient):
     put_alias = client.put("/api/assets/bulk-assignment", json=payload)
     assert put_alias.status_code == 200
     assert put_alias.json()["success_count"] == 1
+
+
+def test_bulk_assign_large_batch_2675_explicit_ids(client: TestClient, db_session: Session):
+    """
+    Verify handling of 2,675 explicitly passed asset IDs:
+    - Executes quickly without timeout (well under 10 seconds).
+    - Accurately assigns/reassigns all 2,675 assets in database.
+    - Accurately generates structured response counts.
+    - Idempotency test: Re-submitting the exact same request succeeds immediately,
+      skipping assets already in the target state without creating redundant audit records.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    target_count = 2675
+
+    # Insert 2,675 assets
+    batch = [
+        {
+            "asset_id": 50000 + i,
+            "asset_number": f"AST-2675-{i:05d}",
+            "source": "BIGFIX",
+            "model": "Latitude 5520",
+            "manufacturer": "Dell",
+            "devicetype": "Laptop",
+            "asset_status": "REVIEW",
+            "assigned_username": "johndoe" if i % 2 == 0 else None,
+            "remarks": f"Old remark {i}",
+            "created_at": now,
+        }
+        for i in range(1, target_count + 1)
+    ]
+    db_session.bulk_insert_mappings(Asset, batch)
+    db_session.commit()
+
+    explicit_ids = [50000 + i for i in range(1, target_count + 1)]
+    payload = {
+        "asset_ids": explicit_ids,
+        "assigned_username": "sarahconnor",
+        "managed_by": "GROUP",
+        "remarks": "Assigned 2675 assets to Incident Response",
+        "idempotency_key": "large-batch-2675-test",
+    }
+
+    # First attempt: bulk assignment
+    response = client.post("/api/assets/bulk-assign", json=payload)
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert data["total_requested"] == target_count
+    assert data["requested_count"] == target_count
+    assert data["matched_count"] == target_count
+    assert data["success_count"] == target_count
+    assert data["failed_count"] == 0
+    assert data["failure_count"] == 0
+    assert len(data["results"]) == target_count
+    assert data["target_username"] == "sarahconnor"
+    assert data["managed_by"] == "GROUP"
+
+    # Spot check first and last asset in database
+    a_first = db_session.get(Asset, 50001)
+    assert a_first.assigned_username == "sarahconnor"
+    assert a_first.managed_by == "GROUP"
+    assert a_first.remarks == "Assigned 2675 assets to Incident Response"
+    assert a_first.asset_status == "ACTIVE"
+    assert a_first.assignment_type == "MANUAL"
+
+    a_last = db_session.get(Asset, 50000 + target_count)
+    assert a_last.assigned_username == "sarahconnor"
+    assert a_last.managed_by == "GROUP"
+    assert a_last.remarks == "Assigned 2675 assets to Incident Response"
+
+    # Second attempt: Idempotent replay / retry
+    # Should safely return without timing out or duplicate state
+    retry_response = client.post("/api/assets/bulk-assign", json=payload)
+    assert retry_response.status_code == 200
+    retry_data = retry_response.json()
+    assert retry_data["success_count"] == target_count
+

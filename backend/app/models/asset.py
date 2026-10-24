@@ -12,7 +12,7 @@ class Asset(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "asset_status IN ('ACTIVE', 'REVIEW', 'IN STOCK', 'RETIRED')",
+            "asset_status IN ('ACTIVE', 'REVIEW', 'INSTOCK', 'IN STOCK', 'EXPIRED', 'RETIRED')",
             name="assets_asset_status_check",
         ),
     )

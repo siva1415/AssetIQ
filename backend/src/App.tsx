@@ -114,7 +114,25 @@ const INITIAL_ADMIN_USERS = [
   { admin_user_id: "sarahconnor", created_at: "2026-02-10T14:30:00Z" },
 ];
 
-const INITIAL_ASSETS = [
+interface AssetItem {
+  asset_id: number;
+  asset_number: string;
+  serial_number: string;
+  source: string;
+  manufacturer: string;
+  model: string;
+  os_name: string;
+  macaddress: string;
+  devicetype: string;
+  managed_by: string;
+  assigned_username: string | null;
+  asset_status: string;
+  assignment_type: string | null;
+  remarks: string | null;
+  lastreporttime: string;
+}
+
+const INITIAL_ASSETS: AssetItem[] = [
   {
     asset_id: 101,
     asset_number: "AST-1001",
@@ -269,8 +287,29 @@ export default function App() {
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [assetsList, setAssetsList] = useState<AssetItem[]>(INITIAL_ASSETS);
   const [selectedAssetDetail, setSelectedAssetDetail] = useState<any | null>(null);
   const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
+
+  // Popup Assign/Reassign State
+  const [popupAssignUserId, setPopupAssignUserId] = useState('sarahconnor');
+  const [popupAssignManagedBy, setPopupAssignManagedBy] = useState('INDIVIDUAL');
+  const [popupAssignRemarks, setPopupAssignRemarks] = useState('');
+  const [popupAssignLoading, setPopupAssignLoading] = useState(false);
+  const [popupAssignSuccess, setPopupAssignSuccess] = useState<string | null>(null);
+  const [popupAssignError, setPopupAssignError] = useState<string | null>(null);
+  const [isAssignFormOpen, setIsAssignFormOpen] = useState(false);
+
+  // Bulk Assignment State (Asset Ownership page & fleet lists)
+  const [selectedAssetIds, setSelectedAssetIds] = useState<number[]>([]);
+  const [selectAllMatching, setSelectAllMatching] = useState(false);
+  const [isBulkAssignModalOpen, setIsBulkAssignModalOpen] = useState(false);
+  const [bulkAssignUserId, setBulkAssignUserId] = useState('sarahconnor');
+  const [bulkAssignManagedBy, setBulkAssignManagedBy] = useState('GROUP');
+  const [bulkAssignRemarks, setBulkAssignRemarks] = useState('');
+  const [bulkAssignLoading, setBulkAssignLoading] = useState(false);
+  const [bulkAssignResult, setBulkAssignResult] = useState<any | null>(null);
+  const [bulkAssignError, setBulkAssignError] = useState<string | null>(null);
 
   // Inline EOL Editor State
   const [editingEolAsset, setEditingEolAsset] = useState<{
@@ -285,6 +324,230 @@ export default function App() {
 
   const today = useMemo(() => new Date("2026-10-11"), []);
   const WARNING_DAYS = 90;
+
+  const openAssetDetail = async (asset: any) => {
+    setSelectedAssetDetail(asset);
+    const existingUser = asset.assigned_username?.trim().toLowerCase();
+    const defaultUser = INITIAL_EMPLOYEES.find(e => e.employee_status === 'Active' && e.user_id !== existingUser)?.user_id || 'sarahconnor';
+    setPopupAssignUserId(existingUser || defaultUser);
+    setPopupAssignManagedBy(asset.managed_by || 'INDIVIDUAL');
+    setPopupAssignRemarks(asset.remarks || '');
+    setPopupAssignError(null);
+    setPopupAssignSuccess(null);
+    setIsAssignFormOpen(false);
+
+    try {
+      const res = await fetch(`/api/assets/${asset.asset_id}`);
+      if (res.ok) {
+        const fullDetail = await res.json();
+        setSelectedAssetDetail((curr: any) => (curr && curr.asset_id === asset.asset_id ? { ...curr, ...fullDetail } : curr));
+      }
+    } catch {
+      // Fallback to initial row data if fetch fails
+    }
+  };
+
+  const handleAssignUserInPopup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAssetDetail || !popupAssignUserId) return;
+    setPopupAssignLoading(true);
+    setPopupAssignError(null);
+    setPopupAssignSuccess(null);
+
+    const isReassign = Boolean(selectedAssetDetail.assigned_username && selectedAssetDetail.assigned_username.trim());
+    const payload = {
+      asset_id: selectedAssetDetail.asset_id,
+      asset_number: selectedAssetDetail.asset_number || selectedAssetDetail.assetNumber,
+      user_id: popupAssignUserId,
+      managed_by: popupAssignManagedBy,
+      remarks: popupAssignRemarks || undefined,
+    };
+
+    try {
+      const res = await fetch(`/api/assets/${selectedAssetDetail.asset_id}/assign`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': 'johndoe',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const updated = await res.json();
+        setPopupAssignSuccess(
+          `Successfully ${isReassign ? 'reassigned' : 'assigned'} to ${updated.user_full_name || updated.user_id}`
+        );
+        // Update local assetsList
+        setAssetsList(prev => prev.map(a => a.asset_id === selectedAssetDetail.asset_id ? {
+          ...a,
+          assigned_username: updated.assigned_username || updated.user_id,
+          managed_by: updated.managed_by,
+          asset_status: updated.asset_status,
+          assignment_type: updated.assignment_type,
+          remarks: updated.remarks,
+        } : a));
+        // Update selected asset detail in drawer
+        setSelectedAssetDetail((prev: any) => ({
+          ...prev,
+          ...updated,
+          assigned_username: updated.assigned_username || updated.user_id,
+          workdayStatus: updated.workday_status || 'Matched Workday employee',
+          fullName: updated.user_full_name,
+          full_name: updated.user_full_name,
+          employee_status: updated.employee_status,
+          department: updated.department,
+          division: updated.division,
+          job_title: updated.job_title,
+          email_work: updated.email_work,
+          matched_employee: updated.matched_employee,
+          reporting_evp: updated.reporting_evp,
+        }));
+        setIsAssignFormOpen(false);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setPopupAssignError(errData.detail || 'Assignment failed');
+      }
+    } catch {
+      // Offline fallback: update client state directly
+      const emp = INITIAL_EMPLOYEES.find(em => em.user_id === popupAssignUserId);
+      if (emp) {
+        setAssetsList(prev => prev.map(a => a.asset_id === selectedAssetDetail.asset_id ? {
+          ...a,
+          assigned_username: emp.user_id,
+          managed_by: popupAssignManagedBy,
+          asset_status: 'Active',
+          assignment_type: 'MANUAL',
+          remarks: popupAssignRemarks || a.remarks,
+        } : a));
+        setSelectedAssetDetail((prev: any) => ({
+          ...prev,
+          assigned_username: emp.user_id,
+          workdayStatus: 'Matched Workday employee',
+          fullName: emp.full_name,
+          full_name: emp.full_name,
+          employee_status: emp.employee_status,
+          department: emp.department,
+          division: emp.division,
+          job_title: emp.job_title,
+          email_work: emp.email_work,
+          matched_employee: emp,
+          managed_by: popupAssignManagedBy,
+          remarks: popupAssignRemarks || prev.remarks,
+        }));
+        setPopupAssignSuccess(`Assigned to ${emp.full_name} (${emp.user_id})`);
+        setIsAssignFormOpen(false);
+      }
+    } finally {
+      setPopupAssignLoading(false);
+      setTimeout(() => setPopupAssignSuccess(null), 3500);
+    }
+  };
+
+  const handleBulkAssignSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if ((!selectAllMatching && selectedAssetIds.length === 0) || !bulkAssignUserId) return;
+
+    setBulkAssignLoading(true);
+    setBulkAssignError(null);
+    setBulkAssignResult(null);
+
+    const idempotencyKey = `bulk-ui-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const payload: any = {
+      assigned_username: bulkAssignUserId,
+      managed_by: bulkAssignManagedBy,
+      remarks: bulkAssignRemarks.trim() ? bulkAssignRemarks.trim() : undefined,
+    };
+
+    if (selectAllMatching) {
+      payload.select_all = true;
+      if (searchQuery) payload.search = searchQuery;
+      if (statusFilter !== 'ALL') payload.asset_status = statusFilter;
+      if (activePage === 'windows_assets') payload.source = 'BIGFIX';
+      if (activePage === 'mac_assets') payload.source = 'JAMF';
+    } else {
+      payload.asset_ids = selectedAssetIds;
+    }
+
+    try {
+      const res = await fetch('/api/assets/bulk-assign', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': 'johndoe',
+          'Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setBulkAssignResult(data);
+        const targetEmp = INITIAL_EMPLOYEES.find(e => e.user_id.toLowerCase() === bulkAssignUserId.toLowerCase());
+        const targetUsername = targetEmp ? targetEmp.user_id : bulkAssignUserId;
+        const newRemarks = bulkAssignRemarks.trim() ? bulkAssignRemarks.trim() : null;
+
+        setAssetsList(prev => prev.map(a => {
+          const isTarget = selectAllMatching
+            ? (!searchQuery || a.asset_number.toLowerCase().includes(searchQuery.toLowerCase()) || a.model.toLowerCase().includes(searchQuery.toLowerCase()))
+            : selectedAssetIds.includes(a.asset_id);
+
+          if (isTarget) {
+            return {
+              ...a,
+              assigned_username: targetUsername,
+              managed_by: bulkAssignManagedBy,
+              asset_status: 'Active',
+              assignment_type: 'MANUAL',
+              remarks: newRemarks,
+            };
+          }
+          return a;
+        }));
+
+        setSelectedAssetIds([]);
+        setSelectAllMatching(false);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setBulkAssignError(err.detail || 'Bulk assignment failed');
+      }
+    } catch {
+      // Local fallback for offline mode
+      const targetEmp = INITIAL_EMPLOYEES.find(e => e.user_id.toLowerCase() === bulkAssignUserId.toLowerCase());
+      const newRemarks = bulkAssignRemarks.trim() ? bulkAssignRemarks.trim() : null;
+      setAssetsList(prev => prev.map(a => {
+        const isTarget = selectAllMatching ? true : selectedAssetIds.includes(a.asset_id);
+        if (isTarget) {
+          return {
+            ...a,
+            assigned_username: targetEmp ? targetEmp.user_id : bulkAssignUserId,
+            managed_by: bulkAssignManagedBy,
+            asset_status: 'Active',
+            assignment_type: 'MANUAL',
+            remarks: newRemarks,
+          };
+        }
+        return a;
+      }));
+
+      const count = selectAllMatching ? filteredAssets.length : selectedAssetIds.length;
+      setBulkAssignResult({
+        message: `Bulk assignment completed: ${count} asset(s) assigned`,
+        total_requested: count,
+        requested_count: count,
+        success_count: count,
+        assigned_count: count,
+        reassigned_count: 0,
+        skipped_count: 0,
+        failed_count: 0,
+        failed_assets: [],
+      });
+      setSelectedAssetIds([]);
+      setSelectAllMatching(false);
+    } finally {
+      setBulkAssignLoading(false);
+    }
+  };
 
   // EOL Calculation Logic
   const getEolForAsset = (manufacturer: string, model: string) => {
@@ -357,7 +620,7 @@ export default function App() {
 
   // Processed Assets with both snake_case and camelCase field mappings
   const mappedAssets = useMemo(() => {
-    return INITIAL_ASSETS.map(asset => {
+    return assetsList.map(asset => {
       const eol = getEolForAsset(asset.manufacturer, asset.model);
       const corr = getWorkdayCorrelation(asset.assigned_username);
 
@@ -388,7 +651,7 @@ export default function App() {
         employee_status: corr.matched_employee?.employee_status || null,
       };
     });
-  }, [eolReferences, today]);
+  }, [assetsList, eolReferences, today]);
 
   // Page-specific Scoped Assets (All, Windows/BigFix, Mac/Jamf, Ownership)
   const scopedAssets = useMemo(() => {
@@ -816,6 +1079,111 @@ export default function App() {
               </div>
             </div>
 
+            {/* Bulk Selection Action Bar */}
+            {selectedAssetIds.length > 0 && (
+              <div className="bg-emerald-950/60 border border-emerald-500/40 rounded-2xl p-4 shadow-xl flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div>
+                    <span className="text-sm font-bold text-white">
+                      {selectAllMatching
+                        ? `All ${fleetKpis.totalAssets} assets matching current filters selected`
+                        : `${selectedAssetIds.length} asset(s) selected on this page`}
+                    </span>
+                    {!selectAllMatching && fleetKpis.totalAssets > filteredAssets.length && (
+                      <button
+                        onClick={() => setSelectAllMatching(true)}
+                        className="ml-3 text-xs text-emerald-400 hover:text-emerald-300 underline font-medium"
+                      >
+                        Select all {fleetKpis.totalAssets} matching assets across all pages
+                      </button>
+                    )}
+                    {selectAllMatching && (
+                      <button
+                        onClick={() => setSelectAllMatching(false)}
+                        className="ml-3 text-xs text-slate-400 hover:text-slate-300 underline font-medium"
+                      >
+                        Clear select-all across pages
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { setSelectedAssetIds([]); setSelectAllMatching(false); }}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 transition"
+                  >
+                    Deselect All
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsBulkAssignModalOpen(true);
+                      setBulkAssignError(null);
+                    }}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition shadow-lg flex items-center gap-1.5"
+                  >
+                    <Users className="w-4 h-4" />
+                    <span>Bulk Assign ({selectAllMatching ? fleetKpis.totalAssets : selectedAssetIds.length})</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Bulk Assignment Structured Outcome Alert */}
+            {bulkAssignResult && (
+              <div className="bg-slate-900/95 border border-emerald-500/40 rounded-2xl p-4 shadow-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold">
+                    <CheckCircle2 className="w-5 h-5" />
+                    <span>{bulkAssignResult.message}</span>
+                  </div>
+                  <button
+                    onClick={() => setBulkAssignResult(null)}
+                    className="text-xs text-slate-400 hover:text-slate-200"
+                  >
+                    &times; Dismiss
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 text-[10px] block">Requested</span>
+                    <strong className="text-white text-base">{bulkAssignResult.requested_count ?? bulkAssignResult.total_requested}</strong>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 text-[10px] block">Assigned</span>
+                    <strong className="text-emerald-400 text-base">{bulkAssignResult.assigned_count ?? 0}</strong>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 text-[10px] block">Reassigned</span>
+                    <strong className="text-cyan-400 text-base">{bulkAssignResult.reassigned_count ?? 0}</strong>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 text-[10px] block">Skipped (Identical)</span>
+                    <strong className="text-amber-400 text-base">{bulkAssignResult.skipped_count ?? 0}</strong>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 text-[10px] block">Failed</span>
+                    <strong className={(bulkAssignResult.failed_count ?? bulkAssignResult.failure_count ?? 0) > 0 ? "text-rose-400 text-base" : "text-slate-500 text-base"}>
+                      {bulkAssignResult.failed_count ?? bulkAssignResult.failure_count ?? 0}
+                    </strong>
+                  </div>
+                </div>
+                {bulkAssignResult.failed_assets && bulkAssignResult.failed_assets.length > 0 && (
+                  <div className="p-3 bg-rose-950/30 border border-rose-800/40 rounded-xl text-xs space-y-1">
+                    <span className="text-rose-400 font-bold block">Failed Items Detail:</span>
+                    {bulkAssignResult.failed_assets.map((item: any, idx: number) => (
+                      <div key={idx} className="text-slate-300">
+                        Asset #{item.asset_id}: <span className="text-rose-300">{item.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Asset Table with Fixed Field Mappings */}
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
               <div className="p-3.5 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
@@ -826,6 +1194,21 @@ export default function App() {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-950/70 border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
                     <tr>
+                      <th className="px-3 py-3.5 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          checked={filteredAssets.length > 0 && selectedAssetIds.length === filteredAssets.length}
+                          onChange={() => {
+                            if (selectedAssetIds.length === filteredAssets.length) {
+                              setSelectedAssetIds([]);
+                              setSelectAllMatching(false);
+                            } else {
+                              setSelectedAssetIds(filteredAssets.map(a => a.asset_id));
+                            }
+                          }}
+                          className="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0 cursor-pointer"
+                        />
+                      </th>
                       <th className="px-4 py-3.5">Asset ID / Tag</th>
                       <th className="px-4 py-3.5">Device Type</th>
                       <th className="px-4 py-3.5">Manufacturer &amp; Model</th>
@@ -839,7 +1222,21 @@ export default function App() {
                   <tbody className="divide-y divide-slate-800/60">
                     {filteredAssets.length > 0 ? (
                       filteredAssets.map(asset => (
-                        <tr key={asset.asset_id} className="hover:bg-slate-800/30 transition">
+                        <tr key={asset.asset_id} className={`hover:bg-slate-800/30 transition ${selectedAssetIds.includes(asset.asset_id) ? 'bg-emerald-950/20' : ''}`}>
+                          <td className="px-3 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={selectedAssetIds.includes(asset.asset_id)}
+                              onChange={() => {
+                                setSelectedAssetIds(prev =>
+                                  prev.includes(asset.asset_id)
+                                    ? prev.filter(id => id !== asset.asset_id)
+                                    : [...prev, asset.asset_id]
+                                );
+                              }}
+                              className="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0 cursor-pointer"
+                            />
+                          </td>
                           {/* Asset ID (Resolved: AssetID no longer undefined) */}
                           <td className="px-4 py-3 font-mono font-medium text-slate-200">
                             <div className="text-white font-bold">{asset.assetNumber}</div>
@@ -934,7 +1331,7 @@ export default function App() {
                           {/* Action */}
                           <td className="px-4 py-3 text-right">
                             <button
-                              onClick={() => setSelectedAssetDetail(asset)}
+                              onClick={() => openAssetDetail(asset)}
                               className="px-2.5 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/30 text-blue-300 font-medium transition"
                             >
                               Inspect
@@ -944,7 +1341,7 @@ export default function App() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={8} className="px-4 py-8 text-center text-slate-500 text-xs italic">
+                        <td colSpan={9} className="px-4 py-8 text-center text-slate-500 text-xs italic">
                           No matching asset records found for this filter combination.
                         </td>
                       </tr>
@@ -957,7 +1354,7 @@ export default function App() {
             {/* Asset Detail Drawer */}
             {selectedAssetDetail && (
               <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-                <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-6">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                     <div>
                       <span className="text-xs font-mono text-cyan-400">GET /api/assets/{selectedAssetDetail.asset_id}</span>
@@ -1022,7 +1419,133 @@ export default function App() {
                           </div>
                         </div>
                       )}
+                      <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                        <span className="text-slate-400 font-medium">Reporting EVP:</span>
+                        <span className="text-purple-300 font-medium font-mono text-right">
+                          {(() => {
+                            const evp = selectedAssetDetail.reporting_evp ?? selectedAssetDetail.matched_employee?.reporting_evp;
+                            if (typeof evp === 'object' && evp !== null) {
+                              return `${evp.full_name} (${evp.user_id})${evp.job_title ? ` — ${evp.job_title}` : ''}`;
+                            }
+                            return evp || '-';
+                          })()}
+                        </span>
+                      </div>
                     </div>
+                  </div>
+
+                  {/* Assign / Reassign User Section */}
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 font-semibold uppercase text-[10px] flex items-center gap-1.5">
+                        <UserCheck className="w-3.5 h-3.5 text-cyan-400" />
+                        {selectedAssetDetail.assigned_username && selectedAssetDetail.assigned_username.trim()
+                          ? 'Reassign Hardware Asset'
+                          : 'Assign Hardware Asset'}
+                      </span>
+                      {!isAssignFormOpen && (
+                        <button
+                          type="button"
+                          onClick={() => setIsAssignFormOpen(true)}
+                          className="px-2.5 py-1 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/40 border border-cyan-500/30 text-cyan-300 text-xs font-medium transition"
+                        >
+                          {selectedAssetDetail.assigned_username && selectedAssetDetail.assigned_username.trim()
+                            ? 'Reassign User...'
+                            : 'Assign User...'}
+                        </button>
+                      )}
+                    </div>
+
+                    {popupAssignSuccess && (
+                      <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>{popupAssignSuccess}</span>
+                      </div>
+                    )}
+
+                    {popupAssignError && (
+                      <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                        <span>{popupAssignError}</span>
+                      </div>
+                    )}
+
+                    {isAssignFormOpen && (
+                      <form onSubmit={handleAssignUserInPopup} className="space-y-3 pt-2 border-t border-slate-800">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                          <div>
+                            <label className="block text-slate-400 text-[11px] mb-1 font-medium">
+                              Select Workday Employee <span className="text-rose-400">*</span>
+                            </label>
+                            <select
+                              value={popupAssignUserId}
+                              onChange={(e) => setPopupAssignUserId(e.target.value)}
+                              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs focus:outline-none focus:border-cyan-500"
+                              required
+                            >
+                              <option value="">-- Choose active employee --</option>
+                              {INITIAL_EMPLOYEES.filter(e => e.employee_status === 'Active').map(emp => (
+                                <option key={emp.user_id} value={emp.user_id}>
+                                  {emp.full_name} ({emp.user_id}) — {emp.department}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-slate-400 text-[11px] mb-1 font-medium">
+                              Managed By <span className="text-rose-400">*</span>
+                            </label>
+                            <select
+                              value={popupAssignManagedBy}
+                              onChange={(e) => setPopupAssignManagedBy(e.target.value)}
+                              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs focus:outline-none focus:border-cyan-500"
+                            >
+                              <option value="INDIVIDUAL">INDIVIDUAL</option>
+                              <option value="GROUP">GROUP</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-400 text-[11px] mb-1 font-medium">
+                            Remarks / Allocation Reason
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Primary laptop replacement, project allocation"
+                            value={popupAssignRemarks}
+                            onChange={(e) => setPopupAssignRemarks(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs focus:outline-none focus:border-cyan-500"
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setIsAssignFormOpen(false)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={popupAssignLoading || !popupAssignUserId}
+                            className="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-semibold text-xs transition flex items-center gap-1.5"
+                          >
+                            {popupAssignLoading ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Saving...
+                              </>
+                            ) : selectedAssetDetail.assigned_username && selectedAssetDetail.assigned_username.trim() ? (
+                              'Confirm Reassignment'
+                            ) : (
+                              'Confirm Assignment'
+                            )}
+                          </button>
+                        </div>
+                      </form>
+                    )}
                   </div>
 
                   <div className="flex justify-end">
@@ -1033,6 +1556,151 @@ export default function App() {
                       Close
                     </button>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* Bulk Assignment Modal Dialog */}
+            {isBulkAssignModalOpen && (
+              <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                    <div>
+                      <span className="text-xs font-mono text-emerald-400">POST /api/assets/bulk-assign</span>
+                      <h3 className="text-xl font-bold text-white flex items-center gap-2 mt-0.5">
+                        <Users className="w-5 h-5 text-emerald-400" />
+                        Bulk Assign {selectAllMatching ? `${fleetKpis.totalAssets} Assets (All Matching)` : `${selectedAssetIds.length} Selected Asset(s)`}
+                      </h3>
+                    </div>
+                    <button
+                      onClick={() => setIsBulkAssignModalOpen(false)}
+                      className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 flex items-center justify-center transition"
+                    >
+                      &times;
+                    </button>
+                  </div>
+
+                  {bulkAssignError && (
+                    <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>{bulkAssignError}</span>
+                    </div>
+                  )}
+
+                  <form onSubmit={async (e) => {
+                    await handleBulkAssignSubmit(e);
+                    setIsBulkAssignModalOpen(false);
+                  }} className="space-y-4 text-xs">
+                    <div>
+                      <label className="block text-slate-400 text-xs mb-1.5 font-medium">
+                        Target Workday Employee <span className="text-rose-400">*</span>
+                      </label>
+                      <select
+                        value={bulkAssignUserId}
+                        onChange={(e) => setBulkAssignUserId(e.target.value)}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-emerald-500"
+                        required
+                      >
+                        {INITIAL_EMPLOYEES.filter(e => e.employee_status === 'Active').map(emp => (
+                          <option key={emp.user_id} value={emp.user_id}>
+                            {emp.full_name} (@{emp.user_id}) — {emp.job_title}, {emp.department}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-[11px] text-slate-500 mt-1 block">
+                        Only Active Workday employees can receive hardware asset assignments.
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 text-xs mb-1.5 font-medium">
+                        Managed By Scope <span className="text-rose-400">*</span>
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setBulkAssignManagedBy('INDIVIDUAL')}
+                          className={`p-3 rounded-xl border text-left transition ${
+                            bulkAssignManagedBy === 'INDIVIDUAL'
+                              ? 'bg-emerald-950/40 border-emerald-500/60 text-emerald-200'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="font-bold text-xs">INDIVIDUAL</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">Assigned to an individual employee</div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setBulkAssignManagedBy('GROUP')}
+                          className={`p-3 rounded-xl border text-left transition ${
+                            bulkAssignManagedBy === 'GROUP'
+                              ? 'bg-emerald-950/40 border-emerald-500/60 text-emerald-200'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="font-bold text-xs">GROUP</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">Managed by a project / incident team</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 text-xs mb-1.5 font-medium">
+                        Audit Remarks &amp; Notes
+                      </label>
+                      <textarea
+                        rows={2}
+                        placeholder="e.g. Bulk assigned for Incident Response Team or Fleet Refresh (Leave blank to clear remarks to SQL NULL)"
+                        value={bulkAssignRemarks}
+                        onChange={(e) => setBulkAssignRemarks(e.target.value)}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-emerald-500"
+                      />
+                      <span className="text-[11px] text-slate-500 mt-1 block">
+                        Audit compliance rule: Leaving remarks blank replaces existing remarks with SQL NULL.
+                      </span>
+                    </div>
+
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1 font-mono">
+                      <div className="flex justify-between">
+                        <span>Selected Assets:</span>
+                        <strong className="text-white">{selectAllMatching ? `${fleetKpis.totalAssets} (All Matching Filters)` : selectedAssetIds.length}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Assignment Model:</span>
+                        <span className="text-cyan-400">MANUAL &bull; ACTIVE</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Transaction Safety:</span>
+                        <span className="text-emerald-400">Atomic Commit + Idempotent</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsBulkAssignModalOpen(false)}
+                        className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={bulkAssignLoading || !bulkAssignUserId}
+                        className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs transition flex items-center gap-2 shadow-lg"
+                      >
+                        {bulkAssignLoading ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin" /> Processing Bulk Assignment...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-4 h-4" /> Confirm Bulk Assignment
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
                 </div>
               </div>
             )}
